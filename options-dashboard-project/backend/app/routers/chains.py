@@ -36,17 +36,21 @@ async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY
     raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
 
     rows = []
+    underlying_spot = None
+
     for item in raw.get("data", []):
         strike = item.get("strike_price")
-        underlying_spot = item.get("underlying_spot_price")
+        if underlying_spot is None:
+            underlying_spot = item.get("underlying_spot_price")
 
         def leg(side_key):
             side = item.get(side_key) or {}
+            market = side.get("market_data") or {}
             greeks = side.get("option_greeks") or {}
             return {
-                "ltp": side.get("last_price"),
-                "oi": side.get("oi"),
-                "volume": side.get("volume"),
+                "ltp": market.get("ltp"),
+                "oi": market.get("oi"),
+                "volume": market.get("volume"),
                 "iv": greeks.get("iv"),
                 "delta": greeks.get("delta"),
                 "theta": greeks.get("theta"),
@@ -65,7 +69,6 @@ async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY
     return {
         "symbol": symbol,
         "expiry_date": expiry_date,
-        "spot": rows[0].get("underlying_spot") if rows else None,
-        "underlying_spot_price": raw.get("data", [{}])[0].get("underlying_spot_price") if raw.get("data") else None,
+        "underlying_spot_price": underlying_spot,
         "chain": rows,
     }
