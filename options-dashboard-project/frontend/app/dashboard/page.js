@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { getStatus, getExpiries, getChain } from "@/lib/api";
 
 const C = {
@@ -63,6 +63,28 @@ export default function Dashboard() {
   }, [loggedIn]);
 
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [centeredExpiry, setCenteredExpiry] = useState(null);
+  const scrollRef = useRef(null);
+
+  const spot = chain ? chain.underlying_spot_price : null;
+  let atmStrike = null;
+  if (chain && spot != null && chain.chain.length) {
+    atmStrike = chain.chain.reduce((closest, row) =>
+      Math.abs(row.strike - spot) < Math.abs(closest.strike - spot) ? row : closest
+    ).strike;
+  }
+
+  // Center the view on the ATM strike once per expiry (not on every 5s poll)
+  useEffect(() => {
+    if (!chain || !scrollRef.current || atmStrike == null) return;
+    if (centeredExpiry === expiry) return;
+    const el = scrollRef.current.querySelector('[data-atm="true"]');
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      setCenteredExpiry(expiry);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chain, expiry]);
 
   useEffect(() => {
     if (!loggedIn || !expiry) return;
@@ -123,8 +145,6 @@ export default function Dashboard() {
   if (error) return <Centered>Something went wrong: {error}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
 
-  const spot = chain.underlying_spot_price;
-
   // Build table rows with a spot-marker row inserted at the right position
   const tableItems = [];
   chain.chain.forEach((row, i) => {
@@ -164,9 +184,9 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <div style={{ flex: 3, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "auto" }}>
+        <div ref={scrollRef} style={{ flex: 3, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "auto", maxHeight: 560 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, whiteSpace: "nowrap" }}>
-            <thead>
+            <thead style={{ position: "sticky", top: 0, background: C.surface, zIndex: 1 }}>
               <tr style={{ color: C.muted, fontSize: 10.5 }}>
                 <th colSpan={9} style={{ padding: "8px 6px", textAlign: "center", color: C.green, borderBottom: `1px solid ${C.border}` }}>CALLS</th>
                 <th style={{ borderBottom: `1px solid ${C.border}` }}></th>
@@ -222,6 +242,7 @@ export default function Dashboard() {
                   <Row
                     key={item.data.strike}
                     row={item.data}
+                    isATM={item.data.strike === atmStrike}
                     isWatchedCall={isWatched(item.data.strike, "call")}
                     isWatchedPut={isWatched(item.data.strike, "put")}
                     onToggleCall={() => toggleWatch(item.data.strike, "call")}
@@ -268,11 +289,17 @@ export default function Dashboard() {
   );
 }
 
-function Row({ row, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
+function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
   const c = row.call;
   const p = row.put;
   return (
-    <tr style={{ borderTop: `1px solid ${C.border}` }}>
+    <tr
+      data-atm={isATM ? "true" : undefined}
+      style={{
+        borderTop: `1px solid ${C.border}`,
+        background: isATM ? "rgba(201,161,90,0.06)" : "transparent",
+      }}
+    >
       <td style={{ padding: 6, textAlign: "center" }}>
         <StarButton active={isWatchedCall} onClick={onToggleCall} />
       </td>
