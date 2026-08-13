@@ -50,7 +50,12 @@ export default function PaperTradingPage() {
   }, [symbol]);
 
   useEffect(() => {
-    getStatus().then((s) => setLoggedIn(s.logged_in)).catch(() => setLoggedIn(false));
+    getStatus()
+      .then((s) => setLoggedIn(s.logged_in))
+      .catch((e) => {
+        setError(e.message);
+        setLoggedIn(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -343,6 +348,7 @@ export default function PaperTradingPage() {
 
   // ---- Render ----
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (error && loggedIn === false) return <Centered>Something went wrong: {error}</Centered>;
   if (loggedIn === false)
     return (
       <Centered>

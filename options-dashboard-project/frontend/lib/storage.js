@@ -5,6 +5,7 @@ export function loadJSON(key, fallback = null) {
     const saved = window.localStorage.getItem(key);
     return saved ? JSON.parse(saved) : fallback;
   } catch (e) {
+    console.warn(`Could not load "${key}" from localStorage:`, e);
     return fallback;
   }
 }
@@ -12,5 +13,7 @@ export function loadJSON(key, fallback = null) {
 export function saveJSON(key, value) {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
-  } catch (e) {}
+  } catch (e) {
+    console.warn(`Could not save "${key}" to localStorage:`, e);
+  }
 }

@@ -1,6 +1,5 @@
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -8,12 +7,11 @@ from starlette.websockets import WebSocketDisconnect
 from app.main import app
 from app.routers.chains import INSTRUMENT_KEYS
 from app.services import token_store, upstox
+from app.services.upstox import UpstoxError
 
 
-def http_status_error(status_code):
-    request = httpx.Request("GET", "https://api.upstox.com/v2/option/chain")
-    response = httpx.Response(status_code, request=request)
-    return httpx.HTTPStatusError("error", request=request, response=response)
+def upstox_error(status_code, message="error"):
+    return UpstoxError(status_code, message)
 
 
 @pytest.fixture
@@ -22,8 +20,10 @@ def client():
 
 
 @pytest.fixture
-def logged_in():
-    token_store.set_token("tok-xyz")
+def logged_in(client):
+    session_id = token_store.set_token("tok-xyz")
+    client.cookies.set("session_id", session_id)
+    return session_id
 
 
 def make_chain_item(strike, call_market=None, put_market=None, call_greeks=None, spot=25010.5):
@@ -90,6 +90,19 @@ def test_chain_requires_expiry_date(client, logged_in):
 def test_chain_requires_login(client):
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
     assert resp.status_code == 401
+
+
+def test_chain_rejects_wrong_session(client):
+    token_store.set_token("tok-xyz")
+    client.cookies.set("session_id", "wrong-session")
+    resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
+    assert resp.status_code == 401
+
+
+def test_chain_rejects_malformed_expiry_date(client, logged_in):
+    resp = client.get("/chains/NIFTY", params={"expiry_date": "not-a-date"})
+    assert resp.status_code == 422
+    assert "YYYY-MM-DD" in resp.json()["detail"]
 
 
 def test_chain_transforms_and_sorts_rows(client, logged_in, monkeypatch):
@@ -184,70 +197,83 @@ def test_chain_banknifty_uses_bank_instrument_key(client, logged_in, monkeypatch
 
 @pytest.mark.parametrize("status", [401, 403])
 def test_chain_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch, status):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(status)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(status)))
 
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
 
     assert resp.status_code == 401
     assert "session expired" in resp.json()["detail"].lower()
-    assert token_store.get_token() is None
+    assert token_store.get_token(logged_in) is None
 
 
 def test_chain_upstox_server_error_returns_502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(500)))
 
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
 
     assert resp.status_code == 502
     assert "Upstox API error (500)" in resp.json()["detail"]
-    assert token_store.get_token() == "tok-xyz"
+    assert token_store.get_token(logged_in) == "tok-xyz"
 
 
 def test_expiries_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_contracts", AsyncMock(side_effect=http_status_error(401)))
+    monkeypatch.setattr(upstox, "get_option_contracts", AsyncMock(side_effect=upstox_error(401)))
 
     resp = client.get("/chains/NIFTY/expiries")
 
     assert resp.status_code == 401
-    assert token_store.get_token() is None
+    assert token_store.get_token(logged_in) is None
 
 
-def ws_close_code(client, path):
+def ws_close_code(client, path, session_id=None):
+    headers = {"cookie": f"session_id={session_id}"} if session_id else {}
     with pytest.raises(WebSocketDisconnect) as exc_info:
-        with client.websocket_connect(path) as ws:
+        with client.websocket_connect(path, headers=headers) as ws:
             ws.receive_json()
     return exc_info.value.code
 
 
 def test_ws_unknown_symbol_closes_4404(client, logged_in):
-    assert ws_close_code(client, "/chains/ws/UNKNOWN?expiry_date=2026-08-28") == 4404
+    assert ws_close_code(client, "/chains/ws/UNKNOWN?expiry_date=2026-08-28", logged_in) == 4404
 
 
 def test_ws_without_login_closes_4401(client):
     assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4401
 
 
+def test_ws_with_wrong_session_closes_4401(client):
+    token_store.set_token("tok-xyz")
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", "wrong-session") == 4401
+
+
+def test_ws_malformed_expiry_date_closes_4422(client, logged_in):
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=not-a-date", logged_in) == 4422
+
+
 def test_ws_upstox_auth_error_clears_token_and_closes_4401(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(403)))
-    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4401
-    assert token_store.get_token() is None
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(403)))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4401
+    assert token_store.get_token(logged_in) is None
 
 
 def test_ws_upstox_server_error_closes_4502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
-    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4502
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(500)))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4502
 
 
 def test_ws_network_error_closes_4502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=httpx.ConnectError("boom")))
-    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4502
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(502, "Could not reach Upstox")))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4502
 
 
 def test_ws_streams_transformed_chain(client, logged_in, monkeypatch):
     raw = {"data": [make_chain_item(25000, call_market={"ltp": 160.0})]}
     monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(return_value=raw))
 
-    with client.websocket_connect("/chains/ws/nifty?expiry_date=2026-08-28") as ws:
+    with client.websocket_connect(
+        "/chains/ws/nifty?expiry_date=2026-08-28",
+        headers={"cookie": f"session_id={logged_in}"},
+    ) as ws:
         body = ws.receive_json()
 
     assert body["symbol"] == "NIFTY"

@@ -6,12 +6,14 @@ from app.config import settings
 from app.services import upstox
 
 
-def test_get_login_url_contains_client_id_and_redirect():
-    url = upstox.get_login_url()
+def test_get_login_url_contains_client_id_redirect_and_state():
+    url = upstox.get_login_url("state-123")
     assert url.startswith(f"{upstox.BASE_URL}/login/authorization/dialog")
     assert "response_type=code" in url
     assert f"client_id={settings.UPSTOX_API_KEY}" in url
-    assert f"redirect_uri={settings.UPSTOX_REDIRECT_URI}" in url
+    params = dict(httpx.QueryParams(url.split("?", 1)[1]))
+    assert params["redirect_uri"] == settings.UPSTOX_REDIRECT_URI
+    assert params["state"] == "state-123"
 
 
 @respx.mock
@@ -35,8 +37,9 @@ async def test_exchange_code_for_token_raises_on_http_error():
         return_value=httpx.Response(400, json={"error": "invalid_grant"})
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(upstox.UpstoxError) as exc_info:
         await upstox.exchange_code_for_token("bad-code")
+    assert exc_info.value.status_code == 400
 
 
 @respx.mock
@@ -60,8 +63,9 @@ async def test_get_option_chain_raises_on_http_error():
         return_value=httpx.Response(401, json={"error": "unauthorized"})
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(upstox.UpstoxError) as exc_info:
         await upstox.get_option_chain("bad-token", "NSE_INDEX|Nifty 50", "2026-08-28")
+    assert exc_info.value.status_code == 401
 
 
 @respx.mock
