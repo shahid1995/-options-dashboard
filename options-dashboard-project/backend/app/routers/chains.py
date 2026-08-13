@@ -47,15 +47,22 @@ async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY
             side = item.get(side_key) or {}
             market = side.get("market_data") or {}
             greeks = side.get("option_greeks") or {}
+
+            oi = market.get("oi")
+            prev_oi = market.get("prev_oi")
+            chg_oi = (oi - prev_oi) if (oi is not None and prev_oi is not None) else None
+
             return {
                 "ltp": market.get("ltp"),
-                "oi": market.get("oi"),
+                "oi": oi,
+                "chg_oi": chg_oi,
                 "volume": market.get("volume"),
                 "iv": greeks.get("iv"),
                 "delta": greeks.get("delta"),
                 "theta": greeks.get("theta"),
                 "gamma": greeks.get("gamma"),
                 "vega": greeks.get("vega"),
+                "pop": greeks.get("pop"),
             }
 
         rows.append({
