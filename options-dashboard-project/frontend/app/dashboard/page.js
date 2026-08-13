@@ -36,19 +36,26 @@ export default function Dashboard() {
     try {
       const saved = window.localStorage.getItem(WATCHLIST_KEY);
       if (saved) setWatchlist(JSON.parse(saved));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not load watchlist from localStorage:", e);
+    }
   }, []);
 
   useEffect(() => {
     try {
       window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not save watchlist to localStorage:", e);
+    }
   }, [watchlist]);
 
   useEffect(() => {
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
-      .catch(() => setLoggedIn(false));
+      .catch((e) => {
+        setError(e.message);
+        setLoggedIn(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -58,7 +65,10 @@ export default function Dashboard() {
           setExpiries(d.expiries);
           if (d.expiries.length) setExpiry(d.expiries[0]);
         })
-        .catch((e) => setError(e.message));
+        .catch((e) => {
+          if (e.response?.status === 401) setLoggedIn(false);
+          else setError(e.message);
+        });
     }
   }, [loggedIn]);
 
@@ -100,7 +110,9 @@ export default function Dashboard() {
           setError(null);
         })
         .catch((e) => {
-          if (!cancelled) setError(e.message);
+          if (cancelled) return;
+          if (e.response?.status === 401) setLoggedIn(false);
+          else setError(e.message);
         });
     };
 
@@ -132,6 +144,7 @@ export default function Dashboard() {
   });
 
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (error && !chain) return <Centered>Something went wrong: {error}</Centered>;
   if (loggedIn === false)
     return (
       <Centered>
@@ -142,7 +155,6 @@ export default function Dashboard() {
         .
       </Centered>
     );
-  if (error) return <Centered>Something went wrong: {error}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
 
   // Build table rows with a spot-marker row inserted at the right position
@@ -165,6 +177,11 @@ export default function Dashboard() {
           Paper Trading
         </a>
       </div>
+      {error && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 6, border: `1px solid ${C.red}`, background: "rgba(225,82,82,0.08)", color: C.red, fontSize: 12 }}>
+          Live update failed: {error} — showing the last loaded data.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>NIFTY Option Chain</h1>
         <select

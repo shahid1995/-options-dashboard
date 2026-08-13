@@ -5,6 +5,21 @@ export const api = axios.create({
   withCredentials: true,
 });
 
+// Surface the backend's error detail (or a clear network message) instead of
+// axios's generic "Request failed with status code NNN".
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string" && detail) {
+      error.message = detail;
+    } else if (!error.response) {
+      error.message = "Could not reach the server. Check your connection and try again.";
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const loginUrl = () => `${process.env.NEXT_PUBLIC_API_URL}/auth/login`;
 
 export const getStatus = () => api.get("/auth/status").then((r) => r.data);

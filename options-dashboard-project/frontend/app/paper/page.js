@@ -53,12 +53,18 @@ export default function PaperTradingPage() {
       setChainCache((prev) => ({ ...prev, [expiryDate]: data }));
       setError(null);
     } catch (e) {
-      setError(e.message);
+      if (e.response?.status === 401) setLoggedIn(false);
+      else setError(e.message);
     }
   }, []);
 
   useEffect(() => {
-    getStatus().then((s) => setLoggedIn(s.logged_in)).catch(() => setLoggedIn(false));
+    getStatus()
+      .then((s) => setLoggedIn(s.logged_in))
+      .catch((e) => {
+        setError(e.message);
+        setLoggedIn(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -68,7 +74,10 @@ export default function PaperTradingPage() {
         setExpiries(d.expiries);
         if (d.expiries.length) setExpiry(d.expiries[0]);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => {
+        if (e.response?.status === 401) setLoggedIn(false);
+        else setError(e.message);
+      });
   }, [loggedIn]);
 
   // Poll the primary expiry's chain every 5s
@@ -97,7 +106,9 @@ export default function PaperTradingPage() {
         setPaperPositions(parsed.positions ?? []);
         setPaperHistory(parsed.history ?? []);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not load paper portfolio from localStorage:", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -106,7 +117,9 @@ export default function PaperTradingPage() {
         PAPER_KEY,
         JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory })
       );
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not save paper portfolio to localStorage:", e);
+    }
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory]);
 
   const primaryChain = chainCache[expiry];
@@ -327,6 +340,7 @@ export default function PaperTradingPage() {
 
   // ---- Render ----
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (error && loggedIn === false) return <Centered>Something went wrong: {error}</Centered>;
   if (loggedIn === false)
     return (
       <Centered>

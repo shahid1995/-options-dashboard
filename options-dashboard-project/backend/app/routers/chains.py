@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from app.services import upstox, token_store
+from app.services.upstox import UpstoxError
 
 router = APIRouter()
 
@@ -7,6 +8,15 @@ INSTRUMENT_KEYS = {
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
 }
+
+
+def _upstox_http_error(e: UpstoxError) -> HTTPException:
+    if e.status_code == 401:
+        # The stored token is no longer valid (Upstox tokens expire daily),
+        # so drop it and tell the frontend to log in again.
+        token_store.clear_token()
+        return HTTPException(status_code=401, detail="Upstox session expired. Please log in again.")
+    return HTTPException(status_code=502, detail=f"Upstox API error: {e.message}")
 
 
 def require_token() -> str:
@@ -22,7 +32,10 @@ async def list_expiries(symbol: str):
     if symbol not in INSTRUMENT_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
     token = require_token()
-    data = await upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol])
+    try:
+        data = await upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol])
+    except UpstoxError as e:
+        raise _upstox_http_error(e) from e
     expiries = sorted({c["expiry"] for c in data.get("data", []) if "expiry" in c})
     return {"symbol": symbol, "expiries": expiries}
 
@@ -33,7 +46,10 @@ async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY
     if symbol not in INSTRUMENT_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
     token = require_token()
-    raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
+    try:
+        raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
+    except UpstoxError as e:
+        raise _upstox_http_error(e) from e
 
     rows = []
     underlying_spot = None
