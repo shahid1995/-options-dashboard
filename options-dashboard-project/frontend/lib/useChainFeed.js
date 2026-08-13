@@ -17,6 +17,7 @@ export function useChainFeed(symbol, expiry, enabled) {
   useEffect(() => {
     setChain(null);
     chainRef.current = null;
+    setError(null);
     if (!enabled || !symbol || !expiry) return;
 
     let cancelled = false;

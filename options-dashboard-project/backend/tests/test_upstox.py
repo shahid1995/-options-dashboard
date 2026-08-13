@@ -35,8 +35,9 @@ async def test_exchange_code_for_token_raises_on_http_error():
         return_value=httpx.Response(400, json={"error": "invalid_grant"})
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(upstox.UpstoxError) as exc_info:
         await upstox.exchange_code_for_token("bad-code")
+    assert exc_info.value.status_code == 400
 
 
 @respx.mock
@@ -60,8 +61,9 @@ async def test_get_option_chain_raises_on_http_error():
         return_value=httpx.Response(401, json={"error": "unauthorized"})
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(upstox.UpstoxError) as exc_info:
         await upstox.get_option_chain("bad-token", "NSE_INDEX|Nifty 50", "2026-08-28")
+    assert exc_info.value.status_code == 401
 
 
 @respx.mock

@@ -49,7 +49,12 @@ export default function PaperTradingPage() {
   }, [symbol]);
 
   useEffect(() => {
-    getStatus().then((s) => setLoggedIn(s.logged_in)).catch(() => setLoggedIn(false));
+    getStatus()
+      .then((s) => setLoggedIn(s.logged_in))
+      .catch((e) => {
+        setError(e.message);
+        setLoggedIn(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -98,7 +103,9 @@ export default function PaperTradingPage() {
         setPaperHistory(parsed.history ?? []);
         setEquityHistory(parsed.equityHistory ?? []);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not load paper portfolio from localStorage:", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -107,7 +114,9 @@ export default function PaperTradingPage() {
         PAPER_KEY,
         JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory })
       );
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not save paper portfolio to localStorage:", e);
+    }
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
   const primaryChain = chainCache[expiry];
@@ -350,6 +359,7 @@ export default function PaperTradingPage() {
 
   // ---- Render ----
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (error && loggedIn === false) return <Centered>Something went wrong: {error}</Centered>;
   if (loggedIn === false)
     return (
       <Centered>
