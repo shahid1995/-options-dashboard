@@ -1,8 +1,18 @@
 import axios from "axios";
+import { getSessionId } from "./session";
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
   withCredentials: true,
+});
+
+// Authenticate with the session ID captured from the OAuth callback; the
+// session cookie alone doesn't survive third-party cookie blocking because
+// the backend is on a different site.
+api.interceptors.request.use((config) => {
+  const sessionId = getSessionId();
+  if (sessionId) config.headers["X-Session-Id"] = sessionId;
+  return config;
 });
 
 // Surface the backend's error detail (or a clear network message) instead of
@@ -38,4 +48,11 @@ export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");
   return `${wsBase}/chains/ws/${symbol}?expiry_date=${encodeURIComponent(expiryDate)}`;
+};
+
+// Browsers can't set custom headers on websockets, so the session ID rides
+// along as the second entry of the subprotocol list (matched by the backend).
+export const chainWsProtocols = () => {
+  const sessionId = getSessionId();
+  return sessionId ? ["options-dashboard-session", sessionId] : undefined;
 };

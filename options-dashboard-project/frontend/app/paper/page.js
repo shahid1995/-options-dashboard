@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { getStatus, getExpiries, getChain, isAuthError } from "@/lib/api";
+import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
@@ -49,6 +50,7 @@ export default function PaperTradingPage() {
   }, [symbol]);
 
   useEffect(() => {
+    captureSessionFromUrl();
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
       .catch((e) => {

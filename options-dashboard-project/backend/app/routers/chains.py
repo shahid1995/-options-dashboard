@@ -1,7 +1,8 @@
 import asyncio
 from datetime import date
 
-from fastapi import APIRouter, Cookie, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from app.routers.deps import get_session_id
 from app.services import upstox, token_store
 from app.services.upstox import UpstoxError
 
@@ -13,6 +14,22 @@ INSTRUMENT_KEYS = {
 }
 
 WS_PUSH_INTERVAL_SECONDS = 3
+
+WS_SESSION_PROTOCOL = "options-dashboard-session"
+
+
+def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:
+    """Extracts the session ID from the websocket handshake.
+
+    Browsers can't set custom headers on websockets, so the frontend sends the
+    session ID as the second entry of the Sec-WebSocket-Protocol list (falling
+    back to the session cookie). Returns (session_id, subprotocol_to_accept)."""
+    requested = websocket.headers.get("sec-websocket-protocol")
+    if requested:
+        parts = [p.strip() for p in requested.split(",")]
+        if len(parts) == 2 and parts[0] == WS_SESSION_PROTOCOL:
+            return parts[1], WS_SESSION_PROTOCOL
+    return websocket.cookies.get("session_id"), None
 
 
 def require_token(session_id: str | None) -> str:
@@ -97,7 +114,7 @@ def transform_chain(symbol: str, expiry_date: str, raw: dict) -> dict:
 
 
 @router.get("/{symbol}/expiries")
-async def list_expiries(symbol: str, session_id: str | None = Cookie(default=None)):
+async def list_expiries(symbol: str, session_id: str | None = Depends(get_session_id)):
     symbol = resolve_symbol(symbol)
     token = require_token(session_id)
     data = await call_upstox(upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol]))
@@ -109,7 +126,7 @@ async def list_expiries(symbol: str, session_id: str | None = Cookie(default=Non
 async def get_chain(
     symbol: str,
     expiry_date: str = Query(..., description="YYYY-MM-DD"),
-    session_id: str | None = Cookie(default=None),
+    session_id: str | None = Depends(get_session_id),
 ):
     symbol = resolve_symbol(symbol)
     expiry_date = validate_expiry_date(expiry_date)
@@ -124,7 +141,8 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
     Closes with 4401 on auth issues, 4404 for unknown symbols, and 4422 for
     malformed expiry dates so the frontend can fall back to HTTP polling or
     prompt a re-login."""
-    await websocket.accept()
+    session_id, subprotocol = ws_session(websocket)
+    await websocket.accept(subprotocol=subprotocol)
 
     symbol = symbol.upper()
     if symbol not in INSTRUMENT_KEYS:
@@ -136,8 +154,6 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
     except ValueError:
         await websocket.close(code=4422)
         return
-
-    session_id = websocket.cookies.get("session_id")
 
     try:
         while True:

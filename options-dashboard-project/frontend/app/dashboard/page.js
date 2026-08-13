@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getStatus, getExpiries, isAuthError } from "@/lib/api";
+import { captureSessionFromUrl } from "@/lib/session";
 import { useChainFeed } from "@/lib/useChainFeed";
 import { putCallRatio, maxPainStrike, maxOI, oiTotals } from "@/lib/analytics";
 import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
@@ -49,6 +50,7 @@ export default function Dashboard() {
 
   const [statusError, setStatusError] = useState(null);
   useEffect(() => {
+    captureSessionFromUrl();
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
       .catch((e) => {

@@ -10,7 +10,7 @@ app.add_middleware(
     allow_origins=[settings.FRONTEND_URL, "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Session-Id"],
 )
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
