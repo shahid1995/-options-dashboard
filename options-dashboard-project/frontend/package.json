@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "next": "14.2.35",
@@ -13,5 +15,9 @@
     "react-dom": "18.3.1",
     "axios": "1.19.0",
     "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.10",
+    "vitest": "4.1.10"
   }
 }
