@@ -1,9 +1,9 @@
 import asyncio
 from datetime import date
 
-import httpx
 from fastapi import APIRouter, Cookie, HTTPException, Query, WebSocket, WebSocketDisconnect
 from app.services import upstox, token_store
+from app.services.upstox import UpstoxError
 
 router = APIRouter()
 
@@ -42,11 +42,11 @@ async def call_upstox(coro):
     clears the stored token (Upstox tokens expire daily at 3:30 AM)."""
     try:
         return await coro
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (401, 403):
+    except UpstoxError as e:
+        if e.status_code in (401, 403):
             token_store.clear_token()
-            raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.")
-        raise HTTPException(status_code=502, detail=f"Upstox API error ({e.response.status_code})")
+            raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.") from e
+        raise HTTPException(status_code=502, detail=f"Upstox API error ({e.status_code}): {e.message}") from e
 
 
 def transform_chain(symbol: str, expiry_date: str, raw: dict) -> dict:
@@ -147,15 +147,12 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                 return
             try:
                 raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code in (401, 403):
+            except UpstoxError as e:
+                if e.status_code in (401, 403):
                     token_store.clear_token()
                     await websocket.close(code=4401)
                 else:
                     await websocket.close(code=4502)
-                return
-            except httpx.HTTPError:
-                await websocket.close(code=4502)
                 return
             await websocket.send_json(transform_chain(symbol, expiry_date, raw))
             await asyncio.sleep(WS_PUSH_INTERVAL_SECONDS)

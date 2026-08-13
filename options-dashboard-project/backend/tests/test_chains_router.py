@@ -1,6 +1,5 @@
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -8,12 +7,11 @@ from starlette.websockets import WebSocketDisconnect
 from app.main import app
 from app.routers.chains import INSTRUMENT_KEYS
 from app.services import token_store, upstox
+from app.services.upstox import UpstoxError
 
 
-def http_status_error(status_code):
-    request = httpx.Request("GET", "https://api.upstox.com/v2/option/chain")
-    response = httpx.Response(status_code, request=request)
-    return httpx.HTTPStatusError("error", request=request, response=response)
+def upstox_error(status_code, message="error"):
+    return UpstoxError(status_code, message)
 
 
 @pytest.fixture
@@ -199,7 +197,7 @@ def test_chain_banknifty_uses_bank_instrument_key(client, logged_in, monkeypatch
 
 @pytest.mark.parametrize("status", [401, 403])
 def test_chain_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch, status):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(status)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(status)))
 
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
 
@@ -209,7 +207,7 @@ def test_chain_upstox_auth_error_clears_token_and_returns_401(client, logged_in,
 
 
 def test_chain_upstox_server_error_returns_502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(500)))
 
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
 
@@ -219,7 +217,7 @@ def test_chain_upstox_server_error_returns_502(client, logged_in, monkeypatch):
 
 
 def test_expiries_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_contracts", AsyncMock(side_effect=http_status_error(401)))
+    monkeypatch.setattr(upstox, "get_option_contracts", AsyncMock(side_effect=upstox_error(401)))
 
     resp = client.get("/chains/NIFTY/expiries")
 
@@ -253,18 +251,18 @@ def test_ws_malformed_expiry_date_closes_4422(client, logged_in):
 
 
 def test_ws_upstox_auth_error_clears_token_and_closes_4401(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(403)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(403)))
     assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4401
     assert token_store.get_token(logged_in) is None
 
 
 def test_ws_upstox_server_error_closes_4502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(500)))
     assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4502
 
 
 def test_ws_network_error_closes_4502(client, logged_in, monkeypatch):
-    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=httpx.ConnectError("boom")))
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=upstox_error(502, "Could not reach Upstox")))
     assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28", logged_in) == 4502
 
 

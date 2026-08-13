@@ -26,25 +26,35 @@ export default function Dashboard() {
       if (saved) setWatchlist(JSON.parse(saved));
       const savedAlerts = window.localStorage.getItem(ALERTS_KEY);
       if (savedAlerts) setAlerts(JSON.parse(savedAlerts));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not load saved data from localStorage:", e);
+    }
   }, []);
 
   useEffect(() => {
     try {
       window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not save watchlist to localStorage:", e);
+    }
   }, [watchlist]);
 
   useEffect(() => {
     try {
       window.localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Could not save alerts to localStorage:", e);
+    }
   }, [alerts]);
 
+  const [statusError, setStatusError] = useState(null);
   useEffect(() => {
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
-      .catch(() => setLoggedIn(false));
+      .catch((e) => {
+        setStatusError(e.message);
+        setLoggedIn(false);
+      });
   }, []);
 
   const [expiryError, setExpiryError] = useState(null);
@@ -139,6 +149,7 @@ export default function Dashboard() {
   });
 
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (statusError) return <Centered>Something went wrong: {statusError}</Centered>;
   if (loggedIn === false)
     return (
       <Centered>
@@ -150,7 +161,7 @@ export default function Dashboard() {
       </Centered>
     );
   if (sessionExpired || expirySessionExpired) return <SessionExpired />;
-  if (error || expiryError) return <Centered>Something went wrong: {error || expiryError}</Centered>;
+  if ((error || expiryError) && !chain) return <Centered>Something went wrong: {error || expiryError}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
 
   const useCompact = compact || isMobile;
@@ -170,6 +181,12 @@ export default function Dashboard() {
   return (
     <div style={{ padding: isMobile ? 10 : 20 }}>
       <TopNav active="chain" />
+
+      {error && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 6, border: `1px solid ${C.red}`, background: "rgba(225,82,82,0.08)", color: C.red, fontSize: 12 }}>
+          Live update failed: {error} — showing the last loaded data.
+        </div>
+      )}
 
       {firedToasts.length > 0 && (
         <div style={{ marginBottom: 12 }}>

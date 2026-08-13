@@ -1,9 +1,13 @@
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from app.services import upstox, token_store
+from app.services.upstox import UpstoxError
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -31,7 +35,11 @@ async def callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
-    access_token = await upstox.exchange_code_for_token(code)
+    try:
+        access_token = await upstox.exchange_code_for_token(code)
+    except UpstoxError as e:
+        logger.error("Token exchange failed: %s", e)
+        return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
     session_id = token_store.set_token(access_token)
 
     # Send the user back to the dashboard, now logged in
