@@ -13,6 +13,17 @@ const C = {
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
 
+function fmtIN(n, decimals = 0) {
+  if (n === null || n === undefined) return "-";
+  return n.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+function fmtChg(n) {
+  if (n === null || n === undefined) return "-";
+  const sign = n > 0 ? "+" : "";
+  return `${sign}${fmtIN(n)}`;
+}
+
 export default function Dashboard() {
   const [loggedIn, setLoggedIn] = useState(null);
   const [expiries, setExpiries] = useState([]);
@@ -21,23 +32,17 @@ export default function Dashboard() {
   const [error, setError] = useState(null);
   const [watchlist, setWatchlist] = useState([]);
 
-  // Load saved watchlist from the browser once, on first render
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(WATCHLIST_KEY);
       if (saved) setWatchlist(JSON.parse(saved));
-    } catch (e) {
-      // ignore malformed/missing storage
-    }
+    } catch (e) {}
   }, []);
 
-  // Save the watchlist to the browser any time it changes
   useEffect(() => {
     try {
       window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch (e) {
-      // storage might be unavailable (private browsing etc.) - fail silently
-    }
+    } catch (e) {}
   }, [watchlist]);
 
   useEffect(() => {
@@ -71,16 +76,11 @@ export default function Dashboard() {
   const toggleWatch = (strike, type) => {
     setWatchlist((prev) => {
       const exists = prev.some((w) => w.strike === strike && w.type === type && w.expiry === expiry);
-      if (exists) {
-        return prev.filter((w) => !(w.strike === strike && w.type === type && w.expiry === expiry));
-      }
+      if (exists) return prev.filter((w) => !(w.strike === strike && w.type === type && w.expiry === expiry));
       return [...prev, { strike, type, expiry, symbol: "NIFTY" }];
     });
   };
 
-  // For each watchlist item, try to find its current live price from the
-  // chain we already loaded (only works if it matches the currently
-  // selected expiry - otherwise we just show the strike/type saved).
   const enrichedWatchlist = watchlist.map((w) => {
     if (!chain || w.expiry !== expiry) return { ...w, ltp: null };
     const row = chain.chain.find((r) => r.strike === w.strike);
@@ -102,6 +102,18 @@ export default function Dashboard() {
   if (error) return <Centered>Something went wrong: {error}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
 
+  const spot = chain.underlying_spot_price;
+
+  // Build table rows with a spot-marker row inserted at the right position
+  const tableItems = [];
+  chain.chain.forEach((row, i) => {
+    const prevRow = chain.chain[i - 1];
+    if (spot != null && prevRow && prevRow.strike < spot && row.strike > spot) {
+      tableItems.push({ kind: "spot", value: spot });
+    }
+    tableItems.push({ kind: "row", data: row });
+  });
+
   return (
     <div style={{ padding: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
@@ -117,59 +129,90 @@ export default function Dashboard() {
             </option>
           ))}
         </select>
+        {spot != null && (
+          <span style={{ color: C.muted, fontSize: 13 }}>
+            Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
+          </span>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        {/* Option chain table */}
         <div style={{ flex: 3, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, whiteSpace: "nowrap" }}>
             <thead>
-              <tr style={{ color: C.muted, fontSize: 11 }}>
-                <th style={{ padding: 8 }}></th>
-                <th style={{ padding: 8 }}>Delta</th>
-                <th style={{ padding: 8 }}>IV</th>
-                <th style={{ padding: 8 }}>OI</th>
-                <th style={{ padding: 8 }}>Call LTP</th>
-                <th style={{ padding: 8, color: C.gold }}>Strike</th>
-                <th style={{ padding: 8 }}>Put LTP</th>
-                <th style={{ padding: 8 }}>OI</th>
-                <th style={{ padding: 8 }}>IV</th>
-                <th style={{ padding: 8 }}>Delta</th>
-                <th style={{ padding: 8 }}></th>
+              <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                <th colSpan={9} style={{ padding: "8px 6px", textAlign: "center", color: C.green, borderBottom: `1px solid ${C.border}` }}>CALLS</th>
+                <th style={{ borderBottom: `1px solid ${C.border}` }}></th>
+                <th colSpan={9} style={{ padding: "8px 6px", textAlign: "center", color: C.red, borderBottom: `1px solid ${C.border}` }}>PUTS</th>
+              </tr>
+              <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                <th style={{ padding: 6 }}></th>
+                <th style={{ padding: 6 }}>OI</th>
+                <th style={{ padding: 6 }}>Chg OI</th>
+                <th style={{ padding: 6 }}>Volume</th>
+                <th style={{ padding: 6 }}>IV</th>
+                <th style={{ padding: 6 }}>Vega</th>
+                <th style={{ padding: 6 }}>Theta</th>
+                <th style={{ padding: 6 }}>Gamma</th>
+                <th style={{ padding: 6 }}>Delta</th>
+                <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                <th style={{ padding: 6, textAlign: "center", color: C.gold }}>Strike</th>
+                <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                <th style={{ padding: 6 }}>Delta</th>
+                <th style={{ padding: 6 }}>Gamma</th>
+                <th style={{ padding: 6 }}>Theta</th>
+                <th style={{ padding: 6 }}>Vega</th>
+                <th style={{ padding: 6 }}>IV</th>
+                <th style={{ padding: 6 }}>Volume</th>
+                <th style={{ padding: 6 }}>Chg OI</th>
+                <th style={{ padding: 6 }}>OI</th>
+                <th style={{ padding: 6 }}></th>
               </tr>
             </thead>
             <tbody>
-              {chain.chain.map((row) => (
-                <tr key={row.strike} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ padding: 8, textAlign: "center" }}>
-                    <StarButton active={isWatched(row.strike, "call")} onClick={() => toggleWatch(row.strike, "call")} />
-                  </td>
-                  <td style={{ padding: 8 }}>{row.call.delta ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{row.call.iv ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{row.call.oi ?? "-"}</td>
-                  <td style={{ padding: 8, color: C.green }}>{row.call.ltp ?? "-"}</td>
-                  <td style={{ padding: 8, textAlign: "center", fontWeight: 600 }}>{row.strike}</td>
-                  <td style={{ padding: 8, color: C.red }}>{row.put.ltp ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{row.put.oi ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{row.put.iv ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{row.put.delta ?? "-"}</td>
-                  <td style={{ padding: 8, textAlign: "center" }}>
-                    <StarButton active={isWatched(row.strike, "put")} onClick={() => toggleWatch(row.strike, "put")} />
-                  </td>
-                </tr>
-              ))}
+              {tableItems.map((item, idx) =>
+                item.kind === "spot" ? (
+                  <tr key={`spot-${idx}`}>
+                    <td colSpan={20} style={{ padding: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 10,
+                          padding: "6px 0",
+                          background: "rgba(201,161,90,0.08)",
+                          borderTop: `1px dashed ${C.gold}`,
+                          borderBottom: `1px dashed ${C.gold}`,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, color: C.gold, letterSpacing: 1, fontWeight: 700 }}>SPOT</span>
+                        <span style={{ fontSize: 13, color: C.gold, fontWeight: 700 }}>{fmtIN(item.value, 2)}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  <Row
+                    key={item.data.strike}
+                    row={item.data}
+                    isWatchedCall={isWatched(item.data.strike, "call")}
+                    isWatchedPut={isWatched(item.data.strike, "put")}
+                    onToggleCall={() => toggleWatch(item.data.strike, "call")}
+                    onTogglePut={() => toggleWatch(item.data.strike, "put")}
+                  />
+                )
+              )}
             </tbody>
           </table>
         </div>
 
-        {/* Watchlist panel */}
         <div style={{ flex: 1, minWidth: 220, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, fontSize: 12, color: C.muted, letterSpacing: 0.5 }}>
             WATCHLIST
           </div>
           {enrichedWatchlist.length === 0 ? (
             <div style={{ padding: 16, fontSize: 12, color: C.muted }}>
-              Tap the star next to any strike to pin it here. It's saved in this browser, so it'll still be here next time you visit.
+              Tap the star next to any strike to pin it here.
             </div>
           ) : (
             <div style={{ padding: 8 }}>
@@ -179,20 +222,12 @@ export default function Dashboard() {
                   style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 8px", fontSize: 12.5, borderBottom: `1px solid ${C.border}` }}
                 >
                   <div>
-                    <div>
-                      {w.symbol} {w.strike} {w.type === "call" ? "CE" : "PE"}
-                    </div>
+                    <div>{w.symbol} {w.strike} {w.type === "call" ? "CE" : "PE"}</div>
                     <div style={{ fontSize: 10.5, color: C.muted }}>{w.expiry}</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: w.type === "call" ? C.green : C.red }}>
-                      {w.ltp != null ? w.ltp : "—"}
-                    </span>
-                    <button
-                      onClick={() => toggleWatch(w.strike, w.type)}
-                      style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}
-                      title="Remove"
-                    >
+                    <span style={{ color: w.type === "call" ? C.green : C.red }}>{w.ltp != null ? w.ltp : "—"}</span>
+                    <button onClick={() => toggleWatch(w.strike, w.type)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>
                       ×
                     </button>
                   </div>
@@ -206,13 +241,43 @@ export default function Dashboard() {
   );
 }
 
+function Row({ row, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
+  const c = row.call;
+  const p = row.put;
+  return (
+    <tr style={{ borderTop: `1px solid ${C.border}` }}>
+      <td style={{ padding: 6, textAlign: "center" }}>
+        <StarButton active={isWatchedCall} onClick={onToggleCall} />
+      </td>
+      <td style={{ padding: 6 }}>{fmtIN(c.oi)}</td>
+      <td style={{ padding: 6, color: c.chg_oi > 0 ? C.green : c.chg_oi < 0 ? C.red : C.muted }}>{fmtChg(c.chg_oi)}</td>
+      <td style={{ padding: 6 }}>{fmtIN(c.volume)}</td>
+      <td style={{ padding: 6 }}>{c.iv ?? "-"}</td>
+      <td style={{ padding: 6 }}>{c.vega ?? "-"}</td>
+      <td style={{ padding: 6 }}>{c.theta ?? "-"}</td>
+      <td style={{ padding: 6 }}>{c.gamma ?? "-"}</td>
+      <td style={{ padding: 6 }}>{c.delta ?? "-"}</td>
+      <td style={{ padding: 6, color: C.green, fontWeight: 600 }}>{c.ltp ?? "-"}</td>
+      <td style={{ padding: 6, textAlign: "center", fontWeight: 700 }}>{fmtIN(row.strike)}</td>
+      <td style={{ padding: 6, color: C.red, fontWeight: 600 }}>{p.ltp ?? "-"}</td>
+      <td style={{ padding: 6 }}>{p.delta ?? "-"}</td>
+      <td style={{ padding: 6 }}>{p.gamma ?? "-"}</td>
+      <td style={{ padding: 6 }}>{p.theta ?? "-"}</td>
+      <td style={{ padding: 6 }}>{p.vega ?? "-"}</td>
+      <td style={{ padding: 6 }}>{p.iv ?? "-"}</td>
+      <td style={{ padding: 6 }}>{fmtIN(p.volume)}</td>
+      <td style={{ padding: 6, color: p.chg_oi > 0 ? C.green : p.chg_oi < 0 ? C.red : C.muted }}>{fmtChg(p.chg_oi)}</td>
+      <td style={{ padding: 6 }}>{fmtIN(p.oi)}</td>
+      <td style={{ padding: 6, textAlign: "center" }}>
+        <StarButton active={isWatchedPut} onClick={onTogglePut} />
+      </td>
+    </tr>
+  );
+}
+
 function StarButton({ active, onClick }) {
   return (
-    <button
-      onClick={onClick}
-      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: active ? C.gold : C.muted }}
-      title={active ? "Remove from watchlist" : "Add to watchlist"}
-    >
+    <button onClick={onClick} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: active ? C.gold : C.muted }}>
       {active ? "★" : "☆"}
     </button>
   );
