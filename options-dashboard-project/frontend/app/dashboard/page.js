@@ -168,11 +168,13 @@ export default function Dashboard() {
 
   const useCompact = compact || isMobile;
 
-  // Build table rows with a spot-marker row inserted at the right position
+  // Build table rows (highest strike first) with a spot-marker row inserted
+  // at the right position
+  const displayChain = [...chain.chain].sort((a, b) => b.strike - a.strike);
   const tableItems = [];
-  chain.chain.forEach((row, i) => {
-    const prevRow = chain.chain[i - 1];
-    if (spot != null && prevRow && prevRow.strike < spot && row.strike > spot) {
+  displayChain.forEach((row, i) => {
+    const prevRow = displayChain[i - 1];
+    if (spot != null && prevRow && prevRow.strike > spot && row.strike < spot) {
       tableItems.push({ kind: "spot", value: spot });
     }
     tableItems.push({ kind: "row", data: row });
