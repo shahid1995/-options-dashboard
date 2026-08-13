@@ -1,37 +1,26 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { getStatus, getExpiries, getChain } from "@/lib/api";
+import { getChain } from "@/lib/api";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
+import { C } from "@/lib/theme";
+import { fmtIN } from "@/lib/format";
+import { legOf, ltpOf, dirOf, sortedStrikes, nearestStrikeIndex, nearestStrike } from "@/lib/options";
+import { loadJSON, saveJSON } from "@/lib/storage";
+import { useMarketSession, usePoll } from "@/lib/hooks";
+import Centered from "@/components/Centered";
+import { loginGateFor } from "@/components/LoginGate";
+import TopNav from "@/components/TopNav";
+import ExpirySelect from "@/components/ExpirySelect";
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
 
-const C = {
-  surface: "#12161F",
-  surface2: "#171C27",
-  border: "#242B3A",
-  muted: "#8892A6",
-  faint: "#5A6376",
-  text: "#E7E9EE",
-  gold: "#C9A15A",
-  green: "#4CAF7D",
-  red: "#E15252",
-};
-
 const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
 
-function fmtIN(n, decimals = 0) {
-  if (n === null || n === undefined || Number.isNaN(n)) return "-";
-  return n.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
 export default function PaperTradingPage() {
   // ---- All hooks declared up top, unconditionally ----
-  const [loggedIn, setLoggedIn] = useState(null);
-  const [error, setError] = useState(null);
-  const [expiries, setExpiries] = useState([]);
-  const [expiry, setExpiry] = useState(null);
+  const { loggedIn, expiries, expiry, setExpiry, error, setError } = useMarketSession("NIFTY");
   const [chainCache, setChainCache] = useState({}); // { [expiryDate]: chainResponse }
 
   const [legs, setLegs] = useState([]);
@@ -57,63 +46,36 @@ export default function PaperTradingPage() {
     }
   }, []);
 
-  useEffect(() => {
-    getStatus().then((s) => setLoggedIn(s.logged_in)).catch(() => setLoggedIn(false));
-  }, []);
-
-  useEffect(() => {
-    if (!loggedIn) return;
-    getExpiries("NIFTY")
-      .then((d) => {
-        setExpiries(d.expiries);
-        if (d.expiries.length) setExpiry(d.expiries[0]);
-      })
-      .catch((e) => setError(e.message));
-  }, [loggedIn]);
-
   // Poll the primary expiry's chain every 5s
-  useEffect(() => {
-    if (!loggedIn || !expiry) return;
-    let cancelled = false;
-    const tick = () => {
-      if (!cancelled) loadChain(expiry);
-    };
-    tick();
-    const interval = setInterval(tick, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [loggedIn, expiry, loadChain]);
+  const pollChain = useCallback(
+    (isCancelled) => {
+      if (!isCancelled()) loadChain(expiry);
+    },
+    [expiry, loadChain]
+  );
+
+  usePoll(pollChain, Boolean(loggedIn && expiry));
 
   // Load / save paper trading state to the browser
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(PAPER_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
-        setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
-        setPaperPositions(parsed.positions ?? []);
-        setPaperHistory(parsed.history ?? []);
-      }
-    } catch (e) {}
+    const parsed = loadJSON(PAPER_KEY);
+    if (parsed) {
+      setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
+      setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
+      setPaperPositions(parsed.positions ?? []);
+      setPaperHistory(parsed.history ?? []);
+    }
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        PAPER_KEY,
-        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory })
-      );
-    } catch (e) {}
+    saveJSON(PAPER_KEY, { cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory });
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory]);
 
   const primaryChain = chainCache[expiry];
   const spot = primaryChain?.underlying_spot_price ?? null;
 
   const strikesSorted = useMemo(
-    () => (primaryChain ? primaryChain.chain.map((r) => r.strike).sort((a, b) => a - b) : []),
+    () => (primaryChain ? sortedStrikes(primaryChain) : []),
     [primaryChain]
   );
 
@@ -123,19 +85,7 @@ export default function PaperTradingPage() {
     return map;
   }, [primaryChain]);
 
-  const atmIndex = useMemo(() => {
-    if (!spot || strikesSorted.length === 0) return 0;
-    let best = 0;
-    let bestDiff = Infinity;
-    strikesSorted.forEach((s, i) => {
-      const diff = Math.abs(s - spot);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        best = i;
-      }
-    });
-    return best;
-  }, [spot, strikesSorted]);
+  const atmIndex = useMemo(() => nearestStrikeIndex(strikesSorted, spot), [spot, strikesSorted]);
 
   // P&L at a given underlying price, for the current legs
   const pnlAtPrice = useCallback(
@@ -143,7 +93,7 @@ export default function PaperTradingPage() {
       let pnl = 0;
       legs.forEach((l) => {
         const intrinsic = l.type === "call" ? Math.max(0, price - l.strike) : Math.max(0, l.strike - price);
-        const dir = l.action === "buy" ? 1 : -1;
+        const dir = dirOf(l.action);
         pnl += dir * (intrinsic - l.price) * l.qty * lotSize * multiplier;
       });
       return pnl;
@@ -171,18 +121,15 @@ export default function PaperTradingPage() {
   const targetPrice = spot ? spot * (1 + targetPct / 100) : null;
   const targetPnl = targetPrice != null ? pnlAtPrice(targetPrice) : null;
 
-  const netPerLot = legs.reduce((sum, l) => {
-    const dir = l.action === "buy" ? 1 : -1;
-    return sum + dir * l.price * l.qty;
-  }, 0);
+  const netPerLot = legs.reduce((sum, l) => sum + dirOf(l.action) * l.price * l.qty, 0);
   const netTotal = netPerLot * lotSize * multiplier;
 
   const greeksRows = useMemo(() => {
     return legs.map((l) => {
       const legChain = chainCache[l.expiry];
       const row = legChain?.chain.find((r) => r.strike === l.strike);
-      const g = row ? (l.type === "call" ? row.call : row.put) : null;
-      const dir = l.action === "buy" ? 1 : -1;
+      const g = row ? legOf(row, l.type) : null;
+      const dir = dirOf(l.action);
       const mult = dir * l.qty * lotSize * multiplier;
       return {
         leg: l,
@@ -205,14 +152,12 @@ export default function PaperTradingPage() {
   );
 
   // ---- Paper trading (positions) ----
-  const dirOf = (action) => (action === "buy" ? 1 : -1);
-
   const getCurrentLtp = (position) => {
     const posChain = chainCache[position.expiry];
     if (!posChain) return null;
     const row = posChain.chain.find((r) => r.strike === position.strike);
     if (!row) return null;
-    return position.type === "call" ? row.call.ltp : row.put.ltp;
+    return ltpOf(row, position.type);
   };
 
   const executeTradeAll = () => {
@@ -277,7 +222,7 @@ export default function PaperTradingPage() {
   // ---- Leg editing helpers ----
   const addLegFromChain = (type, strike) => {
     const row = chainByStrike.get(strike);
-    const price = row ? (type === "call" ? row.call.ltp : row.put.ltp) : 0;
+    const price = row ? ltpOf(row, type) : 0;
     setLegs((prev) => [
       ...prev,
       { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 },
@@ -295,7 +240,7 @@ export default function PaperTradingPage() {
       prev.map((l) => {
         const legChain = chainCache[l.expiry];
         const row = legChain?.chain.find((r) => r.strike === l.strike);
-        const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
+        const price = row ? ltpOf(row, l.type) : l.price;
         return { ...l, price: price ?? l.price };
       })
     );
@@ -305,12 +250,12 @@ export default function PaperTradingPage() {
     const l = legs.find((x) => x.id === id);
     if (!l) return;
     const legChain = chainCache[l.expiry];
-    const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
+    const strikes = legChain ? sortedStrikes(legChain) : strikesSorted;
     const idx = strikes.indexOf(l.strike);
     const newIdx = Math.min(Math.max(idx + direction, 0), strikes.length - 1);
     const newStrike = strikes[newIdx];
     const row = legChain?.chain.find((r) => r.strike === newStrike) ?? chainByStrike.get(newStrike);
-    const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
+    const price = row ? ltpOf(row, l.type) : l.price;
     updateLeg(id, { strike: newStrike, price: price ?? l.price });
   };
 
@@ -326,17 +271,8 @@ export default function PaperTradingPage() {
   };
 
   // ---- Render ----
-  if (loggedIn === null) return <Centered>Checking login…</Centered>;
-  if (loggedIn === false)
-    return (
-      <Centered>
-        Not logged in.{" "}
-        <a href="/" style={{ color: C.gold }}>
-          Go back and log in
-        </a>
-        .
-      </Centered>
-    );
+  const gate = loginGateFor(loggedIn);
+  if (gate) return gate;
 
   return (
     <div style={{ padding: 20 }}>
@@ -344,17 +280,7 @@ export default function PaperTradingPage() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>Strategy Builder</h1>
-        <select
-          value={expiry ?? ""}
-          onChange={(e) => setExpiry(e.target.value)}
-          style={{ background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px" }}
-        >
-          {expiries.map((exp) => (
-            <option key={exp} value={exp}>
-              {exp}
-            </option>
-          ))}
-        </select>
+        <ExpirySelect expiry={expiry} expiries={expiries} onChange={setExpiry} />
         {spot != null && (
           <span style={{ color: C.muted, fontSize: 13 }}>
             Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
@@ -601,7 +527,7 @@ export default function PaperTradingPage() {
                         <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
                         <YAxis yAxisId="oi" orientation="right" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
                         <ReferenceLine yAxisId="pnl" y={0} stroke={C.faint} />
-                        {spot != null && <ReferenceLine yAxisId="pnl" x={strikesSorted.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))} stroke={C.gold} strokeDasharray="4 2" />}
+                        {spot != null && <ReferenceLine yAxisId="pnl" x={nearestStrike(strikesSorted, spot)} stroke={C.gold} strokeDasharray="4 2" />}
                         <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
                         <Bar yAxisId="oi" dataKey="callOI" fill="rgba(225,82,82,0.5)" name="Call OI" />
                         <Bar yAxisId="oi" dataKey="putOI" fill="rgba(76,175,125,0.5)" name="Put OI" />
@@ -838,45 +764,3 @@ function ShapeIcon({ shape }) {
   );
 }
 
-function TopNav({ active }) {
-  return (
-    <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-      <a
-        href="/dashboard"
-        style={{
-          fontSize: 12.5,
-          padding: "6px 14px",
-          borderRadius: 6,
-          border: `1px solid ${active === "chain" ? C.gold : C.border}`,
-          background: active === "chain" ? "rgba(201,161,90,0.1)" : "transparent",
-          color: active === "chain" ? C.gold : C.muted,
-          textDecoration: "none",
-        }}
-      >
-        Option Chain
-      </a>
-      <a
-        href="/paper"
-        style={{
-          fontSize: 12.5,
-          padding: "6px 14px",
-          borderRadius: 6,
-          border: `1px solid ${active === "paper" ? C.gold : C.border}`,
-          background: active === "paper" ? "rgba(201,161,90,0.1)" : "transparent",
-          color: active === "paper" ? C.gold : C.muted,
-          textDecoration: "none",
-        }}
-      >
-        Paper Trading
-      </a>
-    </div>
-  );
-}
-
-function Centered({ children }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-      {children}
-    </div>
-  );
-}

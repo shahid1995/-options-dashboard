@@ -16,24 +16,28 @@ def require_token() -> str:
     return token
 
 
-@router.get("/{symbol}/expiries")
-async def list_expiries(symbol: str):
+def resolve_instrument(symbol: str) -> tuple[str, str]:
+    """Normalizes a symbol and returns (symbol, instrument_key), or raises 404."""
     symbol = symbol.upper()
     if symbol not in INSTRUMENT_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
+    return symbol, INSTRUMENT_KEYS[symbol]
+
+
+@router.get("/{symbol}/expiries")
+async def list_expiries(symbol: str):
+    symbol, instrument_key = resolve_instrument(symbol)
     token = require_token()
-    data = await upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol])
+    data = await upstox.get_option_contracts(token, instrument_key)
     expiries = sorted({c["expiry"] for c in data.get("data", []) if "expiry" in c})
     return {"symbol": symbol, "expiries": expiries}
 
 
 @router.get("/{symbol}")
 async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY-MM-DD")):
-    symbol = symbol.upper()
-    if symbol not in INSTRUMENT_KEYS:
-        raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
+    symbol, instrument_key = resolve_instrument(symbol)
     token = require_token()
-    raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
+    raw = await upstox.get_option_chain(token, instrument_key, expiry_date)
 
     rows = []
     underlying_spot = None

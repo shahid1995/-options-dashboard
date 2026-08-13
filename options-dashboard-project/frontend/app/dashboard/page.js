@@ -1,66 +1,31 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
-import { getStatus, getExpiries, getChain } from "@/lib/api";
-
-const C = {
-  surface: "#12161F",
-  border: "#242B3A",
-  muted: "#8892A6",
-  gold: "#C9A15A",
-  green: "#4CAF7D",
-  red: "#E15252",
-};
+import { useEffect, useState, useRef, useCallback } from "react";
+import { getChain } from "@/lib/api";
+import { C } from "@/lib/theme";
+import { fmtIN, fmtChg } from "@/lib/format";
+import { ltpOf, nearestStrike } from "@/lib/options";
+import { loadJSON, saveJSON } from "@/lib/storage";
+import { useMarketSession, usePoll } from "@/lib/hooks";
+import Centered from "@/components/Centered";
+import { loginGateFor } from "@/components/LoginGate";
+import TopNav from "@/components/TopNav";
+import ExpirySelect from "@/components/ExpirySelect";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
 
-function fmtIN(n, decimals = 0) {
-  if (n === null || n === undefined) return "-";
-  return n.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
-function fmtChg(n) {
-  if (n === null || n === undefined) return "-";
-  const sign = n > 0 ? "+" : "";
-  return `${sign}${fmtIN(n)}`;
-}
-
 export default function Dashboard() {
-  const [loggedIn, setLoggedIn] = useState(null);
-  const [expiries, setExpiries] = useState([]);
-  const [expiry, setExpiry] = useState(null);
+  const { loggedIn, expiries, expiry, setExpiry, error, setError } = useMarketSession("NIFTY");
   const [chain, setChain] = useState(null);
-  const [error, setError] = useState(null);
   const [watchlist, setWatchlist] = useState([]);
 
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(WATCHLIST_KEY);
-      if (saved) setWatchlist(JSON.parse(saved));
-    } catch (e) {}
+    const saved = loadJSON(WATCHLIST_KEY);
+    if (saved) setWatchlist(saved);
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch (e) {}
+    saveJSON(WATCHLIST_KEY, watchlist);
   }, [watchlist]);
-
-  useEffect(() => {
-    getStatus()
-      .then((s) => setLoggedIn(s.logged_in))
-      .catch(() => setLoggedIn(false));
-  }, []);
-
-  useEffect(() => {
-    if (loggedIn) {
-      getExpiries("NIFTY")
-        .then((d) => {
-          setExpiries(d.expiries);
-          if (d.expiries.length) setExpiry(d.expiries[0]);
-        })
-        .catch((e) => setError(e.message));
-    }
-  }, [loggedIn]);
 
   const [lastUpdated, setLastUpdated] = useState(null);
   const [centeredExpiry, setCenteredExpiry] = useState(null);
@@ -69,9 +34,7 @@ export default function Dashboard() {
   const spot = chain ? chain.underlying_spot_price : null;
   let atmStrike = null;
   if (chain && spot != null && chain.chain.length) {
-    atmStrike = chain.chain.reduce((closest, row) =>
-      Math.abs(row.strike - spot) < Math.abs(closest.strike - spot) ? row : closest
-    ).strike;
+    atmStrike = nearestStrike(chain.chain.map((r) => r.strike), spot);
   }
 
   // Center the view on the ATM strike once per expiry (not on every 5s poll)
@@ -86,32 +49,23 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chain, expiry]);
 
-  useEffect(() => {
-    if (!loggedIn || !expiry) return;
-
-    let cancelled = false;
-
-    const fetchChain = () => {
+  const fetchChain = useCallback(
+    (isCancelled) => {
       getChain("NIFTY", expiry)
         .then((data) => {
-          if (cancelled) return;
+          if (isCancelled()) return;
           setChain(data);
           setLastUpdated(new Date());
           setError(null);
         })
         .catch((e) => {
-          if (!cancelled) setError(e.message);
+          if (!isCancelled()) setError(e.message);
         });
-    };
+    },
+    [expiry, setError]
+  );
 
-    fetchChain(); // fetch immediately
-    const interval = setInterval(fetchChain, 5000); // then every 5 seconds
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [loggedIn, expiry]);
+  usePoll(fetchChain, Boolean(loggedIn && expiry));
 
   const isWatched = (strike, type) =>
     watchlist.some((w) => w.strike === strike && w.type === type && w.expiry === expiry);
@@ -127,21 +81,12 @@ export default function Dashboard() {
   const enrichedWatchlist = watchlist.map((w) => {
     if (!chain || w.expiry !== expiry) return { ...w, ltp: null };
     const row = chain.chain.find((r) => r.strike === w.strike);
-    const ltp = row ? (w.type === "call" ? row.call.ltp : row.put.ltp) : null;
+    const ltp = row ? ltpOf(row, w.type) : null;
     return { ...w, ltp };
   });
 
-  if (loggedIn === null) return <Centered>Checking login…</Centered>;
-  if (loggedIn === false)
-    return (
-      <Centered>
-        Not logged in.{" "}
-        <a href="/" style={{ color: C.gold }}>
-          Go back and log in
-        </a>
-        .
-      </Centered>
-    );
+  const gate = loginGateFor(loggedIn);
+  if (gate) return gate;
   if (error) return <Centered>Something went wrong: {error}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
 
@@ -157,27 +102,10 @@ export default function Dashboard() {
 
   return (
     <div style={{ padding: 20 }}>
-      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-        <a href="/dashboard" style={{ fontSize: 12.5, padding: "6px 14px", borderRadius: 6, border: `1px solid ${C.gold}`, background: "rgba(201,161,90,0.1)", color: C.gold, textDecoration: "none" }}>
-          Option Chain
-        </a>
-        <a href="/paper" style={{ fontSize: 12.5, padding: "6px 14px", borderRadius: 6, border: `1px solid ${C.border}`, color: C.muted, textDecoration: "none" }}>
-          Paper Trading
-        </a>
-      </div>
+      <TopNav active="chain" />
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>NIFTY Option Chain</h1>
-        <select
-          value={expiry}
-          onChange={(e) => setExpiry(e.target.value)}
-          style={{ background: C.surface, color: "#E7E9EE", border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px" }}
-        >
-          {expiries.map((exp) => (
-            <option key={exp} value={exp}>
-              {exp}
-            </option>
-          ))}
-        </select>
+        <ExpirySelect expiry={expiry} expiries={expiries} onChange={setExpiry} />
         {spot != null && (
           <span style={{ color: C.muted, fontSize: 13 }}>
             Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
@@ -342,13 +270,5 @@ function StarButton({ active, onClick }) {
     <button onClick={onClick} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: active ? C.gold : C.muted }}>
       {active ? "★" : "☆"}
     </button>
-  );
-}
-
-function Centered({ children }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-      {children}
-    </div>
   );
 }

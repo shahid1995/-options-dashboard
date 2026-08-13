@@ -34,11 +34,11 @@ async def exchange_code_for_token(code: str) -> str:
         return data["access_token"]
 
 
-async def get_option_chain(access_token: str, instrument_key: str, expiry_date: str) -> dict:
+async def _get(path: str, access_token: str, params: dict) -> dict:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            f"{BASE_URL}/option/chain",
-            params={"instrument_key": instrument_key, "expiry_date": expiry_date},
+            f"{BASE_URL}{path}",
+            params=params,
             headers={
                 "Accept": "application/json",
                 "Authorization": f"Bearer {access_token}",
@@ -46,18 +46,12 @@ async def get_option_chain(access_token: str, instrument_key: str, expiry_date: 
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def get_option_chain(access_token: str, instrument_key: str, expiry_date: str) -> dict:
+    return await _get("/option/chain", access_token, {"instrument_key": instrument_key, "expiry_date": expiry_date})
 
 
 async def get_option_contracts(access_token: str, instrument_key: str) -> dict:
     """Returns available strikes/expiries for an instrument (used to list expiry dates)."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{BASE_URL}/option/contract",
-            params={"instrument_key": instrument_key},
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {access_token}",
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()
+    return await _get("/option/contract", access_token, {"instrument_key": instrument_key})
