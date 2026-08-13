@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlencode
 
 import httpx
 from app.config import settings
@@ -50,13 +51,14 @@ async def _request(method: str, path: str, **kwargs) -> dict:
         raise UpstoxError(502, "Upstox returned an unreadable (non-JSON) response") from e
 
 
-def get_login_url() -> str:
-    return (
-        f"{BASE_URL}/login/authorization/dialog"
-        f"?response_type=code"
-        f"&client_id={settings.UPSTOX_API_KEY}"
-        f"&redirect_uri={settings.UPSTOX_REDIRECT_URI}"
-    )
+def get_login_url(state: str) -> str:
+    params = urlencode({
+        "response_type": "code",
+        "client_id": settings.UPSTOX_API_KEY,
+        "redirect_uri": settings.UPSTOX_REDIRECT_URI,
+        "state": state,
+    })
+    return f"{BASE_URL}/login/authorization/dialog?{params}"
 
 
 async def exchange_code_for_token(code: str) -> str:

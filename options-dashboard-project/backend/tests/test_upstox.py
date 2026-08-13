@@ -6,12 +6,14 @@ from app.config import settings
 from app.services import upstox
 
 
-def test_get_login_url_contains_client_id_and_redirect():
-    url = upstox.get_login_url()
+def test_get_login_url_contains_client_id_redirect_and_state():
+    url = upstox.get_login_url("state-123")
     assert url.startswith(f"{upstox.BASE_URL}/login/authorization/dialog")
     assert "response_type=code" in url
     assert f"client_id={settings.UPSTOX_API_KEY}" in url
-    assert f"redirect_uri={settings.UPSTOX_REDIRECT_URI}" in url
+    params = dict(httpx.QueryParams(url.split("?", 1)[1]))
+    assert params["redirect_uri"] == settings.UPSTOX_REDIRECT_URI
+    assert params["state"] == "state-123"
 
 
 @respx.mock

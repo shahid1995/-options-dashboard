@@ -1,8 +1,8 @@
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Cookie, HTTPException
+from fastapi.responses import JSONResponse, RedirectResponse
 from app.services import upstox, token_store
 from app.services.upstox import UpstoxError
 from app.config import settings
@@ -11,18 +11,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+SESSION_COOKIE = "session_id"
+
 
 @router.get("/login")
 def login():
     """Redirects the browser to Upstox's login page."""
-    return RedirectResponse(upstox.get_login_url())
+    state = token_store.create_oauth_state()
+    return RedirectResponse(upstox.get_login_url(state))
 
 
 @router.get("/callback")
-async def callback(code: str | None = None, error: str | None = None):
+async def callback(
+    code: str | None = None,
+    error: str | None = None,
+    state: str | None = None,
+):
     """Upstox redirects here after the user logs in on their site."""
     if error:
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(error)}")
+    if not token_store.consume_oauth_state(state):
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
@@ -31,19 +40,32 @@ async def callback(code: str | None = None, error: str | None = None):
     except UpstoxError as e:
         logger.error("Token exchange failed: %s", e)
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
-    token_store.set_token(access_token)
+    session_id = token_store.set_token(access_token)
 
     # Send the user back to the dashboard, now logged in
-    return RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+    response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=60 * 60 * 24,
+    )
+    return response
 
 
 @router.get("/status")
-def status():
+def status(session_id: str | None = Cookie(default=None)):
     """Frontend calls this to check if we currently have a valid session."""
-    return {"logged_in": token_store.get_token() is not None}
+    return {"logged_in": token_store.get_token(session_id) is not None}
 
 
 @router.post("/logout")
-def logout():
+def logout(session_id: str | None = Cookie(default=None)):
+    if token_store.get_token(session_id) is None:
+        raise HTTPException(status_code=401, detail="Not logged in")
     token_store.clear_token()
-    return {"ok": True}
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
+    return response
