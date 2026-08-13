@@ -22,6 +22,8 @@ api.interceptors.response.use(
 
 export const loginUrl = () => `${process.env.NEXT_PUBLIC_API_URL}/auth/login`;
 
+export const isAuthError = (e) => e?.response?.status === 401;
+
 export const getStatus = () => api.get("/auth/status").then((r) => r.data);
 
 export const getExpiries = (symbol) =>
@@ -31,3 +33,9 @@ export const getChain = (symbol, expiryDate) =>
   api
     .get(`/chains/${symbol}`, { params: { expiry_date: expiryDate } })
     .then((r) => r.data);
+
+export const chainWsUrl = (symbol, expiryDate) => {
+  const base = process.env.NEXT_PUBLIC_API_URL || "";
+  const wsBase = base.replace(/^http/, "ws");
+  return `${wsBase}/chains/ws/${symbol}?expiry_date=${encodeURIComponent(expiryDate)}`;
+};

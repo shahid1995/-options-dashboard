@@ -1,42 +1,31 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { getStatus, getExpiries, getChain } from "@/lib/api";
+import { getStatus, getExpiries, getChain, isAuthError } from "@/lib/api";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
+import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
+import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
+  ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
-
-const C = {
-  surface: "#12161F",
-  surface2: "#171C27",
-  border: "#242B3A",
-  muted: "#8892A6",
-  faint: "#5A6376",
-  text: "#E7E9EE",
-  gold: "#C9A15A",
-  green: "#4CAF7D",
-  red: "#E15252",
-};
 
 const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
 
-function fmtIN(n, decimals = 0) {
-  if (n === null || n === undefined || Number.isNaN(n)) return "-";
-  return n.toLocaleString("en-IN", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-}
-
 export default function PaperTradingPage() {
   // ---- All hooks declared up top, unconditionally ----
   const [loggedIn, setLoggedIn] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [error, setError] = useState(null);
+  const [symbol, setSymbol] = useState("NIFTY");
   const [expiries, setExpiries] = useState([]);
   const [expiry, setExpiry] = useState(null);
   const [chainCache, setChainCache] = useState({}); // { [expiryDate]: chainResponse }
+  const isMobile = useIsMobile();
 
   const [legs, setLegs] = useState([]);
+  const [strategyName, setStrategyName] = useState(null);
   const [multiplier, setMultiplier] = useState(1);
-  const [lotSize, setLotSize] = useState(65);
+  const [lotSize, setLotSize] = useState(LOT_SIZES.NIFTY);
   const [category, setCategory] = useState("Bullish");
   const [payoffTab, setPayoffTab] = useState("graph");
   const [targetPct, setTargetPct] = useState(0);
@@ -45,18 +34,19 @@ export default function PaperTradingPage() {
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperPositions, setPaperPositions] = useState([]);
   const [paperHistory, setPaperHistory] = useState([]);
+  const [equityHistory, setEquityHistory] = useState([]);
 
   const loadChain = useCallback(async (expiryDate) => {
     if (!expiryDate) return;
     try {
-      const data = await getChain("NIFTY", expiryDate);
+      const data = await getChain(symbol, expiryDate);
       setChainCache((prev) => ({ ...prev, [expiryDate]: data }));
       setError(null);
     } catch (e) {
-      if (e.response?.status === 401) setLoggedIn(false);
+      if (isAuthError(e)) setSessionExpired(true);
       else setError(e.message);
     }
-  }, []);
+  }, [symbol]);
 
   useEffect(() => {
     getStatus()
@@ -69,16 +59,22 @@ export default function PaperTradingPage() {
 
   useEffect(() => {
     if (!loggedIn) return;
-    getExpiries("NIFTY")
+    setExpiry(null);
+    setExpiries([]);
+    setChainCache({});
+    setLegs([]);
+    setStrategyName(null);
+    setLotSize(LOT_SIZES[symbol] ?? LOT_SIZES.NIFTY);
+    getExpiries(symbol)
       .then((d) => {
         setExpiries(d.expiries);
         if (d.expiries.length) setExpiry(d.expiries[0]);
       })
       .catch((e) => {
-        if (e.response?.status === 401) setLoggedIn(false);
+        if (isAuthError(e)) setSessionExpired(true);
         else setError(e.message);
       });
-  }, [loggedIn]);
+  }, [loggedIn, symbol]);
 
   // Poll the primary expiry's chain every 5s
   useEffect(() => {
@@ -105,6 +101,7 @@ export default function PaperTradingPage() {
         setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
         setPaperPositions(parsed.positions ?? []);
         setPaperHistory(parsed.history ?? []);
+        setEquityHistory(parsed.equityHistory ?? []);
       }
     } catch (e) {
       console.warn("Could not load paper portfolio from localStorage:", e);
@@ -115,12 +112,12 @@ export default function PaperTradingPage() {
     try {
       window.localStorage.setItem(
         PAPER_KEY,
-        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory })
+        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory })
       );
     } catch (e) {
       console.warn("Could not save paper portfolio to localStorage:", e);
     }
-  }, [paperCash, paperStartingCapital, paperPositions, paperHistory]);
+  }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
   const primaryChain = chainCache[expiry];
   const spot = primaryChain?.underlying_spot_price ?? null;
@@ -237,7 +234,7 @@ export default function PaperTradingPage() {
       cashDelta -= dir * l.price * lotSize * effectiveQty;
       return {
         id: `pos-${l.type}-${l.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        symbol: "NIFTY",
+        symbol,
         type: l.type,
         strike: l.strike,
         expiry: l.expiry,
@@ -246,11 +243,13 @@ export default function PaperTradingPage() {
         lotSize,
         entryPremium: l.price,
         entryTime: new Date().toISOString(),
+        strategyName: strategyName ?? "Custom",
       };
     });
     setPaperCash((c) => c + cashDelta);
     setPaperPositions((prev) => [...prev, ...newPositions]);
     setLegs([]);
+    setStrategyName(null);
   };
 
   const closePosition = (id) => {
@@ -286,11 +285,30 @@ export default function PaperTradingPage() {
   const equity = paperCash + positionsWithLtp.reduce((sum, p) => (p.currentLtp == null ? sum : sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty), 0);
   const totalPnl = equity - paperStartingCapital;
   const totalRealized = paperHistory.reduce((sum, h) => sum + h.realizedPnl, 0);
+  const perStrategy = useMemo(() => strategyStats(paperHistory), [paperHistory]);
+
+  // Record an equity snapshot (at most one per minute) while data is live
+  useEffect(() => {
+    if (!primaryChain) return;
+    setEquityHistory((prev) => recordEquityPoint(prev, Math.round(equity)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryChain]);
+
+  const exportHistoryCsv = () => {
+    const blob = new Blob([historyToCsv(paperHistory)], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `paper-trades-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // ---- Leg editing helpers ----
   const addLegFromChain = (type, strike) => {
     const row = chainByStrike.get(strike);
     const price = row ? (type === "call" ? row.call.ltp : row.put.ltp) : 0;
+    setStrategyName(null);
     setLegs((prev) => [
       ...prev,
       { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 },
@@ -336,6 +354,7 @@ export default function PaperTradingPage() {
     if (!primaryChain) return;
     const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry };
     setLegs(strategyDef.build(ctx));
+    setStrategyName(strategyDef.name);
   };
 
   // ---- Render ----
@@ -351,13 +370,15 @@ export default function PaperTradingPage() {
         .
       </Centered>
     );
+  if (sessionExpired) return <SessionExpired />;
 
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: isMobile ? 10 : 20 }}>
       <TopNav active="paper" />
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>Strategy Builder</h1>
+        <SymbolTabs symbol={symbol} onChange={setSymbol} />
         <select
           value={expiry ?? ""}
           onChange={(e) => setExpiry(e.target.value)}
@@ -383,7 +404,7 @@ export default function PaperTradingPage() {
         <>
           <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
             {/* Left column: builder + readymade */}
-            <div style={{ flex: "1 1 520px", minWidth: 480 }}>
+            <div style={{ flex: "1 1 520px", minWidth: isMobile ? "100%" : 480 }}>
               {/* Leg builder */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -572,7 +593,7 @@ export default function PaperTradingPage() {
             </div>
 
             {/* Right column: payoff graph */}
-            <div style={{ flex: "1 1 420px", minWidth: 380, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+            <div style={{ flex: "1 1 420px", minWidth: isMobile ? "100%" : 380, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
                 {[
                   ["graph", "Payoff Graph"],
@@ -777,7 +798,71 @@ export default function PaperTradingPage() {
               </div>
             )}
 
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Trade History</div>
+            {equityHistory.length > 1 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Equity Over Time</div>
+                <div style={{ height: 180 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={equityHistory}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="time"
+                        stroke={C.faint}
+                        fontSize={10.5}
+                        tickFormatter={(t) => new Date(t).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      />
+                      <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={80} />
+                      <ReferenceLine y={paperStartingCapital} stroke={C.faint} strokeDasharray="4 2" />
+                      <Tooltip
+                        contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }}
+                        labelFormatter={(t) => new Date(t).toLocaleString("en-IN")}
+                        formatter={(v) => [`₹${fmtIN(v)}`, "Equity"]}
+                      />
+                      <Line type="monotone" dataKey="equity" stroke={C.gold} strokeWidth={2} dot={false} name="Equity" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {perStrategy.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Per-Strategy Stats</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                        <th style={{ padding: 6, textAlign: "left" }}>Strategy</th>
+                        <th style={{ padding: 6 }}>Closed legs</th>
+                        <th style={{ padding: 6 }}>Wins</th>
+                        <th style={{ padding: 6 }}>Win rate</th>
+                        <th style={{ padding: 6 }}>Total P&L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {perStrategy.map((s) => (
+                        <tr key={s.strategyName} style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 6 }}>{s.strategyName}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{s.trades}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{s.wins}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{(s.winRate * 100).toFixed(0)}%</td>
+                          <td style={{ padding: 6, textAlign: "center", color: s.totalPnl >= 0 ? C.green : C.red }}>₹{fmtIN(s.totalPnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Trade History</div>
+              {paperHistory.length > 0 && (
+                <button onClick={exportHistoryCsv} style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                  Export CSV
+                </button>
+              )}
+            </div>
             {paperHistory.length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.faint }}>No closed trades yet.</div>
             ) : (
@@ -786,6 +871,7 @@ export default function PaperTradingPage() {
                   <thead>
                     <tr style={{ color: C.muted, fontSize: 10.5 }}>
                       <th style={{ padding: 6, textAlign: "left" }}>Position</th>
+                      <th style={{ padding: 6 }}>Strategy</th>
                       <th style={{ padding: 6 }}>Entry</th>
                       <th style={{ padding: 6 }}>Exit</th>
                       <th style={{ padding: 6 }}>Realized P&L</th>
@@ -798,6 +884,7 @@ export default function PaperTradingPage() {
                         <td style={{ padding: 6 }}>
                           <span style={{ color: h.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{h.action.toUpperCase()}</span> {h.symbol} {h.strike} {h.type === "call" ? "CE" : "PE"}
                         </td>
+                        <td style={{ padding: 6, textAlign: "center", color: C.muted }}>{h.strategyName ?? "Custom"}</td>
                         <td style={{ padding: 6 }}>{h.entryPremium}</td>
                         <td style={{ padding: 6 }}>{h.exitPrice}</td>
                         <td style={{ padding: 6, color: h.realizedPnl >= 0 ? C.green : C.red }}>₹{fmtIN(h.realizedPnl)}</td>
@@ -811,86 +898,6 @@ export default function PaperTradingPage() {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function StepButton({ onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{ width: 20, height: 20, lineHeight: "18px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, cursor: "pointer", fontSize: 12, padding: 0 }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Stat({ label, value, color }) {
-  return (
-    <div>
-      <div style={{ fontSize: 10.5, color: C.faint }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: color || C.text }}>{value}</div>
-    </div>
-  );
-}
-
-function ShapeIcon({ shape }) {
-  const paths = {
-    riseUp: "M4 26 L16 26 L28 6",
-    fallUp: "M4 6 L16 6 L28 26",
-    riseCapped: "M4 26 L12 26 L20 10 L28 10",
-    fallCapped: "M4 10 L12 10 L20 26 L28 26",
-    plateau: "M4 20 L10 20 L14 10 L20 10 L24 20 L28 20",
-    peak: "M4 22 L12 22 L16 8 L20 22 L28 22",
-    vUp: "M4 6 L14 22 L16 24 L18 22 L28 6",
-  };
-  return (
-    <svg width="100%" height="32" viewBox="0 0 32 32">
-      <path d={paths[shape] || paths.riseUp} stroke={C.green} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function TopNav({ active }) {
-  return (
-    <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-      <a
-        href="/dashboard"
-        style={{
-          fontSize: 12.5,
-          padding: "6px 14px",
-          borderRadius: 6,
-          border: `1px solid ${active === "chain" ? C.gold : C.border}`,
-          background: active === "chain" ? "rgba(201,161,90,0.1)" : "transparent",
-          color: active === "chain" ? C.gold : C.muted,
-          textDecoration: "none",
-        }}
-      >
-        Option Chain
-      </a>
-      <a
-        href="/paper"
-        style={{
-          fontSize: 12.5,
-          padding: "6px 14px",
-          borderRadius: 6,
-          border: `1px solid ${active === "paper" ? C.gold : C.border}`,
-          background: active === "paper" ? "rgba(201,161,90,0.1)" : "transparent",
-          color: active === "paper" ? C.gold : C.muted,
-          textDecoration: "none",
-        }}
-      >
-        Paper Trading
-      </a>
-    </div>
-  );
-}
-
-function Centered({ children }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
-      {children}
     </div>
   );
 }
