@@ -17,7 +17,7 @@ export const C = {
 export const SYMBOLS = ["NIFTY", "BANKNIFTY"];
 
 // NSE lot sizes per index (editable in the UI; these are just defaults)
-export const LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35 };
+export const LOT_SIZES = { NIFTY: 65, BANKNIFTY: 30 };
 
 export function fmtIN(n, decimals = 0) {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";
