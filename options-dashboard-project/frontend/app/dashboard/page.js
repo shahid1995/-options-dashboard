@@ -1,6 +1,9 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { getStatus, getExpiries, getChain } from "@/lib/api";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
+} from "recharts";
 
 const C = {
   surface: "#12161F",
@@ -65,6 +68,8 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [centeredExpiry, setCenteredExpiry] = useState(null);
   const scrollRef = useRef(null);
+  const [legs, setLegs] = useState([]);
+  const [lotSize, setLotSize] = useState(75);
 
   const spot = chain ? chain.underlying_spot_price : null;
   let atmStrike = null;
@@ -144,6 +149,51 @@ export default function Dashboard() {
     );
   if (error) return <Centered>Something went wrong: {error}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
+
+  // ---- Strategy builder ----
+  const addLeg = (type, strike, premium) => {
+    if (premium == null) return;
+    setLegs((prev) => [
+      ...prev,
+      { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", premium },
+    ]);
+  };
+
+  const toggleLegAction = (id) => {
+    setLegs((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, action: l.action === "buy" ? "sell" : "buy" } : l))
+    );
+  };
+
+  const removeLeg = (id) => setLegs((prev) => prev.filter((l) => l.id !== id));
+
+  const payoffSeries = useMemo(() => {
+    if (!spot || legs.length === 0) return [];
+    const range = spot * 0.2; // ±20% of spot
+    const min = spot - range;
+    const max = spot + range;
+    const step = range / 40;
+    const points = [];
+    for (let price = min; price <= max; price += step) {
+      let pnl = 0;
+      legs.forEach((leg) => {
+        const intrinsic =
+          leg.type === "call" ? Math.max(0, price - leg.strike) : Math.max(0, leg.strike - price);
+        const dir = leg.action === "buy" ? 1 : -1;
+        pnl += dir * (intrinsic - leg.premium) * lotSize;
+      });
+      points.push({ price: Math.round(price), pnl: Math.round(pnl) });
+    }
+    return points;
+  }, [spot, legs, lotSize]);
+
+  const maxProfit = payoffSeries.length ? Math.max(...payoffSeries.map((p) => p.pnl)) : 0;
+  const maxLoss = payoffSeries.length ? Math.min(...payoffSeries.map((p) => p.pnl)) : 0;
+  const openEndedUp =
+    payoffSeries.length > 2 &&
+    payoffSeries[payoffSeries.length - 1].pnl - payoffSeries[payoffSeries.length - 2].pnl > 1;
+  const openEndedDown =
+    payoffSeries.length > 2 && payoffSeries[1].pnl - payoffSeries[0].pnl < -1;
 
   // Build table rows with a spot-marker row inserted at the right position
   const tableItems = [];
@@ -247,6 +297,8 @@ export default function Dashboard() {
                     isWatchedPut={isWatched(item.data.strike, "put")}
                     onToggleCall={() => toggleWatch(item.data.strike, "call")}
                     onTogglePut={() => toggleWatch(item.data.strike, "put")}
+                    onAddCallLeg={() => addLeg("call", item.data.strike, item.data.call.ltp)}
+                    onAddPutLeg={() => addLeg("put", item.data.strike, item.data.put.ltp)}
                   />
                 )
               )}
@@ -285,11 +337,113 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Strategy Builder */}
+      <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 13, color: C.muted, letterSpacing: 0.5 }}>STRATEGY BUILDER — payoff at expiry</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <label style={{ fontSize: 11.5, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
+              Lot size
+              <input
+                type="number"
+                value={lotSize}
+                onChange={(e) => setLotSize(Number(e.target.value) || 1)}
+                style={{ width: 60, background: "#0B0E14", color: "#E7E9EE", border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 6px", fontSize: 12 }}
+              />
+            </label>
+            {legs.length > 0 && (
+              <button onClick={() => setLegs([])} style={{ fontSize: 11, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                Clear all
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={{ fontSize: 11, color: "#5A6376", marginBottom: 12 }}>
+          NSE revises lot sizes periodically — double check the current NIFTY lot size on your broker app or an NSE circular if you're not sure.
+        </div>
+
+        {legs.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: "#5A6376", padding: "16px 0" }}>
+            No legs yet — click a CE or PE price in the chain above to add it here. Add a call and a put at the same strike to build a straddle, for example.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+              {legs.map((l) => (
+                <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, padding: "6px 10px", borderRadius: 6, background: "#171C27", border: `1px solid ${C.border}` }}>
+                  <button
+                    onClick={() => toggleLegAction(l.id)}
+                    title="Click to flip Buy/Sell"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      fontWeight: 700,
+                      color: l.action === "buy" ? C.green : C.red,
+                    }}
+                  >
+                    {l.action === "buy" ? "BUY" : "SELL"}
+                  </button>
+                  <span>
+                    {l.strike} {l.type === "call" ? "CE" : "PE"} @ {l.premium}
+                  </span>
+                  <button onClick={() => removeLeg(l.id)} style={{ background: "none", border: "none", color: "#5A6376", cursor: "pointer" }}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 24, marginBottom: 14, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13 }}>
+                <span style={{ color: "#5A6376" }}>Max profit (in shown range): </span>
+                <span style={{ color: C.green, fontWeight: 600 }}>
+                  ₹{fmtIN(maxProfit)}
+                  {openEndedUp ? "+ (unlimited upside)" : ""}
+                </span>
+              </div>
+              <div style={{ fontSize: 13 }}>
+                <span style={{ color: "#5A6376" }}>Max loss (in shown range): </span>
+                <span style={{ color: C.red, fontWeight: 600 }}>
+                  ₹{fmtIN(maxLoss)}
+                  {openEndedDown ? "− (can extend further down)" : ""}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={payoffSeries}>
+                  <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                  <XAxis dataKey="price" stroke="#5A6376" fontSize={11} tickFormatter={(v) => fmtIN(v)} />
+                  <YAxis stroke="#5A6376" fontSize={11} tickFormatter={(v) => `₹${fmtIN(v)}`} />
+                  <ReferenceLine y={0} stroke="#5A6376" />
+                  {spot != null && (
+                    <ReferenceLine x={Math.round(spot)} stroke={C.gold} strokeDasharray="4 2" label={{ value: "Spot", fill: C.gold, fontSize: 11, position: "top" }} />
+                  )}
+                  <Tooltip
+                    contentStyle={{ background: "#171C27", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12 }}
+                    labelFormatter={(v) => `Price: ₹${fmtIN(v)}`}
+                    formatter={(v) => [`₹${fmtIN(v)}`, "P&L"]}
+                  />
+                  <Line type="monotone" dataKey="pnl" stroke={C.gold} strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div style={{ fontSize: 10.5, color: "#5A6376", marginTop: 8 }}>
+              Chart shown for prices within ±20% of spot. If your position has more long calls than short calls (or more long puts than short puts), actual profit/loss can extend further beyond what's charted here.
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
-function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
+function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut, onAddCallLeg, onAddPutLeg }) {
   const c = row.call;
   const p = row.put;
   return (
@@ -311,9 +465,17 @@ function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePu
       <td style={{ padding: 6 }}>{c.theta ?? "-"}</td>
       <td style={{ padding: 6 }}>{c.gamma ?? "-"}</td>
       <td style={{ padding: 6 }}>{c.delta ?? "-"}</td>
-      <td style={{ padding: 6, color: C.green, fontWeight: 600 }}>{c.ltp ?? "-"}</td>
+      <td style={{ padding: 6 }}>
+        <button onClick={onAddCallLeg} title="Add as a strategy leg" style={{ background: "none", border: "none", color: C.green, fontWeight: 600, cursor: "pointer", fontSize: 12.5, padding: 0 }}>
+          {c.ltp ?? "-"}
+        </button>
+      </td>
       <td style={{ padding: 6, textAlign: "center", fontWeight: 700 }}>{fmtIN(row.strike)}</td>
-      <td style={{ padding: 6, color: C.red, fontWeight: 600 }}>{p.ltp ?? "-"}</td>
+      <td style={{ padding: 6 }}>
+        <button onClick={onAddPutLeg} title="Add as a strategy leg" style={{ background: "none", border: "none", color: C.red, fontWeight: 600, cursor: "pointer", fontSize: 12.5, padding: 0 }}>
+          {p.ltp ?? "-"}
+        </button>
+      </td>
       <td style={{ padding: 6 }}>{p.delta ?? "-"}</td>
       <td style={{ padding: 6 }}>{p.gamma ?? "-"}</td>
       <td style={{ padding: 6 }}>{p.theta ?? "-"}</td>
