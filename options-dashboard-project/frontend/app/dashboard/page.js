@@ -15,6 +15,8 @@ const C = {
 };
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
+const PAPER_KEY = "options_dashboard_paper_v1";
+const DEFAULT_STARTING_CAPITAL = 500000;
 
 function fmtIN(n, decimals = 0) {
   if (n === null || n === undefined) return "-";
@@ -70,6 +72,39 @@ export default function Dashboard() {
   const scrollRef = useRef(null);
   const [legs, setLegs] = useState([]);
   const [lotSize, setLotSize] = useState(65);
+
+  // ---- Paper trading state ----
+  const [paperCash, setPaperCash] = useState(DEFAULT_STARTING_CAPITAL);
+  const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
+  const [paperPositions, setPaperPositions] = useState([]);
+  const [paperHistory, setPaperHistory] = useState([]);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(PAPER_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
+        setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
+        setPaperPositions(parsed.positions ?? []);
+        setPaperHistory(parsed.history ?? []);
+      }
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        PAPER_KEY,
+        JSON.stringify({
+          cash: paperCash,
+          startingCapital: paperStartingCapital,
+          positions: paperPositions,
+          history: paperHistory,
+        })
+      );
+    } catch (e) {}
+  }, [paperCash, paperStartingCapital, paperPositions, paperHistory]);
 
   const spot = chain ? chain.underlying_spot_price : null;
   let atmStrike = null;
@@ -194,6 +229,88 @@ export default function Dashboard() {
     payoffSeries[payoffSeries.length - 1].pnl - payoffSeries[payoffSeries.length - 2].pnl > 1;
   const openEndedDown =
     payoffSeries.length > 2 && payoffSeries[1].pnl - payoffSeries[0].pnl < -1;
+
+  // ---- Paper trading logic ----
+  // dir: +1 for buy (long), -1 for sell (short)
+  const dirOf = (action) => (action === "buy" ? 1 : -1);
+
+  const getCurrentLtp = (position) => {
+    if (!chain || position.expiry !== expiry) return null;
+    const row = chain.chain.find((r) => r.strike === position.strike);
+    if (!row) return null;
+    return position.type === "call" ? row.call.ltp : row.put.ltp;
+  };
+
+  const executeLegsAsPaperTrade = () => {
+    if (legs.length === 0) return;
+    let cashDelta = 0;
+    const newPositions = legs.map((leg) => {
+      const dir = dirOf(leg.action);
+      cashDelta -= dir * leg.premium * lotSize * 1; // 1 lot per leg
+      return {
+        id: `pos-${leg.type}-${leg.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        symbol: "NIFTY",
+        type: leg.type,
+        strike: leg.strike,
+        expiry,
+        action: leg.action,
+        qty: 1,
+        lotSize,
+        entryPremium: leg.premium,
+        entryTime: new Date().toISOString(),
+      };
+    });
+    setPaperCash((c) => c + cashDelta);
+    setPaperPositions((prev) => [...prev, ...newPositions]);
+    setLegs([]);
+  };
+
+  const closePosition = (id) => {
+    const position = paperPositions.find((p) => p.id === id);
+    if (!position) return;
+    const exitPrice = getCurrentLtp(position);
+    if (exitPrice == null) {
+      alert("Can't close this position right now — switch to its expiry in the dropdown above so we have a live price for it, then try again.");
+      return;
+    }
+    const dir = dirOf(position.action);
+    const cashDelta = dir * exitPrice * position.lotSize * position.qty;
+    const realizedPnl = dir * (exitPrice - position.entryPremium) * position.lotSize * position.qty;
+
+    setPaperCash((c) => c + cashDelta);
+    setPaperPositions((prev) => prev.filter((p) => p.id !== id));
+    setPaperHistory((prev) => [
+      {
+        ...position,
+        exitPrice,
+        exitTime: new Date().toISOString(),
+        realizedPnl,
+      },
+      ...prev,
+    ]);
+  };
+
+  const resetPaperPortfolio = () => {
+    if (!window.confirm("Reset your paper portfolio? This clears all open positions and trade history and can't be undone.")) return;
+    setPaperCash(paperStartingCapital);
+    setPaperPositions([]);
+    setPaperHistory([]);
+  };
+
+  const positionsWithLtp = paperPositions.map((p) => {
+    const ltp = getCurrentLtp(p);
+    const dir = dirOf(p.action);
+    const unrealizedPnl = ltp != null ? dir * (ltp - p.entryPremium) * p.lotSize * p.qty : null;
+    return { ...p, currentLtp: ltp, unrealizedPnl };
+  });
+
+  const totalUnrealized = positionsWithLtp.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
+  const equity = paperCash + positionsWithLtp.reduce((sum, p) => {
+    if (p.currentLtp == null) return sum;
+    return sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty;
+  }, 0);
+  const totalPnl = equity - paperStartingCapital;
+  const totalRealized = paperHistory.reduce((sum, h) => sum + h.realizedPnl, 0);
 
   // Build table rows with a spot-marker row inserted at the right position
   const tableItems = [];
@@ -353,9 +470,17 @@ export default function Dashboard() {
               />
             </label>
             {legs.length > 0 && (
-              <button onClick={() => setLegs([])} style={{ fontSize: 11, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
-                Clear all
-              </button>
+              <>
+                <button
+                  onClick={executeLegsAsPaperTrade}
+                  style={{ fontSize: 11.5, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer", fontWeight: 700 }}
+                >
+                  Execute as Paper Trade
+                </button>
+                <button onClick={() => setLegs([])} style={{ fontSize: 11, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                  Clear all
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -439,6 +564,119 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {/* Paper Trading Portfolio */}
+      <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 13, color: C.muted, letterSpacing: 0.5 }}>PAPER TRADING PORTFOLIO — simulated, no real money</div>
+          <button onClick={resetPaperPortfolio} style={{ fontSize: 11, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+            Reset portfolio
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
+          <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital)}`} />
+          <Stat label="Cash" value={`₹${fmtIN(paperCash)}`} />
+          <Stat label="Equity (mark-to-market)" value={`₹${fmtIN(equity)}`} color={C.gold} />
+          <Stat label="Unrealized P&L" value={`₹${fmtIN(totalUnrealized)}`} color={totalUnrealized >= 0 ? C.green : C.red} />
+          <Stat label="Realized P&L (closed trades)" value={`₹${fmtIN(totalRealized)}`} color={totalRealized >= 0 ? C.green : C.red} />
+          <Stat label="Total P&L since start" value={`₹${fmtIN(totalPnl)}`} color={totalPnl >= 0 ? C.green : C.red} />
+        </div>
+
+        <div style={{ fontSize: 11, color: "#5A6376", marginBottom: 16 }}>
+          This is a simplified simulator: it tracks premium paid/received but does not model real margin requirements for short (sell) positions, brokerage, or taxes. Use it to practice how strategies behave, not to estimate real capital needs.
+        </div>
+
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Open Positions</div>
+        {positionsWithLtp.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: "#5A6376", paddingBottom: 16 }}>
+            No open positions. Build a strategy above and click "Execute as Paper Trade" to open one.
+          </div>
+        ) : (
+          <div style={{ overflowX: "auto", marginBottom: 20 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                  <th style={{ padding: 6, textAlign: "left" }}>Position</th>
+                  <th style={{ padding: 6 }}>Expiry</th>
+                  <th style={{ padding: 6 }}>Qty (lots)</th>
+                  <th style={{ padding: 6 }}>Entry</th>
+                  <th style={{ padding: 6 }}>Current LTP</th>
+                  <th style={{ padding: 6 }}>Unrealized P&L</th>
+                  <th style={{ padding: 6 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {positionsWithLtp.map((p) => (
+                  <tr key={p.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ padding: 6 }}>
+                      <span style={{ color: p.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{p.action.toUpperCase()}</span>{" "}
+                      {p.symbol} {p.strike} {p.type === "call" ? "CE" : "PE"}
+                    </td>
+                    <td style={{ padding: 6, color: C.muted }}>{p.expiry}</td>
+                    <td style={{ padding: 6 }}>{p.qty}</td>
+                    <td style={{ padding: 6 }}>{p.entryPremium}</td>
+                    <td style={{ padding: 6 }}>{p.currentLtp ?? "— (switch expiry to load)"}</td>
+                    <td style={{ padding: 6, color: p.unrealizedPnl == null ? C.muted : p.unrealizedPnl >= 0 ? C.green : C.red }}>
+                      {p.unrealizedPnl == null ? "-" : `₹${fmtIN(p.unrealizedPnl)}`}
+                    </td>
+                    <td style={{ padding: 6 }}>
+                      <button
+                        onClick={() => closePosition(p.id)}
+                        style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
+                      >
+                        Close
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Trade History</div>
+        {paperHistory.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: "#5A6376" }}>No closed trades yet.</div>
+        ) : (
+          <div style={{ overflowX: "auto", maxHeight: 240, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                  <th style={{ padding: 6, textAlign: "left" }}>Position</th>
+                  <th style={{ padding: 6 }}>Entry</th>
+                  <th style={{ padding: 6 }}>Exit</th>
+                  <th style={{ padding: 6 }}>Realized P&L</th>
+                  <th style={{ padding: 6 }}>Closed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paperHistory.map((h, i) => (
+                  <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
+                    <td style={{ padding: 6 }}>
+                      <span style={{ color: h.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{h.action.toUpperCase()}</span>{" "}
+                      {h.symbol} {h.strike} {h.type === "call" ? "CE" : "PE"}
+                    </td>
+                    <td style={{ padding: 6 }}>{h.entryPremium}</td>
+                    <td style={{ padding: 6 }}>{h.exitPrice}</td>
+                    <td style={{ padding: 6, color: h.realizedPnl >= 0 ? C.green : C.red }}>₹{fmtIN(h.realizedPnl)}</td>
+                    <td style={{ padding: 6, color: C.muted }}>{new Date(h.exitTime).toLocaleString("en-IN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, color: "#5A6376" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: color || "#E7E9EE" }}>{value}</div>
     </div>
   );
 }
