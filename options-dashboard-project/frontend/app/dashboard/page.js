@@ -62,12 +62,33 @@ export default function Dashboard() {
     }
   }, [loggedIn]);
 
+  const [lastUpdated, setLastUpdated] = useState(null);
+
   useEffect(() => {
-    if (loggedIn && expiry) {
+    if (!loggedIn || !expiry) return;
+
+    let cancelled = false;
+
+    const fetchChain = () => {
       getChain("NIFTY", expiry)
-        .then(setChain)
-        .catch((e) => setError(e.message));
-    }
+        .then((data) => {
+          if (cancelled) return;
+          setChain(data);
+          setLastUpdated(new Date());
+          setError(null);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e.message);
+        });
+    };
+
+    fetchChain(); // fetch immediately
+    const interval = setInterval(fetchChain, 5000); // then every 5 seconds
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [loggedIn, expiry]);
 
   const isWatched = (strike, type) =>
@@ -132,6 +153,12 @@ export default function Dashboard() {
         {spot != null && (
           <span style={{ color: C.muted, fontSize: 13 }}>
             Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
+          </span>
+        )}
+        {lastUpdated && (
+          <span style={{ color: C.muted, fontSize: 11, marginLeft: "auto" }}>
+            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: C.green, marginRight: 6 }} />
+            Updated {lastUpdated.toLocaleTimeString("en-IN")}
           </span>
         )}
       </div>
