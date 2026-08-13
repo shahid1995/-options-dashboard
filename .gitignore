@@ -8,6 +8,7 @@ htmlcov/
 # Node
 node_modules/
 coverage/
+.next/
 
 # Env
 .env

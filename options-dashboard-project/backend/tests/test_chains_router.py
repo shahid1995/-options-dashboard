@@ -1,11 +1,19 @@
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 from app.routers.chains import INSTRUMENT_KEYS
 from app.services import token_store, upstox
+
+
+def http_status_error(status_code):
+    request = httpx.Request("GET", "https://api.upstox.com/v2/option/chain")
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError("error", request=request, response=response)
 
 
 @pytest.fixture
@@ -161,3 +169,88 @@ def test_chain_empty_data(client, logged_in, monkeypatch):
     body = resp.json()
     assert body["chain"] == []
     assert body["underlying_spot_price"] is None
+
+
+def test_chain_banknifty_uses_bank_instrument_key(client, logged_in, monkeypatch):
+    mock = AsyncMock(return_value={})
+    monkeypatch.setattr(upstox, "get_option_chain", mock)
+
+    resp = client.get("/chains/banknifty", params={"expiry_date": "2026-08-28"})
+
+    assert resp.status_code == 200
+    assert resp.json()["symbol"] == "BANKNIFTY"
+    mock.assert_awaited_once_with("tok-xyz", INSTRUMENT_KEYS["BANKNIFTY"], "2026-08-28")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_chain_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch, status):
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(status)))
+
+    resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
+
+    assert resp.status_code == 401
+    assert "session expired" in resp.json()["detail"].lower()
+    assert token_store.get_token() is None
+
+
+def test_chain_upstox_server_error_returns_502(client, logged_in, monkeypatch):
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
+
+    resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
+
+    assert resp.status_code == 502
+    assert "Upstox API error (500)" in resp.json()["detail"]
+    assert token_store.get_token() == "tok-xyz"
+
+
+def test_expiries_upstox_auth_error_clears_token_and_returns_401(client, logged_in, monkeypatch):
+    monkeypatch.setattr(upstox, "get_option_contracts", AsyncMock(side_effect=http_status_error(401)))
+
+    resp = client.get("/chains/NIFTY/expiries")
+
+    assert resp.status_code == 401
+    assert token_store.get_token() is None
+
+
+def ws_close_code(client, path):
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(path) as ws:
+            ws.receive_json()
+    return exc_info.value.code
+
+
+def test_ws_unknown_symbol_closes_4404(client, logged_in):
+    assert ws_close_code(client, "/chains/ws/UNKNOWN?expiry_date=2026-08-28") == 4404
+
+
+def test_ws_without_login_closes_4401(client):
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4401
+
+
+def test_ws_upstox_auth_error_clears_token_and_closes_4401(client, logged_in, monkeypatch):
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(403)))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4401
+    assert token_store.get_token() is None
+
+
+def test_ws_upstox_server_error_closes_4502(client, logged_in, monkeypatch):
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=http_status_error(500)))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4502
+
+
+def test_ws_network_error_closes_4502(client, logged_in, monkeypatch):
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(side_effect=httpx.ConnectError("boom")))
+    assert ws_close_code(client, "/chains/ws/NIFTY?expiry_date=2026-08-28") == 4502
+
+
+def test_ws_streams_transformed_chain(client, logged_in, monkeypatch):
+    raw = {"data": [make_chain_item(25000, call_market={"ltp": 160.0})]}
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(return_value=raw))
+
+    with client.websocket_connect("/chains/ws/nifty?expiry_date=2026-08-28") as ws:
+        body = ws.receive_json()
+
+    assert body["symbol"] == "NIFTY"
+    assert body["expiry_date"] == "2026-08-28"
+    assert body["chain"][0]["strike"] == 25000
+    assert body["chain"][0]["call"]["ltp"] == 160.0
