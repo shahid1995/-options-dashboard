@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+coverage/
+
+# Env
+.env
