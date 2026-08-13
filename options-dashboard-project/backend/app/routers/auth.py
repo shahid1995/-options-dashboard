@@ -1,8 +1,9 @@
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, Cookie, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
+from app.routers.deps import get_session_id
 from app.services import upstox, token_store
 from app.services.upstox import UpstoxError
 from app.config import settings
@@ -42,8 +43,11 @@ async def callback(
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
     session_id = token_store.set_token(access_token)
 
-    # Send the user back to the dashboard, now logged in
-    response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard")
+    # Send the user back to the dashboard, now logged in. The session ID is
+    # passed in the URL fragment (never sent to servers) because the frontend
+    # and backend are on different sites, so browsers that block third-party
+    # cookies would drop the cookie on later API calls.
+    response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard#session_id={session_id}")
     response.set_cookie(
         SESSION_COOKIE,
         session_id,
@@ -56,13 +60,13 @@ async def callback(
 
 
 @router.get("/status")
-def status(session_id: str | None = Cookie(default=None)):
+def status(session_id: str | None = Depends(get_session_id)):
     """Frontend calls this to check if we currently have a valid session."""
     return {"logged_in": token_store.get_token(session_id) is not None}
 
 
 @router.post("/logout")
-def logout(session_id: str | None = Cookie(default=None)):
+def logout(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
     token_store.clear_token()

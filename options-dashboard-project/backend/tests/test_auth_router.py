@@ -58,9 +58,11 @@ def test_callback_with_code_sets_session_cookie_and_redirects(client, monkeypatc
     )
 
     assert resp.status_code == 307
-    assert resp.headers["location"] == f"{settings.FRONTEND_URL}/dashboard"
+    location = resp.headers["location"]
+    assert location.startswith(f"{settings.FRONTEND_URL}/dashboard#session_id=")
     session_id = resp.cookies.get("session_id")
     assert session_id
+    assert location == f"{settings.FRONTEND_URL}/dashboard#session_id={session_id}"
     assert token_store.get_token(session_id) == "tok-xyz"
 
 
@@ -77,6 +79,13 @@ def test_status_logged_in(client):
     assert resp.json() == {"logged_in": True}
 
 
+def test_status_logged_in_via_header(client):
+    session_id = token_store.set_token("tok-xyz")
+    resp = client.get("/auth/status", headers={"X-Session-Id": session_id})
+    assert resp.status_code == 200
+    assert resp.json() == {"logged_in": True}
+
+
 def test_status_logged_out_with_wrong_session(client):
     token_store.set_token("tok-xyz")
     resp = client.get("/auth/status", cookies={"session_id": "wrong"})
@@ -89,6 +98,13 @@ def test_logout_clears_token(client):
     resp = client.post("/auth/logout", cookies={"session_id": session_id})
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+    assert token_store.get_token(session_id) is None
+
+
+def test_logout_via_header(client):
+    session_id = token_store.set_token("tok-xyz")
+    resp = client.post("/auth/logout", headers={"X-Session-Id": session_id})
+    assert resp.status_code == 200
     assert token_store.get_token(session_id) is None
 
 

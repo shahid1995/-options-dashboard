@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { getChain, chainWsUrl, isAuthError } from "./api";
+import { getChain, chainWsUrl, chainWsProtocols, isAuthError } from "./api";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -55,7 +55,7 @@ export function useChainFeed(symbol, expiry, enabled) {
     };
 
     try {
-      ws = new WebSocket(chainWsUrl(symbol, expiry));
+      ws = new WebSocket(chainWsUrl(symbol, expiry), chainWsProtocols());
       ws.onmessage = (event) => {
         gotWsData = true;
         setMode("live");

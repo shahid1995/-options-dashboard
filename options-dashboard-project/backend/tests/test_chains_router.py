@@ -92,6 +92,18 @@ def test_chain_requires_login(client):
     assert resp.status_code == 401
 
 
+def test_chain_accepts_session_header(client, monkeypatch):
+    session_id = token_store.set_token("tok-xyz")
+    raw = {"data": [make_chain_item(25000)]}
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(return_value=raw))
+    resp = client.get(
+        "/chains/NIFTY",
+        params={"expiry_date": "2026-08-28"},
+        headers={"X-Session-Id": session_id},
+    )
+    assert resp.status_code == 200
+
+
 def test_chain_rejects_wrong_session(client):
     token_store.set_token("tok-xyz")
     client.cookies.set("session_id", "wrong-session")
@@ -231,6 +243,31 @@ def ws_close_code(client, path, session_id=None):
         with client.websocket_connect(path, headers=headers) as ws:
             ws.receive_json()
     return exc_info.value.code
+
+
+def test_ws_accepts_session_subprotocol(client, monkeypatch):
+    session_id = token_store.set_token("tok-xyz")
+    raw = {"data": [make_chain_item(25000)]}
+    monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(return_value=raw))
+
+    with client.websocket_connect(
+        "/chains/ws/NIFTY?expiry_date=2026-08-28",
+        subprotocols=["options-dashboard-session", session_id],
+    ) as ws:
+        body = ws.receive_json()
+
+    assert body["symbol"] == "NIFTY"
+
+
+def test_ws_rejects_wrong_session_subprotocol(client):
+    token_store.set_token("tok-xyz")
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/chains/ws/NIFTY?expiry_date=2026-08-28",
+            subprotocols=["options-dashboard-session", "wrong-session"],
+        ) as ws:
+            ws.receive_json()
+    assert exc_info.value.code == 4401
 
 
 def test_ws_unknown_symbol_closes_4404(client, logged_in):
