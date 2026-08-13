@@ -69,7 +69,7 @@ export default function Dashboard() {
   const [centeredExpiry, setCenteredExpiry] = useState(null);
   const scrollRef = useRef(null);
   const [legs, setLegs] = useState([]);
-  const [lotSize, setLotSize] = useState(75);
+  const [lotSize, setLotSize] = useState(65);
 
   const spot = chain ? chain.underlying_spot_price : null;
   let atmStrike = null;
@@ -136,6 +136,26 @@ export default function Dashboard() {
     return { ...w, ltp };
   });
 
+  const payoffSeries = useMemo(() => {
+    if (!spot || legs.length === 0) return [];
+    const range = spot * 0.2; // ±20% of spot
+    const min = spot - range;
+    const max = spot + range;
+    const step = range / 40;
+    const points = [];
+    for (let price = min; price <= max; price += step) {
+      let pnl = 0;
+      legs.forEach((leg) => {
+        const intrinsic =
+          leg.type === "call" ? Math.max(0, price - leg.strike) : Math.max(0, leg.strike - price);
+        const dir = leg.action === "buy" ? 1 : -1;
+        pnl += dir * (intrinsic - leg.premium) * lotSize;
+      });
+      points.push({ price: Math.round(price), pnl: Math.round(pnl) });
+    }
+    return points;
+  }, [spot, legs, lotSize]);
+
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
   if (loggedIn === false)
     return (
@@ -166,26 +186,6 @@ export default function Dashboard() {
   };
 
   const removeLeg = (id) => setLegs((prev) => prev.filter((l) => l.id !== id));
-
-  const payoffSeries = useMemo(() => {
-    if (!spot || legs.length === 0) return [];
-    const range = spot * 0.2; // ±20% of spot
-    const min = spot - range;
-    const max = spot + range;
-    const step = range / 40;
-    const points = [];
-    for (let price = min; price <= max; price += step) {
-      let pnl = 0;
-      legs.forEach((leg) => {
-        const intrinsic =
-          leg.type === "call" ? Math.max(0, price - leg.strike) : Math.max(0, leg.strike - price);
-        const dir = leg.action === "buy" ? 1 : -1;
-        pnl += dir * (intrinsic - leg.premium) * lotSize;
-      });
-      points.push({ price: Math.round(price), pnl: Math.round(pnl) });
-    }
-    return points;
-  }, [spot, legs, lotSize]);
 
   const maxProfit = payoffSeries.length ? Math.max(...payoffSeries.map((p) => p.pnl)) : 0;
   const maxLoss = payoffSeries.length ? Math.min(...payoffSeries.map((p) => p.pnl)) : 0;
