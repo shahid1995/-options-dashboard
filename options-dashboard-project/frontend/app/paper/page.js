@@ -1,18 +1,12 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { getChain } from "@/lib/api";
+import { getStatus, getExpiries, getChain, isAuthError } from "@/lib/api";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
-import { C } from "@/lib/theme";
-import { fmtIN } from "@/lib/format";
-import { legOf, ltpOf, dirOf, sortedStrikes, nearestStrikeIndex, nearestStrike } from "@/lib/options";
+import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
+import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import { loadJSON, saveJSON } from "@/lib/storage";
-import { useMarketSession, usePoll } from "@/lib/hooks";
-import Centered from "@/components/Centered";
-import { loginGateFor } from "@/components/LoginGate";
-import TopNav from "@/components/TopNav";
-import ExpirySelect from "@/components/ExpirySelect";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
+  ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
 
 const PAPER_KEY = "options_dashboard_paper_v1";
@@ -20,12 +14,19 @@ const DEFAULT_STARTING_CAPITAL = 500000;
 
 export default function PaperTradingPage() {
   // ---- All hooks declared up top, unconditionally ----
-  const { loggedIn, expiries, expiry, setExpiry, error, setError } = useMarketSession("NIFTY");
+  const [loggedIn, setLoggedIn] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [error, setError] = useState(null);
+  const [symbol, setSymbol] = useState("NIFTY");
+  const [expiries, setExpiries] = useState([]);
+  const [expiry, setExpiry] = useState(null);
   const [chainCache, setChainCache] = useState({}); // { [expiryDate]: chainResponse }
+  const isMobile = useIsMobile();
 
   const [legs, setLegs] = useState([]);
+  const [strategyName, setStrategyName] = useState(null);
   const [multiplier, setMultiplier] = useState(1);
-  const [lotSize, setLotSize] = useState(65);
+  const [lotSize, setLotSize] = useState(LOT_SIZES.NIFTY);
   const [category, setCategory] = useState("Bullish");
   const [payoffTab, setPayoffTab] = useState("graph");
   const [targetPct, setTargetPct] = useState(0);
@@ -34,27 +35,57 @@ export default function PaperTradingPage() {
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperPositions, setPaperPositions] = useState([]);
   const [paperHistory, setPaperHistory] = useState([]);
+  const [equityHistory, setEquityHistory] = useState([]);
 
   const loadChain = useCallback(async (expiryDate) => {
     if (!expiryDate) return;
     try {
-      const data = await getChain("NIFTY", expiryDate);
+      const data = await getChain(symbol, expiryDate);
       setChainCache((prev) => ({ ...prev, [expiryDate]: data }));
       setError(null);
     } catch (e) {
-      setError(e.message);
+      if (isAuthError(e)) setSessionExpired(true);
+      else setError(e.message);
     }
+  }, [symbol]);
+
+  useEffect(() => {
+    getStatus().then((s) => setLoggedIn(s.logged_in)).catch(() => setLoggedIn(false));
   }, []);
 
-  // Poll the primary expiry's chain every 5s
-  const pollChain = useCallback(
-    (isCancelled) => {
-      if (!isCancelled()) loadChain(expiry);
-    },
-    [expiry, loadChain]
-  );
+  useEffect(() => {
+    if (!loggedIn) return;
+    setExpiry(null);
+    setExpiries([]);
+    setChainCache({});
+    setLegs([]);
+    setStrategyName(null);
+    setLotSize(LOT_SIZES[symbol] ?? LOT_SIZES.NIFTY);
+    getExpiries(symbol)
+      .then((d) => {
+        setExpiries(d.expiries);
+        if (d.expiries.length) setExpiry(d.expiries[0]);
+      })
+      .catch((e) => {
+        if (isAuthError(e)) setSessionExpired(true);
+        else setError(e.message);
+      });
+  }, [loggedIn, symbol]);
 
-  usePoll(pollChain, Boolean(loggedIn && expiry));
+  // Poll the primary expiry's chain every 5s
+  useEffect(() => {
+    if (!loggedIn || !expiry) return;
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled) loadChain(expiry);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [loggedIn, expiry, loadChain]);
 
   // Load / save paper trading state to the browser
   useEffect(() => {
@@ -64,18 +95,19 @@ export default function PaperTradingPage() {
       setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
       setPaperPositions(parsed.positions ?? []);
       setPaperHistory(parsed.history ?? []);
+      setEquityHistory(parsed.equityHistory ?? []);
     }
   }, []);
 
   useEffect(() => {
-    saveJSON(PAPER_KEY, { cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory });
-  }, [paperCash, paperStartingCapital, paperPositions, paperHistory]);
+    saveJSON(PAPER_KEY, { cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory });
+  }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
   const primaryChain = chainCache[expiry];
   const spot = primaryChain?.underlying_spot_price ?? null;
 
   const strikesSorted = useMemo(
-    () => (primaryChain ? sortedStrikes(primaryChain) : []),
+    () => (primaryChain ? primaryChain.chain.map((r) => r.strike).sort((a, b) => a - b) : []),
     [primaryChain]
   );
 
@@ -85,7 +117,19 @@ export default function PaperTradingPage() {
     return map;
   }, [primaryChain]);
 
-  const atmIndex = useMemo(() => nearestStrikeIndex(strikesSorted, spot), [spot, strikesSorted]);
+  const atmIndex = useMemo(() => {
+    if (!spot || strikesSorted.length === 0) return 0;
+    let best = 0;
+    let bestDiff = Infinity;
+    strikesSorted.forEach((s, i) => {
+      const diff = Math.abs(s - spot);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = i;
+      }
+    });
+    return best;
+  }, [spot, strikesSorted]);
 
   // P&L at a given underlying price, for the current legs
   const pnlAtPrice = useCallback(
@@ -93,7 +137,7 @@ export default function PaperTradingPage() {
       let pnl = 0;
       legs.forEach((l) => {
         const intrinsic = l.type === "call" ? Math.max(0, price - l.strike) : Math.max(0, l.strike - price);
-        const dir = dirOf(l.action);
+        const dir = l.action === "buy" ? 1 : -1;
         pnl += dir * (intrinsic - l.price) * l.qty * lotSize * multiplier;
       });
       return pnl;
@@ -121,15 +165,18 @@ export default function PaperTradingPage() {
   const targetPrice = spot ? spot * (1 + targetPct / 100) : null;
   const targetPnl = targetPrice != null ? pnlAtPrice(targetPrice) : null;
 
-  const netPerLot = legs.reduce((sum, l) => sum + dirOf(l.action) * l.price * l.qty, 0);
+  const netPerLot = legs.reduce((sum, l) => {
+    const dir = l.action === "buy" ? 1 : -1;
+    return sum + dir * l.price * l.qty;
+  }, 0);
   const netTotal = netPerLot * lotSize * multiplier;
 
   const greeksRows = useMemo(() => {
     return legs.map((l) => {
       const legChain = chainCache[l.expiry];
       const row = legChain?.chain.find((r) => r.strike === l.strike);
-      const g = row ? legOf(row, l.type) : null;
-      const dir = dirOf(l.action);
+      const g = row ? (l.type === "call" ? row.call : row.put) : null;
+      const dir = l.action === "buy" ? 1 : -1;
       const mult = dir * l.qty * lotSize * multiplier;
       return {
         leg: l,
@@ -152,12 +199,14 @@ export default function PaperTradingPage() {
   );
 
   // ---- Paper trading (positions) ----
+  const dirOf = (action) => (action === "buy" ? 1 : -1);
+
   const getCurrentLtp = (position) => {
     const posChain = chainCache[position.expiry];
     if (!posChain) return null;
     const row = posChain.chain.find((r) => r.strike === position.strike);
     if (!row) return null;
-    return ltpOf(row, position.type);
+    return position.type === "call" ? row.call.ltp : row.put.ltp;
   };
 
   const executeTradeAll = () => {
@@ -169,7 +218,7 @@ export default function PaperTradingPage() {
       cashDelta -= dir * l.price * lotSize * effectiveQty;
       return {
         id: `pos-${l.type}-${l.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        symbol: "NIFTY",
+        symbol,
         type: l.type,
         strike: l.strike,
         expiry: l.expiry,
@@ -178,11 +227,13 @@ export default function PaperTradingPage() {
         lotSize,
         entryPremium: l.price,
         entryTime: new Date().toISOString(),
+        strategyName: strategyName ?? "Custom",
       };
     });
     setPaperCash((c) => c + cashDelta);
     setPaperPositions((prev) => [...prev, ...newPositions]);
     setLegs([]);
+    setStrategyName(null);
   };
 
   const closePosition = (id) => {
@@ -218,11 +269,30 @@ export default function PaperTradingPage() {
   const equity = paperCash + positionsWithLtp.reduce((sum, p) => (p.currentLtp == null ? sum : sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty), 0);
   const totalPnl = equity - paperStartingCapital;
   const totalRealized = paperHistory.reduce((sum, h) => sum + h.realizedPnl, 0);
+  const perStrategy = useMemo(() => strategyStats(paperHistory), [paperHistory]);
+
+  // Record an equity snapshot (at most one per minute) while data is live
+  useEffect(() => {
+    if (!primaryChain) return;
+    setEquityHistory((prev) => recordEquityPoint(prev, Math.round(equity)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryChain]);
+
+  const exportHistoryCsv = () => {
+    const blob = new Blob([historyToCsv(paperHistory)], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `paper-trades-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // ---- Leg editing helpers ----
   const addLegFromChain = (type, strike) => {
     const row = chainByStrike.get(strike);
-    const price = row ? ltpOf(row, type) : 0;
+    const price = row ? (type === "call" ? row.call.ltp : row.put.ltp) : 0;
+    setStrategyName(null);
     setLegs((prev) => [
       ...prev,
       { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 },
@@ -240,7 +310,7 @@ export default function PaperTradingPage() {
       prev.map((l) => {
         const legChain = chainCache[l.expiry];
         const row = legChain?.chain.find((r) => r.strike === l.strike);
-        const price = row ? ltpOf(row, l.type) : l.price;
+        const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
         return { ...l, price: price ?? l.price };
       })
     );
@@ -250,12 +320,12 @@ export default function PaperTradingPage() {
     const l = legs.find((x) => x.id === id);
     if (!l) return;
     const legChain = chainCache[l.expiry];
-    const strikes = legChain ? sortedStrikes(legChain) : strikesSorted;
+    const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
     const idx = strikes.indexOf(l.strike);
     const newIdx = Math.min(Math.max(idx + direction, 0), strikes.length - 1);
     const newStrike = strikes[newIdx];
     const row = legChain?.chain.find((r) => r.strike === newStrike) ?? chainByStrike.get(newStrike);
-    const price = row ? ltpOf(row, l.type) : l.price;
+    const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
     updateLeg(id, { strike: newStrike, price: price ?? l.price });
   };
 
@@ -268,19 +338,41 @@ export default function PaperTradingPage() {
     if (!primaryChain) return;
     const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry };
     setLegs(strategyDef.build(ctx));
+    setStrategyName(strategyDef.name);
   };
 
   // ---- Render ----
-  const gate = loginGateFor(loggedIn);
-  if (gate) return gate;
+  if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (loggedIn === false)
+    return (
+      <Centered>
+        Not logged in.{" "}
+        <a href="/" style={{ color: C.gold }}>
+          Go back and log in
+        </a>
+        .
+      </Centered>
+    );
+  if (sessionExpired) return <SessionExpired />;
 
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: isMobile ? 10 : 20 }}>
       <TopNav active="paper" />
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 20, margin: 0 }}>Strategy Builder</h1>
-        <ExpirySelect expiry={expiry} expiries={expiries} onChange={setExpiry} />
+        <SymbolTabs symbol={symbol} onChange={setSymbol} />
+        <select
+          value={expiry ?? ""}
+          onChange={(e) => setExpiry(e.target.value)}
+          style={{ background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px" }}
+        >
+          {expiries.map((exp) => (
+            <option key={exp} value={exp}>
+              {exp}
+            </option>
+          ))}
+        </select>
         {spot != null && (
           <span style={{ color: C.muted, fontSize: 13 }}>
             Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
@@ -295,7 +387,7 @@ export default function PaperTradingPage() {
         <>
           <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
             {/* Left column: builder + readymade */}
-            <div style={{ flex: "1 1 520px", minWidth: 480 }}>
+            <div style={{ flex: "1 1 520px", minWidth: isMobile ? "100%" : 480 }}>
               {/* Leg builder */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -484,7 +576,7 @@ export default function PaperTradingPage() {
             </div>
 
             {/* Right column: payoff graph */}
-            <div style={{ flex: "1 1 420px", minWidth: 380, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
+            <div style={{ flex: "1 1 420px", minWidth: isMobile ? "100%" : 380, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
                 {[
                   ["graph", "Payoff Graph"],
@@ -527,7 +619,7 @@ export default function PaperTradingPage() {
                         <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
                         <YAxis yAxisId="oi" orientation="right" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
                         <ReferenceLine yAxisId="pnl" y={0} stroke={C.faint} />
-                        {spot != null && <ReferenceLine yAxisId="pnl" x={nearestStrike(strikesSorted, spot)} stroke={C.gold} strokeDasharray="4 2" />}
+                        {spot != null && <ReferenceLine yAxisId="pnl" x={strikesSorted.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))} stroke={C.gold} strokeDasharray="4 2" />}
                         <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
                         <Bar yAxisId="oi" dataKey="callOI" fill="rgba(225,82,82,0.5)" name="Call OI" />
                         <Bar yAxisId="oi" dataKey="putOI" fill="rgba(76,175,125,0.5)" name="Put OI" />
@@ -689,7 +781,71 @@ export default function PaperTradingPage() {
               </div>
             )}
 
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Trade History</div>
+            {equityHistory.length > 1 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Equity Over Time</div>
+                <div style={{ height: 180 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={equityHistory}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="time"
+                        stroke={C.faint}
+                        fontSize={10.5}
+                        tickFormatter={(t) => new Date(t).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      />
+                      <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={80} />
+                      <ReferenceLine y={paperStartingCapital} stroke={C.faint} strokeDasharray="4 2" />
+                      <Tooltip
+                        contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }}
+                        labelFormatter={(t) => new Date(t).toLocaleString("en-IN")}
+                        formatter={(v) => [`₹${fmtIN(v)}`, "Equity"]}
+                      />
+                      <Line type="monotone" dataKey="equity" stroke={C.gold} strokeWidth={2} dot={false} name="Equity" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {perStrategy.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>Per-Strategy Stats</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                        <th style={{ padding: 6, textAlign: "left" }}>Strategy</th>
+                        <th style={{ padding: 6 }}>Closed legs</th>
+                        <th style={{ padding: 6 }}>Wins</th>
+                        <th style={{ padding: 6 }}>Win rate</th>
+                        <th style={{ padding: 6 }}>Total P&L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {perStrategy.map((s) => (
+                        <tr key={s.strategyName} style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 6 }}>{s.strategyName}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{s.trades}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{s.wins}</td>
+                          <td style={{ padding: 6, textAlign: "center" }}>{(s.winRate * 100).toFixed(0)}%</td>
+                          <td style={{ padding: 6, textAlign: "center", color: s.totalPnl >= 0 ? C.green : C.red }}>₹{fmtIN(s.totalPnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Trade History</div>
+              {paperHistory.length > 0 && (
+                <button onClick={exportHistoryCsv} style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                  Export CSV
+                </button>
+              )}
+            </div>
             {paperHistory.length === 0 ? (
               <div style={{ fontSize: 12.5, color: C.faint }}>No closed trades yet.</div>
             ) : (
@@ -698,6 +854,7 @@ export default function PaperTradingPage() {
                   <thead>
                     <tr style={{ color: C.muted, fontSize: 10.5 }}>
                       <th style={{ padding: 6, textAlign: "left" }}>Position</th>
+                      <th style={{ padding: 6 }}>Strategy</th>
                       <th style={{ padding: 6 }}>Entry</th>
                       <th style={{ padding: 6 }}>Exit</th>
                       <th style={{ padding: 6 }}>Realized P&L</th>
@@ -710,6 +867,7 @@ export default function PaperTradingPage() {
                         <td style={{ padding: 6 }}>
                           <span style={{ color: h.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{h.action.toUpperCase()}</span> {h.symbol} {h.strike} {h.type === "call" ? "CE" : "PE"}
                         </td>
+                        <td style={{ padding: 6, textAlign: "center", color: C.muted }}>{h.strategyName ?? "Custom"}</td>
                         <td style={{ padding: 6 }}>{h.entryPremium}</td>
                         <td style={{ padding: 6 }}>{h.exitPrice}</td>
                         <td style={{ padding: 6, color: h.realizedPnl >= 0 ? C.green : C.red }}>₹{fmtIN(h.realizedPnl)}</td>
@@ -726,41 +884,3 @@ export default function PaperTradingPage() {
     </div>
   );
 }
-
-function StepButton({ onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{ width: 20, height: 20, lineHeight: "18px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4, color: C.text, cursor: "pointer", fontSize: 12, padding: 0 }}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Stat({ label, value, color }) {
-  return (
-    <div>
-      <div style={{ fontSize: 10.5, color: C.faint }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: color || C.text }}>{value}</div>
-    </div>
-  );
-}
-
-function ShapeIcon({ shape }) {
-  const paths = {
-    riseUp: "M4 26 L16 26 L28 6",
-    fallUp: "M4 6 L16 6 L28 26",
-    riseCapped: "M4 26 L12 26 L20 10 L28 10",
-    fallCapped: "M4 10 L12 10 L20 26 L28 26",
-    plateau: "M4 20 L10 20 L14 10 L20 10 L24 20 L28 20",
-    peak: "M4 22 L12 22 L16 8 L20 22 L28 22",
-    vUp: "M4 6 L14 22 L16 24 L18 22 L28 6",
-  };
-  return (
-    <svg width="100%" height="32" viewBox="0 0 32 32">
-      <path d={paths[shape] || paths.riseUp} stroke={C.green} strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-

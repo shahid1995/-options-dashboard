@@ -1,6 +1,6 @@
 "use client";
 import { loginUrl } from "@/lib/api";
-import { C } from "@/lib/theme";
+import { C } from "@/lib/ui";
 
 export default function Home() {
   return (

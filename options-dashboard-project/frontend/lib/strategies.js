@@ -5,7 +5,7 @@
 // these work correctly no matter what strike spacing NSE uses for a given
 // expiry (50-point, 100-point, etc).
 
-import { ltpOf } from "@/lib/options";
+import { ltpOf } from "./options";
 
 function strikeAt(ctx, offset) {
   const idx = Math.min(Math.max(ctx.atmIndex + offset, 0), ctx.strikes.length - 1);

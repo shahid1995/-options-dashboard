@@ -1,94 +1,152 @@
 "use client";
-import { useEffect, useState, useRef, useCallback } from "react";
-import { getChain } from "@/lib/api";
-import { C } from "@/lib/theme";
-import { fmtIN, fmtChg } from "@/lib/format";
-import { ltpOf, nearestStrike } from "@/lib/options";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { getStatus, getExpiries, isAuthError } from "@/lib/api";
+import { useChainFeed } from "@/lib/useChainFeed";
+import { putCallRatio, maxPainStrike, maxOI, oiTotals } from "@/lib/analytics";
+import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
+import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMobile } from "@/lib/ui";
 import { loadJSON, saveJSON } from "@/lib/storage";
-import { useMarketSession, usePoll } from "@/lib/hooks";
-import Centered from "@/components/Centered";
-import { loginGateFor } from "@/components/LoginGate";
-import TopNav from "@/components/TopNav";
-import ExpirySelect from "@/components/ExpirySelect";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
+const ALERTS_KEY = "options_dashboard_alerts_v1";
 
 export default function Dashboard() {
-  const { loggedIn, expiries, expiry, setExpiry, error, setError } = useMarketSession("NIFTY");
-  const [chain, setChain] = useState(null);
+  const [loggedIn, setLoggedIn] = useState(null);
+  const [symbol, setSymbol] = useState("NIFTY");
+  const [expiries, setExpiries] = useState([]);
+  const [expiry, setExpiry] = useState(null);
   const [watchlist, setWatchlist] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [firedToasts, setFiredToasts] = useState([]);
+  const [compact, setCompact] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
-    const saved = loadJSON(WATCHLIST_KEY);
-    if (saved) setWatchlist(saved);
+    setWatchlist(loadJSON(WATCHLIST_KEY, []));
+    setAlerts(loadJSON(ALERTS_KEY, []));
   }, []);
 
   useEffect(() => {
     saveJSON(WATCHLIST_KEY, watchlist);
   }, [watchlist]);
 
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [centeredExpiry, setCenteredExpiry] = useState(null);
+  useEffect(() => {
+    saveJSON(ALERTS_KEY, alerts);
+  }, [alerts]);
+
+  useEffect(() => {
+    getStatus()
+      .then((s) => setLoggedIn(s.logged_in))
+      .catch(() => setLoggedIn(false));
+  }, []);
+
+  const [expiryError, setExpiryError] = useState(null);
+  const [expirySessionExpired, setExpirySessionExpired] = useState(false);
+  useEffect(() => {
+    if (!loggedIn) return;
+    setExpiry(null);
+    setExpiries([]);
+    getExpiries(symbol)
+      .then((d) => {
+        setExpiries(d.expiries);
+        if (d.expiries.length) setExpiry(d.expiries[0]);
+      })
+      .catch((e) => {
+        if (isAuthError(e)) setExpirySessionExpired(true);
+        else setExpiryError(e.message);
+      });
+  }, [loggedIn, symbol]);
+
+  const { chain, lastUpdated, error, mode, sessionExpired } = useChainFeed(symbol, expiry, !!loggedIn);
+
+  const [centeredKey, setCenteredKey] = useState(null);
   const scrollRef = useRef(null);
 
   const spot = chain ? chain.underlying_spot_price : null;
   let atmStrike = null;
   if (chain && spot != null && chain.chain.length) {
-    atmStrike = nearestStrike(chain.chain.map((r) => r.strike), spot);
+    atmStrike = chain.chain.reduce((closest, row) =>
+      Math.abs(row.strike - spot) < Math.abs(closest.strike - spot) ? row : closest
+    ).strike;
   }
 
-  // Center the view on the ATM strike once per expiry (not on every 5s poll)
+  const pcr = chain ? putCallRatio(chain.chain) : null;
+  const maxPain = chain ? maxPainStrike(chain.chain) : null;
+  const oiMax = chain ? maxOI(chain.chain) : 0;
+  const totals = chain ? oiTotals(chain.chain) : null;
+
+  // Center the view on the ATM strike once per symbol+expiry (not on every refresh)
   useEffect(() => {
     if (!chain || !scrollRef.current || atmStrike == null) return;
-    if (centeredExpiry === expiry) return;
+    const key = `${symbol}-${expiry}`;
+    if (centeredKey === key) return;
     const el = scrollRef.current.querySelector('[data-atm="true"]');
     if (el) {
       el.scrollIntoView({ block: "center" });
-      setCenteredExpiry(expiry);
+      setCenteredKey(key);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chain, expiry]);
+  }, [chain, symbol, expiry]);
 
-  const fetchChain = useCallback(
-    (isCancelled) => {
-      getChain("NIFTY", expiry)
-        .then((data) => {
-          if (isCancelled()) return;
-          setChain(data);
-          setLastUpdated(new Date());
-          setError(null);
-        })
-        .catch((e) => {
-          if (!isCancelled()) setError(e.message);
-        });
-    },
-    [expiry, setError]
-  );
-
-  usePoll(fetchChain, Boolean(loggedIn && expiry));
+  // Evaluate price alerts on every chain update
+  useEffect(() => {
+    if (!chain) return;
+    setAlerts((prev) => {
+      const { alerts: next, fired } = evaluateAlerts(prev, chain.chain, symbol, expiry);
+      if (fired.length) {
+        setFiredToasts((t) => [...t, ...fired]);
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          fired.forEach((f) => new Notification("Price alert", { body: `${describeAlert(f)} — LTP ${f.ltp}` }));
+        }
+      }
+      return fired.length ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chain]);
 
   const isWatched = (strike, type) =>
-    watchlist.some((w) => w.strike === strike && w.type === type && w.expiry === expiry);
+    watchlist.some((w) => w.strike === strike && w.type === type && w.expiry === expiry && (w.symbol ?? "NIFTY") === symbol);
 
   const toggleWatch = (strike, type) => {
     setWatchlist((prev) => {
-      const exists = prev.some((w) => w.strike === strike && w.type === type && w.expiry === expiry);
-      if (exists) return prev.filter((w) => !(w.strike === strike && w.type === type && w.expiry === expiry));
-      return [...prev, { strike, type, expiry, symbol: "NIFTY" }];
+      const match = (w) => w.strike === strike && w.type === type && w.expiry === expiry && (w.symbol ?? "NIFTY") === symbol;
+      if (prev.some(match)) return prev.filter((w) => !match(w));
+      return [...prev, { strike, type, expiry, symbol }];
     });
   };
 
+  const addAlert = (w, condition, level) => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    setAlerts((prev) => [...prev, makeAlert({ symbol: w.symbol ?? "NIFTY", expiry: w.expiry, strike: w.strike, type: w.type, condition, level })]);
+  };
+
+  const removeAlert = (id) => setAlerts((prev) => prev.filter((a) => a.id !== id));
+
   const enrichedWatchlist = watchlist.map((w) => {
-    if (!chain || w.expiry !== expiry) return { ...w, ltp: null };
+    if (!chain || w.expiry !== expiry || (w.symbol ?? "NIFTY") !== symbol) return { ...w, ltp: null };
     const row = chain.chain.find((r) => r.strike === w.strike);
-    const ltp = row ? ltpOf(row, w.type) : null;
+    const ltp = row ? (w.type === "call" ? row.call.ltp : row.put.ltp) : null;
     return { ...w, ltp };
   });
 
-  const gate = loginGateFor(loggedIn);
-  if (gate) return gate;
-  if (error) return <Centered>Something went wrong: {error}</Centered>;
+  if (loggedIn === null) return <Centered>Checking login…</Centered>;
+  if (loggedIn === false)
+    return (
+      <Centered>
+        Not logged in.{" "}
+        <a href="/" style={{ color: C.gold }}>
+          Go back and log in
+        </a>
+        .
+      </Centered>
+    );
+  if (sessionExpired || expirySessionExpired) return <SessionExpired />;
+  if (error || expiryError) return <Centered>Something went wrong: {error || expiryError}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;
+
+  const useCompact = compact || isMobile;
 
   // Build table rows with a spot-marker row inserted at the right position
   const tableItems = [];
@@ -100,63 +158,122 @@ export default function Dashboard() {
     tableItems.push({ kind: "row", data: row });
   });
 
+  const colCount = useCompact ? 9 : 21;
+
   return (
-    <div style={{ padding: 20 }}>
+    <div style={{ padding: isMobile ? 10 : 20 }}>
       <TopNav active="chain" />
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>NIFTY Option Chain</h1>
-        <ExpirySelect expiry={expiry} expiries={expiries} onChange={setExpiry} />
-        {spot != null && (
-          <span style={{ color: C.muted, fontSize: 13 }}>
-            Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(spot, 2)}</span>
-          </span>
+
+      {firedToasts.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {firedToasts.map((f) => (
+            <div key={f.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(201,161,90,0.12)", border: `1px solid ${C.gold}`, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 6 }}>
+              <span>
+                <span style={{ color: C.gold, fontWeight: 700 }}>ALERT</span> {describeAlert(f)} — LTP {f.ltp}
+              </span>
+              <button onClick={() => setFiredToasts((t) => t.filter((x) => x.id !== f.id))} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
+        <h1 style={{ fontSize: 20, margin: 0 }}>Option Chain</h1>
+        <SymbolTabs symbol={symbol} onChange={setSymbol} />
+        <select
+          value={expiry ?? ""}
+          onChange={(e) => setExpiry(e.target.value)}
+          style={{ background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 10px" }}
+        >
+          {expiries.map((exp) => (
+            <option key={exp} value={exp}>
+              {exp}
+            </option>
+          ))}
+        </select>
+        {!isMobile && (
+          <label style={{ fontSize: 11.5, color: C.muted, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+            <input type="checkbox" checked={compact} onChange={(e) => setCompact(e.target.checked)} />
+            Compact
+          </label>
         )}
         {lastUpdated && (
           <span style={{ color: C.muted, fontSize: 11, marginLeft: "auto" }}>
-            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: C.green, marginRight: 6 }} />
-            Updated {lastUpdated.toLocaleTimeString("en-IN")}
+            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: 3, background: mode === "live" ? C.green : C.gold, marginRight: 6 }} />
+            {mode === "live" ? "Live" : "Polling"} · {lastUpdated.toLocaleTimeString("en-IN")}
           </span>
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        <div ref={scrollRef} style={{ flex: 3, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "auto", maxHeight: 560 }}>
+      <div style={{ display: "flex", gap: 18, marginBottom: 14, flexWrap: "wrap", fontSize: 12.5 }}>
+        {spot != null && (
+          <Metric label="Spot" value={fmtIN(spot, 2)} color={C.gold} />
+        )}
+        <Metric
+          label="PCR (OI)"
+          value={pcr != null ? pcr.toFixed(2) : "-"}
+          color={pcr == null ? C.muted : pcr > 1 ? C.green : pcr < 0.8 ? C.red : C.text}
+          hint="Put OI ÷ Call OI. >1 leans bullish, <0.8 leans bearish."
+        />
+        <Metric label="Max Pain" value={maxPain != null ? fmtIN(maxPain) : "-"} color={C.gold} hint="Expiry price where option writers lose the least." />
+        {totals && <Metric label="Call OI" value={fmtIN(totals.callOI)} color={C.red} />}
+        {totals && <Metric label="Put OI" value={fmtIN(totals.putOI)} color={C.green} />}
+      </div>
+
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div ref={scrollRef} style={{ flex: 3, minWidth: isMobile ? "100%" : 480, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "auto", maxHeight: 560 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, whiteSpace: "nowrap" }}>
             <thead style={{ position: "sticky", top: 0, background: C.surface, zIndex: 1 }}>
               <tr style={{ color: C.muted, fontSize: 10.5 }}>
-                <th colSpan={9} style={{ padding: "8px 6px", textAlign: "center", color: C.green, borderBottom: `1px solid ${C.border}` }}>CALLS</th>
+                <th colSpan={(colCount - 1) / 2} style={{ padding: "8px 6px", textAlign: "center", color: C.green, borderBottom: `1px solid ${C.border}` }}>CALLS</th>
                 <th style={{ borderBottom: `1px solid ${C.border}` }}></th>
-                <th colSpan={9} style={{ padding: "8px 6px", textAlign: "center", color: C.red, borderBottom: `1px solid ${C.border}` }}>PUTS</th>
+                <th colSpan={(colCount - 1) / 2} style={{ padding: "8px 6px", textAlign: "center", color: C.red, borderBottom: `1px solid ${C.border}` }}>PUTS</th>
               </tr>
-              <tr style={{ color: C.muted, fontSize: 10.5 }}>
-                <th style={{ padding: 6 }}></th>
-                <th style={{ padding: 6 }}>OI</th>
-                <th style={{ padding: 6 }}>Chg OI</th>
-                <th style={{ padding: 6 }}>Volume</th>
-                <th style={{ padding: 6 }}>IV</th>
-                <th style={{ padding: 6 }}>Vega</th>
-                <th style={{ padding: 6 }}>Theta</th>
-                <th style={{ padding: 6 }}>Gamma</th>
-                <th style={{ padding: 6 }}>Delta</th>
-                <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
-                <th style={{ padding: 6, textAlign: "center", color: C.gold }}>Strike</th>
-                <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
-                <th style={{ padding: 6 }}>Delta</th>
-                <th style={{ padding: 6 }}>Gamma</th>
-                <th style={{ padding: 6 }}>Theta</th>
-                <th style={{ padding: 6 }}>Vega</th>
-                <th style={{ padding: 6 }}>IV</th>
-                <th style={{ padding: 6 }}>Volume</th>
-                <th style={{ padding: 6 }}>Chg OI</th>
-                <th style={{ padding: 6 }}>OI</th>
-                <th style={{ padding: 6 }}></th>
-              </tr>
+              {useCompact ? (
+                <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                  <th style={{ padding: 6 }}></th>
+                  <th style={{ padding: 6 }}>OI</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6, textAlign: "center", color: C.gold }}>Strike</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6 }}>OI</th>
+                  <th style={{ padding: 6 }}></th>
+                </tr>
+              ) : (
+                <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                  <th style={{ padding: 6 }}></th>
+                  <th style={{ padding: 6 }}>OI</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6 }}>Volume</th>
+                  <th style={{ padding: 6 }}>IV</th>
+                  <th style={{ padding: 6 }}>Vega</th>
+                  <th style={{ padding: 6 }}>Theta</th>
+                  <th style={{ padding: 6 }}>Gamma</th>
+                  <th style={{ padding: 6 }}>Delta</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6, textAlign: "center", color: C.gold }}>Strike</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6 }}>Delta</th>
+                  <th style={{ padding: 6 }}>Gamma</th>
+                  <th style={{ padding: 6 }}>Theta</th>
+                  <th style={{ padding: 6 }}>Vega</th>
+                  <th style={{ padding: 6 }}>IV</th>
+                  <th style={{ padding: 6 }}>Volume</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6 }}>OI</th>
+                  <th style={{ padding: 6 }}></th>
+                </tr>
+              )}
             </thead>
             <tbody>
               {tableItems.map((item, idx) =>
                 item.kind === "spot" ? (
                   <tr key={`spot-${idx}`}>
-                    <td colSpan={20} style={{ padding: 0 }}>
+                    <td colSpan={colCount} style={{ padding: 0 }}>
                       <div
                         style={{
                           display: "flex",
@@ -178,7 +295,10 @@ export default function Dashboard() {
                   <Row
                     key={item.data.strike}
                     row={item.data}
+                    compact={useCompact}
+                    oiMax={oiMax}
                     isATM={item.data.strike === atmStrike}
+                    isMaxPain={item.data.strike === maxPain}
                     isWatchedCall={isWatched(item.data.strike, "call")}
                     isWatchedPut={isWatched(item.data.strike, "put")}
                     onToggleCall={() => toggleWatch(item.data.strike, "call")}
@@ -190,32 +310,27 @@ export default function Dashboard() {
           </table>
         </div>
 
-        <div style={{ flex: 1, minWidth: 220, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
+        <div style={{ flex: 1, minWidth: isMobile ? "100%" : 240, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10 }}>
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${C.border}`, fontSize: 12, color: C.muted, letterSpacing: 0.5 }}>
-            WATCHLIST
+            WATCHLIST &amp; ALERTS
           </div>
           {enrichedWatchlist.length === 0 ? (
             <div style={{ padding: 16, fontSize: 12, color: C.muted }}>
-              Tap the star next to any strike to pin it here.
+              Tap the star next to any strike to pin it here, then set price alerts on it.
             </div>
           ) : (
             <div style={{ padding: 8 }}>
               {enrichedWatchlist.map((w) => (
-                <div
-                  key={`${w.strike}-${w.type}-${w.expiry}`}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 8px", fontSize: 12.5, borderBottom: `1px solid ${C.border}` }}
-                >
-                  <div>
-                    <div>{w.symbol} {w.strike} {w.type === "call" ? "CE" : "PE"}</div>
-                    <div style={{ fontSize: 10.5, color: C.muted }}>{w.expiry}</div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: w.type === "call" ? C.green : C.red }}>{w.ltp != null ? w.ltp : "—"}</span>
-                    <button onClick={() => toggleWatch(w.strike, w.type)} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>
-                      ×
-                    </button>
-                  </div>
-                </div>
+                <WatchlistItem
+                  key={`${w.symbol}-${w.strike}-${w.type}-${w.expiry}`}
+                  item={w}
+                  alerts={alerts.filter(
+                    (a) => a.strike === w.strike && a.type === w.type && a.expiry === w.expiry && a.symbol === (w.symbol ?? "NIFTY")
+                  )}
+                  onRemove={() => toggleWatch(w.strike, w.type)}
+                  onAddAlert={addAlert}
+                  onRemoveAlert={removeAlert}
+                />
               ))}
             </div>
           )}
@@ -225,7 +340,26 @@ export default function Dashboard() {
   );
 }
 
-function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
+function Metric({ label, value, color, hint }) {
+  return (
+    <span title={hint} style={{ color: C.muted }}>
+      {label}: <span style={{ color: color || C.text, fontWeight: 600 }}>{value}</span>
+    </span>
+  );
+}
+
+function OICell({ oi, oiMax, side }) {
+  const pct = oiMax > 0 && oi != null ? Math.min(100, (oi / oiMax) * 100) : 0;
+  const barColor = side === "call" ? "rgba(225,82,82,0.25)" : "rgba(76,175,125,0.25)";
+  return (
+    <td style={{ padding: 6, position: "relative" }}>
+      <div style={{ position: "absolute", top: 2, bottom: 2, [side === "call" ? "right" : "left"]: 0, width: `${pct}%`, background: barColor, borderRadius: 2 }} />
+      <span style={{ position: "relative" }}>{fmtIN(oi)}</span>
+    </td>
+  );
+}
+
+function Row({ row, compact, oiMax, isATM, isMaxPain, isWatchedCall, isWatchedPut, onToggleCall, onTogglePut }) {
   const c = row.call;
   const p = row.put;
   return (
@@ -239,29 +373,106 @@ function Row({ row, isATM, isWatchedCall, isWatchedPut, onToggleCall, onTogglePu
       <td style={{ padding: 6, textAlign: "center" }}>
         <StarButton active={isWatchedCall} onClick={onToggleCall} />
       </td>
-      <td style={{ padding: 6 }}>{fmtIN(c.oi)}</td>
+      <OICell oi={c.oi} oiMax={oiMax} side="call" />
       <td style={{ padding: 6, color: c.chg_oi > 0 ? C.green : c.chg_oi < 0 ? C.red : C.muted }}>{fmtChg(c.chg_oi)}</td>
-      <td style={{ padding: 6 }}>{fmtIN(c.volume)}</td>
-      <td style={{ padding: 6 }}>{c.iv ?? "-"}</td>
-      <td style={{ padding: 6 }}>{c.vega ?? "-"}</td>
-      <td style={{ padding: 6 }}>{c.theta ?? "-"}</td>
-      <td style={{ padding: 6 }}>{c.gamma ?? "-"}</td>
-      <td style={{ padding: 6 }}>{c.delta ?? "-"}</td>
+      {!compact && (
+        <>
+          <td style={{ padding: 6 }}>{fmtIN(c.volume)}</td>
+          <td style={{ padding: 6 }}>{c.iv ?? "-"}</td>
+          <td style={{ padding: 6 }}>{c.vega ?? "-"}</td>
+          <td style={{ padding: 6 }}>{c.theta ?? "-"}</td>
+          <td style={{ padding: 6 }}>{c.gamma ?? "-"}</td>
+          <td style={{ padding: 6 }}>{c.delta ?? "-"}</td>
+        </>
+      )}
       <td style={{ padding: 6, color: C.green, fontWeight: 600 }}>{c.ltp ?? "-"}</td>
-      <td style={{ padding: 6, textAlign: "center", fontWeight: 700 }}>{fmtIN(row.strike)}</td>
+      <td style={{ padding: 6, textAlign: "center", fontWeight: 700 }}>
+        {fmtIN(row.strike)}
+        {isMaxPain && <span title="Max pain strike" style={{ color: C.gold, marginLeft: 4, fontSize: 10 }}>◆</span>}
+      </td>
       <td style={{ padding: 6, color: C.red, fontWeight: 600 }}>{p.ltp ?? "-"}</td>
-      <td style={{ padding: 6 }}>{p.delta ?? "-"}</td>
-      <td style={{ padding: 6 }}>{p.gamma ?? "-"}</td>
-      <td style={{ padding: 6 }}>{p.theta ?? "-"}</td>
-      <td style={{ padding: 6 }}>{p.vega ?? "-"}</td>
-      <td style={{ padding: 6 }}>{p.iv ?? "-"}</td>
-      <td style={{ padding: 6 }}>{fmtIN(p.volume)}</td>
+      {!compact && (
+        <>
+          <td style={{ padding: 6 }}>{p.delta ?? "-"}</td>
+          <td style={{ padding: 6 }}>{p.gamma ?? "-"}</td>
+          <td style={{ padding: 6 }}>{p.theta ?? "-"}</td>
+          <td style={{ padding: 6 }}>{p.vega ?? "-"}</td>
+          <td style={{ padding: 6 }}>{p.iv ?? "-"}</td>
+          <td style={{ padding: 6 }}>{fmtIN(p.volume)}</td>
+        </>
+      )}
       <td style={{ padding: 6, color: p.chg_oi > 0 ? C.green : p.chg_oi < 0 ? C.red : C.muted }}>{fmtChg(p.chg_oi)}</td>
-      <td style={{ padding: 6 }}>{fmtIN(p.oi)}</td>
+      <OICell oi={p.oi} oiMax={oiMax} side="put" />
       <td style={{ padding: 6, textAlign: "center" }}>
         <StarButton active={isWatchedPut} onClick={onTogglePut} />
       </td>
     </tr>
+  );
+}
+
+function WatchlistItem({ item, alerts, onRemove, onAddAlert, onRemoveAlert }) {
+  const [showForm, setShowForm] = useState(false);
+  const [condition, setCondition] = useState("above");
+  const [level, setLevel] = useState("");
+
+  const submit = () => {
+    const parsed = Number(level);
+    if (!parsed && parsed !== 0) return;
+    onAddAlert(item, condition, parsed);
+    setLevel("");
+    setShowForm(false);
+  };
+
+  return (
+    <div style={{ padding: "8px 8px", fontSize: 12.5, borderBottom: `1px solid ${C.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div>
+            {item.symbol ?? "NIFTY"} {item.strike} {item.type === "call" ? "CE" : "PE"}
+          </div>
+          <div style={{ fontSize: 10.5, color: C.muted }}>{item.expiry}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: item.type === "call" ? C.green : C.red }}>{item.ltp != null ? item.ltp : "—"}</span>
+          <button onClick={() => setShowForm((s) => !s)} title="Add price alert" style={{ background: "none", border: "none", color: showForm ? C.gold : C.muted, cursor: "pointer", fontSize: 13 }}>
+            ⏰
+          </button>
+          <button onClick={onRemove} style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>
+            ×
+          </button>
+        </div>
+      </div>
+
+      {alerts.map((a) => (
+        <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, color: a.triggeredAt ? C.gold : C.muted, marginTop: 4 }}>
+          <span>
+            {a.condition === "above" ? "≥" : "≤"} {a.level} {a.triggeredAt ? "· fired" : ""}
+          </span>
+          <button onClick={() => onRemoveAlert(a.id)} style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}>
+            ×
+          </button>
+        </div>
+      ))}
+
+      {showForm && (
+        <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+          <select value={condition} onChange={(e) => setCondition(e.target.value)} style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 4px", fontSize: 11 }}>
+            <option value="above">LTP ≥</option>
+            <option value="below">LTP ≤</option>
+          </select>
+          <input
+            type="number"
+            value={level}
+            onChange={(e) => setLevel(e.target.value)}
+            placeholder="price"
+            style={{ width: 70, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "3px 5px", fontSize: 11 }}
+          />
+          <button onClick={submit} style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.gold}`, borderRadius: 4, padding: "3px 8px", cursor: "pointer" }}>
+            Set
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
