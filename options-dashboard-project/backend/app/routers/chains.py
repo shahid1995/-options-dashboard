@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException, Query
+from datetime import date
+
+from fastapi import APIRouter, Cookie, HTTPException, Query
 from app.services import upstox, token_store
 
 router = APIRouter()
@@ -9,30 +11,43 @@ INSTRUMENT_KEYS = {
 }
 
 
-def require_token() -> str:
-    token = token_store.get_token()
+def require_token(session_id: str | None) -> str:
+    token = token_store.get_token(session_id)
     if not token:
         raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
     return token
 
 
+def validate_expiry_date(expiry_date: str) -> str:
+    try:
+        date.fromisoformat(expiry_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="expiry_date must be YYYY-MM-DD")
+    return expiry_date
+
+
 @router.get("/{symbol}/expiries")
-async def list_expiries(symbol: str):
+async def list_expiries(symbol: str, session_id: str | None = Cookie(default=None)):
     symbol = symbol.upper()
     if symbol not in INSTRUMENT_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
-    token = require_token()
+    token = require_token(session_id)
     data = await upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol])
     expiries = sorted({c["expiry"] for c in data.get("data", []) if "expiry" in c})
     return {"symbol": symbol, "expiries": expiries}
 
 
 @router.get("/{symbol}")
-async def get_chain(symbol: str, expiry_date: str = Query(..., description="YYYY-MM-DD")):
+async def get_chain(
+    symbol: str,
+    expiry_date: str = Query(..., description="YYYY-MM-DD"),
+    session_id: str | None = Cookie(default=None),
+):
     symbol = symbol.upper()
     if symbol not in INSTRUMENT_KEYS:
         raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
-    token = require_token()
+    expiry_date = validate_expiry_date(expiry_date)
+    token = require_token(session_id)
     raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
 
     rows = []
