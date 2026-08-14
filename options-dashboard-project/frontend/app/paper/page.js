@@ -5,7 +5,6 @@ import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
-import { loadJSON, saveJSON } from "@/lib/storage";
 import {
   ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -94,20 +93,47 @@ export default function PaperTradingPage() {
     };
   }, [loggedIn, expiry, loadChain]);
 
+  // Load the chain for whatever expiry the "add strike" popup is showing
+  useEffect(() => {
+    if (!chainModalOpen || !modalExpiry) return;
+    let cancelled = false;
+    const tick = () => {
+      if (!cancelled) loadChain(modalExpiry);
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [chainModalOpen, modalExpiry, loadChain]);
+
   // Load / save paper trading state to the browser
   useEffect(() => {
-    const parsed = loadJSON(PAPER_KEY);
-    if (parsed) {
-      setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
-      setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
-      setPaperPositions(parsed.positions ?? []);
-      setPaperHistory(parsed.history ?? []);
-      setEquityHistory(parsed.equityHistory ?? []);
+    try {
+      const saved = window.localStorage.getItem(PAPER_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
+        setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
+        setPaperPositions(parsed.positions ?? []);
+        setPaperHistory(parsed.history ?? []);
+        setEquityHistory(parsed.equityHistory ?? []);
+      }
+    } catch (e) {
+      console.warn("Could not load paper portfolio from localStorage:", e);
     }
   }, []);
 
   useEffect(() => {
-    saveJSON(PAPER_KEY, { cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory });
+    try {
+      window.localStorage.setItem(
+        PAPER_KEY,
+        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory })
+      );
+    } catch (e) {
+      console.warn("Could not save paper portfolio to localStorage:", e);
+    }
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
   const primaryChain = chainCache[expiry];
@@ -296,15 +322,32 @@ export default function PaperTradingPage() {
   };
 
   // ---- Leg editing helpers ----
-  const addLegFromChain = (type, strike) => {
-    const row = chainByStrike.get(strike);
+  const addLegFromChain = (type, strike, forExpiry = expiry) => {
+    const sourceChain = chainCache[forExpiry];
+    const row = sourceChain?.chain.find((r) => r.strike === strike);
     const price = row ? (type === "call" ? row.call.ltp : row.put.ltp) : 0;
     setStrategyName(null);
     setLegs((prev) => [
       ...prev,
-      { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 },
+      { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry: forExpiry, price: price ?? 0 },
     ]);
   };
+
+  const [chainModalOpen, setChainModalOpen] = useState(false);
+  const [modalExpiry, setModalExpiry] = useState(null);
+
+  const openChainModal = () => {
+    setModalExpiry(expiry);
+    setChainModalOpen(true);
+  };
+
+  const modalChain = chainCache[modalExpiry];
+  const modalAtmStrike = useMemo(() => {
+    if (!modalChain || !modalChain.underlying_spot_price || !modalChain.chain.length) return null;
+    return modalChain.chain.reduce((closest, row) =>
+      Math.abs(row.strike - modalChain.underlying_spot_price) < Math.abs(closest.strike - modalChain.underlying_spot_price) ? row : closest
+    ).strike;
+  }, [modalChain]);
 
   const updateLeg = (id, patch) => {
     setLegs((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
@@ -401,6 +444,12 @@ export default function PaperTradingPage() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <div style={{ fontSize: 14, fontWeight: 600 }}>New Strategy</div>
                   <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <button
+                      onClick={openChainModal}
+                      style={{ fontSize: 11.5, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer", fontWeight: 700 }}
+                    >
+                      + Add Strike
+                    </button>
                     <button onClick={resetLegPrices} style={{ fontSize: 11.5, color: C.gold, background: "none", border: "none", cursor: "pointer" }}>
                       ↻ Reset Prices
                     </button>
@@ -411,8 +460,15 @@ export default function PaperTradingPage() {
                 </div>
 
                 {legs.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: C.faint, padding: "16px 0" }}>
-                    No legs yet. Click a ready-made strategy below, or add legs from the option chain on the Option Chain page.
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, padding: "36px 0" }}>
+                    <div style={{ fontSize: 12.5, color: C.faint }}>No trades added</div>
+                    <button
+                      onClick={openChainModal}
+                      style={{ background: C.gold, color: "#0B0E14", border: "none", borderRadius: 8, padding: "10px 22px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}
+                    >
+                      Build a new custom strategy
+                    </button>
+                    <div style={{ fontSize: 11.5, color: C.faint }}>or pick a ready-made strategy below</div>
                   </div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
@@ -889,6 +945,167 @@ export default function PaperTradingPage() {
           </div>
         </>
       )}
+
+      {chainModalOpen && (
+        <ChainPickerModal
+          symbol={symbol}
+          expiries={expiries}
+          modalExpiry={modalExpiry}
+          setModalExpiry={setModalExpiry}
+          modalChain={modalChain}
+          modalAtmStrike={modalAtmStrike}
+          onAddLeg={addLegFromChain}
+          onClose={() => setChainModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ChainPickerModal({ symbol, expiries, modalExpiry, setModalExpiry, modalChain, modalAtmStrike, onAddLeg, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: C.surface,
+          border: `1px solid ${C.border}`,
+          borderRadius: 12,
+          width: "min(920px, 100%)",
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>Add Strikes — {symbol}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {modalChain?.underlying_spot_price != null && (
+              <span style={{ fontSize: 12.5, color: C.muted }}>
+                Spot: <span style={{ color: C.gold, fontWeight: 600 }}>{fmtIN(modalChain.underlying_spot_price, 2)}</span>
+              </span>
+            )}
+            <select
+              value={modalExpiry ?? ""}
+              onChange={(e) => setModalExpiry(e.target.value)}
+              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 10px", fontSize: 12.5 }}
+            >
+              {expiries.map((exp) => (
+                <option key={exp} value={exp}>
+                  {exp}
+                </option>
+              ))}
+            </select>
+            <button onClick={onClose} style={{ background: "none", border: "none", color: C.muted, fontSize: 20, cursor: "pointer", lineHeight: 1 }}>
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div style={{ overflow: "auto", padding: "0 4px" }}>
+          {!modalChain ? (
+            <div style={{ padding: 30, textAlign: "center", color: C.faint, fontSize: 12.5 }}>Loading chain…</div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, whiteSpace: "nowrap" }}>
+              <thead style={{ position: "sticky", top: 0, background: C.surface, zIndex: 1 }}>
+                <tr style={{ color: C.muted, fontSize: 10 }}>
+                  <th colSpan={7} style={{ padding: "8px 6px", textAlign: "center", color: C.green, borderBottom: `1px solid ${C.border}` }}>
+                    CALLS
+                  </th>
+                  <th style={{ borderBottom: `1px solid ${C.border}` }}></th>
+                  <th colSpan={7} style={{ padding: "8px 6px", textAlign: "center", color: C.red, borderBottom: `1px solid ${C.border}` }}>
+                    PUTS
+                  </th>
+                </tr>
+                <tr style={{ color: C.muted, fontSize: 10 }}>
+                  <th style={{ padding: 6 }}>OI</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6 }}>IV</th>
+                  <th style={{ padding: 6 }}>Vega</th>
+                  <th style={{ padding: 6 }}>Theta</th>
+                  <th style={{ padding: 6 }}>Gamma</th>
+                  <th style={{ padding: 6 }}>Delta</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6, textAlign: "center", color: C.gold }}>Strike</th>
+                  <th style={{ padding: 6, fontWeight: 700 }}>LTP</th>
+                  <th style={{ padding: 6 }}>Delta</th>
+                  <th style={{ padding: 6 }}>Gamma</th>
+                  <th style={{ padding: 6 }}>Theta</th>
+                  <th style={{ padding: 6 }}>Vega</th>
+                  <th style={{ padding: 6 }}>IV</th>
+                  <th style={{ padding: 6 }}>Chg OI</th>
+                  <th style={{ padding: 6 }}>OI</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modalChain.chain
+                  .slice()
+                  .sort((a, b) => a.strike - b.strike)
+                  .map((row) => {
+                    const isATM = row.strike === modalAtmStrike;
+                    return (
+                      <tr key={row.strike} style={{ borderTop: `1px solid ${C.border}`, background: isATM ? "rgba(201,161,90,0.06)" : "transparent" }}>
+                        <td style={{ padding: 6 }}>{fmtIN(row.call.oi)}</td>
+                        <td style={{ padding: 6, color: row.call.chg_oi > 0 ? C.green : row.call.chg_oi < 0 ? C.red : C.muted }}>
+                          {row.call.chg_oi == null ? "-" : `${row.call.chg_oi > 0 ? "+" : ""}${fmtIN(row.call.chg_oi)}`}
+                        </td>
+                        <td style={{ padding: 6 }}>{row.call.iv ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.call.vega ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.call.theta ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.call.gamma ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.call.delta ?? "-"}</td>
+                        <td style={{ padding: 6 }}>
+                          <button
+                            onClick={() => onAddLeg("call", row.strike, modalExpiry)}
+                            style={{ background: "none", border: "none", color: C.green, fontWeight: 700, cursor: "pointer", fontSize: 11.5, padding: 0 }}
+                          >
+                            {row.call.ltp ?? "-"}
+                          </button>
+                        </td>
+                        <td style={{ padding: 6, textAlign: "center", fontWeight: 700, color: isATM ? C.gold : C.text }}>{fmtIN(row.strike)}</td>
+                        <td style={{ padding: 6 }}>
+                          <button
+                            onClick={() => onAddLeg("put", row.strike, modalExpiry)}
+                            style={{ background: "none", border: "none", color: C.red, fontWeight: 700, cursor: "pointer", fontSize: 11.5, padding: 0 }}
+                          >
+                            {row.put.ltp ?? "-"}
+                          </button>
+                        </td>
+                        <td style={{ padding: 6 }}>{row.put.delta ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.put.gamma ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.put.theta ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.put.vega ?? "-"}</td>
+                        <td style={{ padding: 6 }}>{row.put.iv ?? "-"}</td>
+                        <td style={{ padding: 6, color: row.put.chg_oi > 0 ? C.green : row.put.chg_oi < 0 ? C.red : C.muted }}>
+                          {row.put.chg_oi == null ? "-" : `${row.put.chg_oi > 0 ? "+" : ""}${fmtIN(row.put.chg_oi)}`}
+                        </td>
+                        <td style={{ padding: 6 }}>{fmtIN(row.put.oi)}</td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: C.gold, color: "#0B0E14", border: "none", borderRadius: 8, padding: "8px 20px", fontWeight: 700, cursor: "pointer", fontSize: 13 }}>
+            Done
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
