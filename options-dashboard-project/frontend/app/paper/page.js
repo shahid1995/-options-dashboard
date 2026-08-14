@@ -36,6 +36,8 @@ export default function PaperTradingPage() {
   const [paperPositions, setPaperPositions] = useState([]);
   const [paperHistory, setPaperHistory] = useState([]);
   const [equityHistory, setEquityHistory] = useState([]);
+  const [chainModalOpen, setChainModalOpen] = useState(false);
+  const [modalExpiry, setModalExpiry] = useState(null);
 
   const loadChain = useCallback(async (expiryDate) => {
     if (!expiryDate) return;
@@ -332,9 +334,6 @@ export default function PaperTradingPage() {
       { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry: forExpiry, price: price ?? 0 },
     ]);
   };
-
-  const [chainModalOpen, setChainModalOpen] = useState(false);
-  const [modalExpiry, setModalExpiry] = useState(null);
 
   const openChainModal = () => {
     setModalExpiry(expiry);
