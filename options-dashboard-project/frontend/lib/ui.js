@@ -16,7 +16,8 @@ export const C = {
 
 export const SYMBOLS = ["NIFTY", "BANKNIFTY"];
 
-// NSE lot sizes per index (editable in the UI; these are just defaults)
+// NSE lot sizes per index — fixed defaults used by the paper trading builder
+// (lot size is no longer editable in the UI; it is selected by symbol).
 export const LOT_SIZES = { NIFTY: 65, BANKNIFTY: 30 };
 
 export function fmtIN(n, decimals = 0) {
