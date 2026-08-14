@@ -6,6 +6,7 @@ import { useChainFeed } from "@/lib/useChainFeed";
 import { putCallRatio, maxPainStrike, maxOI, oiTotals } from "@/lib/analytics";
 import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMobile } from "@/lib/ui";
+import { loadJSON, saveJSON } from "@/lib/storage";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
 const ALERTS_KEY = "options_dashboard_alerts_v1";
@@ -22,30 +23,16 @@ export default function Dashboard() {
   const isMobile = useIsMobile();
 
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(WATCHLIST_KEY);
-      if (saved) setWatchlist(JSON.parse(saved));
-      const savedAlerts = window.localStorage.getItem(ALERTS_KEY);
-      if (savedAlerts) setAlerts(JSON.parse(savedAlerts));
-    } catch (e) {
-      console.warn("Could not load saved data from localStorage:", e);
-    }
+    setWatchlist(loadJSON(WATCHLIST_KEY, []));
+    setAlerts(loadJSON(ALERTS_KEY, []));
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-    } catch (e) {
-      console.warn("Could not save watchlist to localStorage:", e);
-    }
+    saveJSON(WATCHLIST_KEY, watchlist);
   }, [watchlist]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(ALERTS_KEY, JSON.stringify(alerts));
-    } catch (e) {
-      console.warn("Could not save alerts to localStorage:", e);
-    }
+    saveJSON(ALERTS_KEY, alerts);
   }, [alerts]);
 
   const [statusError, setStatusError] = useState(null);

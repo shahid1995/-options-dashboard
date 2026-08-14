@@ -5,6 +5,7 @@ import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
+import { loadJSON, saveJSON } from "@/lib/storage";
 import {
   ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -95,30 +96,18 @@ export default function PaperTradingPage() {
 
   // Load / save paper trading state to the browser
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem(PAPER_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
-        setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
-        setPaperPositions(parsed.positions ?? []);
-        setPaperHistory(parsed.history ?? []);
-        setEquityHistory(parsed.equityHistory ?? []);
-      }
-    } catch (e) {
-      console.warn("Could not load paper portfolio from localStorage:", e);
+    const parsed = loadJSON(PAPER_KEY);
+    if (parsed) {
+      setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
+      setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
+      setPaperPositions(parsed.positions ?? []);
+      setPaperHistory(parsed.history ?? []);
+      setEquityHistory(parsed.equityHistory ?? []);
     }
   }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        PAPER_KEY,
-        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory })
-      );
-    } catch (e) {
-      console.warn("Could not save paper portfolio to localStorage:", e);
-    }
+    saveJSON(PAPER_KEY, { cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory });
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
   const primaryChain = chainCache[expiry];

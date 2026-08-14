@@ -5,6 +5,8 @@
 // these work correctly no matter what strike spacing NSE uses for a given
 // expiry (50-point, 100-point, etc).
 
+import { ltpOf } from "./options";
+
 function strikeAt(ctx, offset) {
   const idx = Math.min(Math.max(ctx.atmIndex + offset, 0), ctx.strikes.length - 1);
   return ctx.strikes[idx];
@@ -13,7 +15,7 @@ function strikeAt(ctx, offset) {
 function premiumOf(ctx, strike, type) {
   const row = ctx.chainByStrike.get(strike);
   if (!row) return 0;
-  return (type === "call" ? row.call.ltp : row.put.ltp) ?? 0;
+  return ltpOf(row, type) ?? 0;
 }
 
 function leg(ctx, type, offset, action, qty = 1) {
