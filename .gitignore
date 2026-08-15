@@ -12,3 +12,7 @@ coverage/
 
 # Env
 .env
+
+# Paper journal database (local SQLite fallback; production uses DATABASE_URL)
+*.db
+*.sqlite3

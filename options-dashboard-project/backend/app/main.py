@@ -1,9 +1,19 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, chains
 from app.config import settings
+from app.db import init_db
+from app.routers import auth, chains, paper
 
-app = FastAPI(title="Options Dashboard API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Options Dashboard API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,6 +25,7 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(chains.router, prefix="/chains", tags=["chains"])
+app.include_router(paper.router, prefix="/paper", tags=["paper"])
 
 
 @app.get("/health")

@@ -1,6 +1,14 @@
 "use client";
 import { useEffect, useState, useMemo, useCallback } from "react";
-import { getStatus, getExpiries, getChain, isAuthError } from "@/lib/api";
+import {
+  getStatus,
+  getExpiries,
+  getChain,
+  isAuthError,
+  submitPaperFill,
+  closePaperLeg,
+  getPaperJournal,
+} from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
@@ -11,6 +19,17 @@ import {
 
 const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
+
+const fmtJournalDate = (iso) =>
+  iso
+    ? new Date(iso).toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "—";
 
 export default function PaperTradingPage() {
   // ---- All hooks declared up top, unconditionally ----
@@ -36,6 +55,8 @@ export default function PaperTradingPage() {
   const [paperPositions, setPaperPositions] = useState([]);
   const [paperHistory, setPaperHistory] = useState([]);
   const [equityHistory, setEquityHistory] = useState([]);
+  const [journal, setJournal] = useState(null);
+  const [journalError, setJournalError] = useState(null);
 
   const loadChain = useCallback(async (expiryDate) => {
     if (!expiryDate) return;
@@ -120,6 +141,18 @@ export default function PaperTradingPage() {
       console.warn("Could not save paper portfolio to localStorage:", e);
     }
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
+
+  // Load the DB-backed paper journal (account, stats, trade log).
+  const loadJournal = useCallback(() => {
+    getPaperJournal()
+      .then(setJournal)
+      .catch((e) => setJournalError(e.message));
+  }, []);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    loadJournal();
+  }, [loggedIn, loadJournal]);
 
   const primaryChain = chainCache[expiry];
   const spot = primaryChain?.underlying_spot_price ?? null;
@@ -252,6 +285,35 @@ export default function PaperTradingPage() {
     setPaperPositions((prev) => [...prev, ...newPositions]);
     setLegs([]);
     setStrategyName(null);
+
+    // Auto-log the fill into the DB journal (trades + legs). Best-effort: the
+    // local simulator stays the source of truth if the backend is unreachable.
+    const order = {
+      symbol,
+      strategy_tag: strategyName ?? "Custom",
+      starting_capital: paperStartingCapital,
+      legs: legs.map((l) => ({
+        symbol,
+        expiration_date: l.expiry,
+        strike_price: l.strike,
+        option_type: l.type,
+        action: l.action,
+        premium: l.price,
+        quantity: l.qty * multiplier,
+        lot_size: lotSize,
+      })),
+    };
+    submitPaperFill(order)
+      .then((created) => {
+        const legIds = new Map(created.legs.map((lg, i) => [newPositions[i]?.id, lg.id]));
+        setPaperPositions((prev) =>
+          prev.map((p) => (legIds.has(p.id) ? { ...p, tradeId: created.id, legId: legIds.get(p.id) } : p))
+        );
+        loadJournal();
+      })
+      .catch((e) => {
+        console.warn("Paper journal sync failed (trade kept locally):", e.message);
+      });
   };
 
   const closePosition = (id) => {
@@ -268,6 +330,14 @@ export default function PaperTradingPage() {
     setPaperCash((c) => c + cashDelta);
     setPaperPositions((prev) => prev.filter((p) => p.id !== id));
     setPaperHistory((prev) => [{ ...position, exitPrice, exitTime: new Date().toISOString(), realizedPnl }, ...prev]);
+
+    // Sync the exit to the DB journal; the backend closes the whole trade
+    // once its last leg is closed (computing multi-leg net credit/debit).
+    if (position.tradeId && position.legId) {
+      closePaperLeg(position.tradeId, position.legId, exitPrice)
+        .then(loadJournal)
+        .catch((e) => console.warn("Journal leg close sync failed:", e.message));
+    }
   };
 
   const resetPaperPortfolio = () => {
@@ -900,6 +970,131 @@ export default function PaperTradingPage() {
           </div>
         </>
       )}
+
+      {/* ---------- Paper Trading Journal (DB-backed) ---------- */}
+      <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+          <div style={{ fontSize: 13, color: C.muted, letterSpacing: 0.5 }}>PAPER TRADING JOURNAL — auto-logged to the database</div>
+          <div style={{ fontSize: 10.5, color: C.faint }}>trades + legs tables · synced from this browser session</div>
+        </div>
+
+        {journal === null && !journalError ? (
+          <div style={{ fontSize: 12.5, color: C.faint }}>Loading journal…</div>
+        ) : journalError ? (
+          <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>
+            Journal sync is unavailable right now ({journalError}). Local paper trading still works, but fills won't be logged to
+            the database until the backend is reachable.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16 }}>
+              <Stat label="Account balance" value={`₹${fmtIN(journal.account.balance)}`} color={C.gold} />
+              <Stat
+                label="Net P&L (realized)"
+                value={`${journal.account.net_pnl >= 0 ? "+" : ""}₹${fmtIN(journal.account.net_pnl)}`}
+                color={journal.account.net_pnl >= 0 ? C.green : C.red}
+              />
+              <Stat
+                label="Win rate"
+                value={journal.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"}
+              />
+              <Stat
+                label="Profit factor"
+                value={
+                  journal.stats.profit_factor != null
+                    ? journal.stats.profit_factor.toFixed(2)
+                    : journal.stats.closed_trades && journal.stats.gross_profit > 0
+                      ? "∞"
+                      : "—"
+                }
+              />
+              <Stat label="Trades" value={`${journal.stats.closed_trades} / ${journal.stats.total_trades} closed`} />
+            </div>
+
+            {journal.trades.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: C.faint }}>
+                No journal entries yet — submit a paper order and it will be logged here automatically.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ color: C.muted, fontSize: 10.5 }}>
+                      <th style={{ padding: 6, textAlign: "left" }}>Status</th>
+                      <th style={{ padding: 6, textAlign: "left" }}>Strategy</th>
+                      <th style={{ padding: 6, textAlign: "left" }}>Legs</th>
+                      <th style={{ padding: 6 }}>Net entry</th>
+                      <th style={{ padding: 6 }}>Realized P&L</th>
+                      <th style={{ padding: 6 }}>Opened</th>
+                      <th style={{ padding: 6 }}>Closed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {journal.trades.map((t) => {
+                      const realized = t.realized_pnl;
+                      const credit = t.entry_net < 0;
+                      return (
+                        <tr key={t.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 6 }}>
+                            {t.status === "open" ? (
+                              <span
+                                style={{
+                                  padding: "2px 10px",
+                                  borderRadius: 999,
+                                  fontSize: 10.5,
+                                  fontWeight: 700,
+                                  letterSpacing: 0.5,
+                                  color: C.gold,
+                                  background: "rgba(201,161,90,0.12)",
+                                  border: "1px solid rgba(201,161,90,0.35)",
+                                }}
+                              >
+                                OPEN
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  padding: "2px 10px",
+                                  borderRadius: 999,
+                                  fontSize: 10.5,
+                                  fontWeight: 700,
+                                  letterSpacing: 0.5,
+                                  color: realized >= 0 ? C.green : C.red,
+                                  background: "rgba(136,146,166,0.1)",
+                                  border: "1px solid rgba(136,146,166,0.3)",
+                                }}
+                              >
+                                CLOSED
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: 6 }}>
+                            <div style={{ fontWeight: 700 }}>{t.strategy_tag}</div>
+                            <div style={{ color: C.faint, fontSize: 11 }}>{t.symbol}</div>
+                          </td>
+                          <td style={{ padding: 6, color: C.muted }}>
+                            {t.legs
+                              .map((l) => `${l.action === "sell" ? "S" : "B"} ${fmtIN(l.strike_price)} ${l.option_type === "call" ? "CE" : "PE"}×${l.quantity}`)
+                              .join(" · ")}
+                          </td>
+                          <td style={{ padding: 6, color: credit ? C.green : C.muted }}>
+                            {credit ? `Credit ${fmtIN(Math.abs(t.entry_net))}` : `Debit ${fmtIN(t.entry_net)}`}
+                          </td>
+                          <td style={{ padding: 6, color: realized == null ? C.muted : realized >= 0 ? C.green : C.red }}>
+                            {realized == null ? "—" : `${realized >= 0 ? "+" : ""}₹${fmtIN(realized)}`}
+                          </td>
+                          <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(t.entry_at)}</td>
+                          <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{t.exit_at ? fmtJournalDate(t.exit_at) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isAuthError, chainWsUrl } from "./api";
+import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, api } from "./api";
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", "http://localhost:8000");
@@ -29,5 +29,29 @@ describe("chainWsUrl", () => {
   it("maps https to wss", () => {
     vi.stubEnv("NEXT_PUBLIC_API_URL", "https://api.example.com");
     expect(chainWsUrl("BANKNIFTY", "2026-08-27")).toBe("wss://api.example.com/chains/ws/BANKNIFTY?expiry_date=2026-08-27");
+  });
+});
+
+describe("paper journal api", () => {
+  it("posts an executed fill to /paper/fills", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { id: 1 } });
+    const order = { symbol: "NIFTY", strategy_tag: "Long Call", legs: [] };
+    await submitPaperFill(order);
+    expect(spy).toHaveBeenCalledWith("/paper/fills", order);
+    spy.mockRestore();
+  });
+
+  it("posts a leg close with the exit price", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { status: "closed" } });
+    await closePaperLeg(7, 3, 45.5);
+    expect(spy).toHaveBeenCalledWith("/paper/trades/7/legs/3/close", { exit_price: 45.5 });
+    spy.mockRestore();
+  });
+
+  it("gets the journal from /paper/journal", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { account: { balance: 500000 } } });
+    await getPaperJournal();
+    expect(spy).toHaveBeenCalledWith("/paper/journal");
+    spy.mockRestore();
   });
 });

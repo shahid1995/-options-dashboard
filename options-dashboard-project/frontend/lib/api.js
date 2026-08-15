@@ -44,6 +44,15 @@ export const getChain = (symbol, expiryDate) =>
     .get(`/chains/${symbol}`, { params: { expiry_date: expiryDate } })
     .then((r) => r.data);
 
+// ---- Paper trading journal (DB-backed, trades + legs tables) ----
+
+export const submitPaperFill = (order) => api.post("/paper/fills", order).then((r) => r.data);
+
+export const closePaperLeg = (tradeId, legId, exitPrice) =>
+  api.post(`/paper/trades/${tradeId}/legs/${legId}/close`, { exit_price: exitPrice }).then((r) => r.data);
+
+export const getPaperJournal = () => api.get("/paper/journal").then((r) => r.data);
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");
