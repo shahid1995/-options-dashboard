@@ -3,7 +3,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { getStatus, getExpiries, getChain, isAuthError } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
-import { historyToCsv, strategyStats, recordEquityPoint } from "@/lib/paperUtils";
+import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
   ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
@@ -103,7 +103,7 @@ export default function PaperTradingPage() {
         setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
         setPaperPositions(parsed.positions ?? []);
         setPaperHistory(parsed.history ?? []);
-        setEquityHistory(parsed.equityHistory ?? []);
+        setEquityHistory(sanitizeEquityHistory(parsed.equityHistory ?? []));
       }
     } catch (e) {
       console.warn("Could not load paper portfolio from localStorage:", e);
@@ -289,10 +289,15 @@ export default function PaperTradingPage() {
   const totalRealized = paperHistory.reduce((sum, h) => sum + h.realizedPnl, 0);
   const perStrategy = useMemo(() => strategyStats(paperHistory), [paperHistory]);
 
-  // Record an equity snapshot (at most one per minute) while data is live
+  // Record an equity snapshot (at most one per minute, market hours only) while
+  // data is live. Off-market the chain is frozen, so points would only draw a
+  // flat line; skipping unchanged values also keeps holiday sessions clean.
   useEffect(() => {
     if (!primaryChain) return;
-    setEquityHistory((prev) => recordEquityPoint(prev, Math.round(equity)));
+    if (!isWithinMarketHours(new Date())) return;
+    setEquityHistory((prev) =>
+      recordEquityPoint(prev, Math.round(equity), Date.now(), 500, 60000, { skipFlat: true })
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [primaryChain]);
 

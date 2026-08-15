@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { historyToCsv, strategyStats, recordEquityPoint } from "./paperUtils";
+import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "./paperUtils";
 
 const trade = {
   symbol: "NIFTY",
@@ -80,5 +80,80 @@ describe("recordEquityPoint", () => {
     expect(next).toHaveLength(3);
     expect(next[2]).toEqual({ time: 10_000_000, equity: 99 });
     expect(next[0].equity).toBe(1);
+  });
+
+  it("with skipFlat drops a point equal to the previous one", () => {
+    const points = [{ time: 1000, equity: 500000 }];
+    expect(recordEquityPoint(points, 500000, 1000 + 60000, 500, 60000, { skipFlat: true })).toBe(points);
+  });
+
+  it("with skipFlat still records the first change after a flat run", () => {
+    const points = [{ time: 1000, equity: 500000 }];
+    const next = recordEquityPoint(points, 500250, 1000 + 60000, 500, 60000, { skipFlat: true });
+    expect(next).toHaveLength(2);
+    expect(next[1]).toEqual({ time: 1000 + 60000, equity: 500250 });
+  });
+
+  it("without skipFlat still appends equal values (backward compatible)", () => {
+    const points = [{ time: 1000, equity: 500000 }];
+    expect(recordEquityPoint(points, 500000, 1000 + 60000)).toHaveLength(2);
+  });
+});
+
+describe("isWithinMarketHours", () => {
+  // All times below are expressed in UTC; IST is UTC+05:30 year-round.
+  const atIst = (hours, minutes) => new Date(Date.UTC(2026, 7, 13, hours - 5, minutes - 30)); // 2026-08-13 is a Thursday
+
+  it("allows 09:15 and 15:30 on a weekday", () => {
+    expect(isWithinMarketHours(atIst(9, 15))).toBe(true);
+    expect(isWithinMarketHours(atIst(15, 30))).toBe(true);
+  });
+
+  it("blocks just before open and just after close", () => {
+    expect(isWithinMarketHours(atIst(9, 14))).toBe(false);
+    expect(isWithinMarketHours(atIst(15, 31))).toBe(false);
+  });
+
+  it("blocks mid-session overnight hours", () => {
+    expect(isWithinMarketHours(atIst(0, 30))).toBe(false);
+    expect(isWithinMarketHours(atIst(21, 0))).toBe(false);
+  });
+
+  it("blocks weekends", () => {
+    const sat = new Date(Date.UTC(2026, 7, 15, 6, 0)); // 11:30 IST Saturday
+    const sun = new Date(Date.UTC(2026, 7, 16, 6, 0)); // 11:30 IST Sunday
+    expect(isWithinMarketHours(sat)).toBe(false);
+    expect(isWithinMarketHours(sun)).toBe(false);
+  });
+});
+
+describe("sanitizeEquityHistory", () => {
+  // 2026-08-13 (Thursday) 09:15, 09:16 IST; then the weekend; then Monday 09:16.
+  const thu915 = new Date(Date.UTC(2026, 7, 13, 3, 45)).getTime();
+  const thu916 = new Date(Date.UTC(2026, 7, 13, 3, 46)).getTime();
+  const mon916 = new Date(Date.UTC(2026, 7, 17, 3, 46)).getTime();
+
+  it("drops off-market points and consecutive flat values", () => {
+    const points = [
+      { time: thu915, equity: 500000 },
+      { time: thu916, equity: 500000 }, // flat -> dropped
+      { time: mon916, equity: 500000 }, // off-market (weekend) -> dropped
+    ];
+    expect(sanitizeEquityHistory(points)).toEqual([{ time: thu915, equity: 500000 }]);
+  });
+
+  it("keeps market-hours changes", () => {
+    const points = [
+      { time: thu915, equity: 500000 },
+      { time: thu916, equity: 501000 },
+      { time: mon916, equity: 502000 },
+    ];
+    expect(sanitizeEquityHistory(points)).toEqual(points);
+  });
+
+  it("returns an empty array for empty or all-off-market input", () => {
+    const sunday = new Date(Date.UTC(2026, 7, 16, 6, 0)).getTime(); // 11:30 IST Sunday
+    expect(sanitizeEquityHistory([])).toEqual([]);
+    expect(sanitizeEquityHistory([{ time: sunday, equity: 500000 }])).toEqual([]);
   });
 });

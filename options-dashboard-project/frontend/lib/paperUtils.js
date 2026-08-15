@@ -44,11 +44,54 @@ export function strategyStats(history) {
     .sort((a, b) => b.totalPnl - a.totalPnl);
 }
 
+// NSE index derivatives trade Monday–Friday, 09:15–15:30 IST.
+const MARKET_OPEN_MINUTES = 9 * 60 + 15;
+const MARKET_CLOSE_MINUTES = 15 * 60 + 30;
+
+export function istClockParts(date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) };
+}
+
+// True when `date` falls inside NSE market hours (Mon–Fri 09:15–15:30 IST).
+// Market holidays are not modeled (there is no holiday calendar client-side;
+// the "skip flat" rule is what keeps holiday sessions from plotting flat).
+export function isWithinMarketHours(date = new Date()) {
+  const { weekday, hour, minute } = istClockParts(date);
+  if (weekday === "Sat" || weekday === "Sun") return false;
+  const minutes = hour * 60 + minute;
+  return minutes >= MARKET_OPEN_MINUTES && minutes <= MARKET_CLOSE_MINUTES;
+}
+
 // Appends an equity snapshot at most once per `minIntervalMs`, keeping the
-// series bounded to `maxPoints`.
-export function recordEquityPoint(points, equity, time = Date.now(), maxPoints = 500, minIntervalMs = 60000) {
+// series bounded to `maxPoints`. With `opts.skipFlat`, a point equal to the
+// previous one is dropped (off-market and holiday sessions are perfectly flat,
+// so keeping them only draws meaningless straight lines).
+export function recordEquityPoint(points, equity, time = Date.now(), maxPoints = 500, minIntervalMs = 60000, opts = {}) {
+  const { skipFlat = false } = opts;
   const last = points[points.length - 1];
   if (last && time - last.time < minIntervalMs) return points;
+  if (skipFlat && last && last.equity === equity) return points;
   const next = [...points, { time, equity }];
   return next.length > maxPoints ? next.slice(next.length - maxPoints) : next;
+}
+
+// Cleans a stored series (e.g. history saved before market-hours filtering
+// existed): drops off-market points and consecutive flat values.
+export function sanitizeEquityHistory(points) {
+  const out = [];
+  for (const p of points) {
+    if (!isWithinMarketHours(new Date(p.time))) continue;
+    const last = out[out.length - 1];
+    if (last && last.equity === p.equity) continue;
+    out.push(p);
+  }
+  return out;
 }
