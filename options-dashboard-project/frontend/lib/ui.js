@@ -155,6 +155,11 @@ export function ShapeIcon({ shape }) {
     plateau: "M4 20 L10 20 L14 10 L20 10 L24 20 L28 20",
     peak: "M4 22 L12 22 L16 8 L20 22 L28 22",
     vUp: "M4 6 L14 22 L16 24 L18 22 L28 6",
+    valley: "M4 8 L10 8 L16 24 L22 8 L28 8",
+    broken: "M4 24 L9 24 L16 8 L23 24 L28 24",
+    flat: "M4 16 L28 16",
+    fallRight: "M4 10 L14 10 L28 30",
+    fallLeft: "M4 30 L14 10 L28 10",
   };
   return (
     <svg width="100%" height="32" viewBox="0 0 32 32">

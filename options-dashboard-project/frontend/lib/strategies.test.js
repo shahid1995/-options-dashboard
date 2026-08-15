@@ -17,7 +17,9 @@ function makeCtx() {
     strikes,
     atmIndex: 4,
     chainByStrike,
+    chainByStrikeForExpiry: {},
     expiry: "2026-08-28",
+    expiries: ["2026-08-28", "2026-09-04", "2026-09-11"],
   };
 }
 
@@ -45,7 +47,7 @@ describe("STRATEGIES", () => {
         expect(["buy", "sell"]).toContain(l.action);
         expect(ctx.strikes).toContain(l.strike);
         expect(l.qty).toBeGreaterThan(0);
-        expect(l.expiry).toBe(ctx.expiry);
+        expect(ctx.expiries).toContain(l.expiry); // calendar/diagonal use a second expiry
         expect(typeof l.price).toBe("number");
         expect(typeof l.id).toBe("string");
       }
@@ -125,6 +127,87 @@ describe("individual strategy legs", () => {
     ctx.chainByStrike.set(25000, { call: { ltp: null }, put: { ltp: null } });
     expect(get("buy_call").build(ctx)[0].price).toBe(0);
     expect(get("buy_put").build(ctx)[0].price).toBe(0);
+  });
+});
+
+describe("new ready-made strategies", () => {
+  const get = (id) => STRATEGIES.find((s) => s.id === id);
+
+  it("adds the requested strategies to the catalog", () => {
+    const ids = [
+      "jade_lizard",
+      "long_seagull",
+      "short_seagull",
+      "long_iron_condor",
+      "long_iron_butterfly",
+      "broken_wing_call",
+      "broken_wing_put",
+      "long_guts",
+      "short_guts",
+      "ratio_call_spread",
+      "ratio_put_spread",
+      "calendar",
+      "diagonal_call",
+      "diagonal_put",
+      "box_spread",
+    ];
+    for (const id of ids) expect(get(id)).toBeTruthy();
+  });
+
+  it("jade_lizard sells a put and a call, buying a further-OTM call", () => {
+    const legs = get("jade_lizard").build(makeCtx());
+    expect(legs.map((l) => [l.type, l.strike, l.action, l.qty])).toEqual([
+      ["put", 24950, "sell", 1],
+      ["call", 25050, "sell", 1],
+      ["call", 25150, "buy", 1],
+    ]);
+  });
+
+  it("long iron condor inverts the wings of the short iron condor", () => {
+    const legs = get("long_iron_condor").build(makeCtx());
+    expect(legs.map((l) => [l.type, l.strike, l.action])).toEqual([
+      ["put", 24800, "sell"],
+      ["put", 24900, "buy"],
+      ["call", 25100, "buy"],
+      ["call", 25200, "sell"],
+    ]);
+  });
+
+  it("ratio call spread buys 1 ATM and sells 2 OTM calls", () => {
+    const legs = get("ratio_call_spread").build(makeCtx());
+    expect(legs.map((l) => [l.type, l.strike, l.action, l.qty])).toEqual([
+      ["call", 25000, "buy", 1],
+      ["call", 25100, "sell", 2],
+    ]);
+  });
+
+  it("box spread builds four legs around the ATM", () => {
+    const legs = get("box_spread").build(makeCtx());
+    expect(legs).toHaveLength(4);
+    expect(legs.map((l) => [l.type, l.strike, l.action])).toEqual([
+      ["call", 24900, "buy"],
+      ["call", 25100, "sell"],
+      ["put", 25100, "buy"],
+      ["put", 24900, "sell"],
+    ]);
+  });
+
+  it("calendar spread uses the next expiry for the far leg", () => {
+    const ctx = makeCtx();
+    const legs = get("calendar").build(ctx);
+    expect(legs).toHaveLength(2);
+    expect(new Set(legs.map((l) => l.expiry)).size).toBe(2);
+    expect(legs[0].expiry).toBe(ctx.expiry);
+    expect(legs[1].expiry).toBe("2026-09-04"); // next listed expiry after the primary
+  });
+
+  it("diagonal call buys far expiry at ATM and sells near expiry OTM", () => {
+    const ctx = makeCtx();
+    const legs = get("diagonal_call").build(ctx);
+    expect(legs.map((l) => [l.action, l.strike, l.expiry])).toEqual([
+      ["buy", 25000, "2026-09-04"],
+      ["sell", 25050, ctx.expiry],
+    ]);
   });
 });
 

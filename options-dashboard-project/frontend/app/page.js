@@ -60,7 +60,7 @@ const FEATURES = [
   {
     icon: "∿",
     title: "Strategy Lab",
-    desc: "27 one-click strategies — spreads, condors, ratios — built straight from the live chain with payoff graphs, position Greeks and target-price P&L.",
+    desc: "42 one-click strategies — spreads, condors, ratios, butterflies and calendars — built straight from the live chain with payoff graphs, position Greeks and target-price P&L.",
   },
   {
     icon: "₹",
@@ -370,7 +370,7 @@ export default function Home() {
 
             <div className="od-fade" style={{ animationDelay: "0.3s", display: "flex", gap: 28, flexWrap: "wrap", fontSize: 12, color: C.muted }}>
               <span><span style={{ color: C.text, fontWeight: 800, fontSize: 16 }}>8</span> index chains</span>
-              <span><span style={{ color: C.text, fontWeight: 800, fontSize: 16 }}>27</span> built-in strategies</span>
+              <span><span style={{ color: C.text, fontWeight: 800, fontSize: 16 }}>42</span> built-in strategies</span>
               <span><span style={{ color: C.text, fontWeight: 800, fontSize: 16 }}>Live</span> WebSocket feed</span>
             </div>
           </div>

@@ -537,7 +537,14 @@ export default function PaperTradingPage() {
 
   const loadStrategy = (strategyDef) => {
     if (!primaryChain) return;
-    const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry };
+    // Multi-expiry strategies (calendar / diagonal) need the other expiries'
+    // chains too; build a strike->row map for every expiry fetched so far.
+    const chainByStrikeForExpiry = {};
+    expiries.forEach((exp) => {
+      const ch = chainCache[exp];
+      if (ch) chainByStrikeForExpiry[exp] = new Map(ch.chain.map((r) => [r.strike, r]));
+    });
+    const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry, expiries, chainByStrikeForExpiry };
     setLegs(strategyDef.build(ctx));
     setStrategyName(strategyDef.name);
     setShift(0);
