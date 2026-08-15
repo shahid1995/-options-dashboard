@@ -77,6 +77,18 @@ def test_expiries_empty_data(client, logged_in, monkeypatch):
     assert resp.json() == {"symbol": "BANKNIFTY", "expiries": []}
 
 
+@pytest.mark.parametrize("symbol", sorted(INSTRUMENT_KEYS))
+def test_expiries_every_index_symbol_uses_its_instrument_key(client, logged_in, monkeypatch, symbol):
+    mock = AsyncMock(return_value={"data": []})
+    monkeypatch.setattr(upstox, "get_option_contracts", mock)
+
+    resp = client.get(f"/chains/{symbol.lower()}/expiries")
+
+    assert resp.status_code == 200
+    assert resp.json()["symbol"] == symbol
+    mock.assert_awaited_once_with("tok-xyz", INSTRUMENT_KEYS[symbol])
+
+
 def test_chain_unknown_symbol_returns_404(client, logged_in):
     resp = client.get("/chains/UNKNOWN", params={"expiry_date": "2026-08-28"})
     assert resp.status_code == 404

@@ -14,11 +14,21 @@ export const C = {
   red: "#E15252",
 };
 
-export const SYMBOLS = ["NIFTY", "BANKNIFTY"];
+export const SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX", "SENSEX50"];
 
-// NSE lot sizes per index — fixed defaults used by the paper trading builder
-// (lot size is no longer editable in the UI; it is selected by symbol).
-export const LOT_SIZES = { NIFTY: 65, BANKNIFTY: 30 };
+// Index lot sizes (current, post the Dec 2025 SEBI revision) — fixed defaults
+// used by the paper trading builder (lot size is no longer editable in the UI;
+// it is selected by symbol).
+export const LOT_SIZES = {
+  NIFTY: 65,
+  BANKNIFTY: 30,
+  FINNIFTY: 60,
+  MIDCPNIFTY: 120,
+  NIFTYNXT50: 25,
+  SENSEX: 20,
+  BANKEX: 30,
+  SENSEX50: 75,
+};
 
 export function fmtIN(n, decimals = 0) {
   if (n === null || n === undefined || Number.isNaN(n)) return "-";
@@ -73,7 +83,7 @@ export function TopNav({ active }) {
 
 export function SymbolTabs({ symbol, onChange }) {
   return (
-    <div style={{ display: "flex", gap: 6 }}>
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
       {SYMBOLS.map((s) => (
         <button
           key={s}

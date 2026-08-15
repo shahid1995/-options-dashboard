@@ -8,9 +8,17 @@ from app.services.upstox import UpstoxError
 
 router = APIRouter()
 
+# Index option chains available via Upstox (NSE + BSE). Keys are the
+# instrument_key values from Upstox's instrument master (BOD) files.
 INSTRUMENT_KEYS = {
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "FINNIFTY": "NSE_INDEX|Nifty Financial Services",
+    "MIDCPNIFTY": "NSE_INDEX|Nifty Midcap Select",
+    "NIFTYNXT50": "NSE_INDEX|Nifty Next 50",
+    "SENSEX": "BSE_INDEX|SENSEX",
+    "BANKEX": "BSE_INDEX|BANKEX",
+    "SENSEX50": "BSE_INDEX|SENSEX50",
 }
 
 WS_PUSH_INTERVAL_SECONDS = 3
