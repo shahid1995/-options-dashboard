@@ -8,11 +8,13 @@ import {
   submitPaperFill,
   closePaperLeg,
   getPaperJournal,
+  getMarketStatus,
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { hasUnlimitedLoss, hasUnlimitedProfit, payoffRange, pnlAt } from "@/lib/options";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
+import { nseCalendarStatus, priceModeLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
@@ -89,6 +91,57 @@ export default function PaperTradingPage() {
   const [journal, setJournal] = useState(null);
   const [journalError, setJournalError] = useState(null);
   const [journalPage, setJournalPage] = useState(0);
+
+  // ---- Market-hours execution gate ----
+  const [marketStatus, setMarketStatus] = useState(null); // { status, source, message, checkedAt, tradeDate }
+  const [marketStatusError, setMarketStatusError] = useState(false);
+  const [orderInFlight, setOrderInFlight] = useState(false);
+  const orderInFlightRef = useRef(false);
+
+  const refreshMarketStatus = useCallback(async () => {
+    try {
+      const st = await getMarketStatus();
+      setMarketStatus(st);
+      setMarketStatusError(false);
+    } catch (e) {
+      // Backend unreachable: keep the badge in a blocked "unable to verify"
+      // state and only attach the local calendar's expectation as context.
+      // The execution gate never trusts a stale badge — it re-validates live.
+      const cal = nseCalendarStatus(new Date());
+      setMarketStatusError(true);
+      setMarketStatus({
+        status: "unknown",
+        source: "calendar-local",
+        expected: cal.status,
+        tradeDate: cal.tradeDate,
+        checkedAt: new Date().toISOString(),
+        message: `Could not verify market status with the server. Local calendar expects: ${cal.reason}`,
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (loggedIn !== true) return;
+    refreshMarketStatus();
+    const t = setInterval(refreshMarketStatus, 60_000);
+    return () => clearInterval(t);
+  }, [loggedIn, refreshMarketStatus]);
+
+  // Exact execution-time check. Never trusts the badge: re-queries the server
+  // gate at the moment an order is submitted. Closed or unknown → rejected;
+  // a failed check is treated as "unable to verify" (never as open).
+  const assertMarketOpen = useCallback(async () => {
+    try {
+      const st = await getMarketStatus();
+      setMarketStatus(st);
+      setMarketStatusError(false);
+      if (st.status === "open") return null;
+      return st.status === "unknown" ? MARKET_UNKNOWN_MSG : MARKET_CLOSED_MSG;
+    } catch (e) {
+      setMarketStatusError(true);
+      return MARKET_UNKNOWN_MSG;
+    }
+  }, []);
 
   const loadChain = useCallback(async (expiryDate) => {
     if (!expiryDate) return;
@@ -352,87 +405,135 @@ export default function PaperTradingPage() {
     return position.type === "call" ? row.call.ltp : row.put.ltp;
   };
 
-  const executeTradeAll = () => {
-    if (legs.length === 0) return;
-    let cashDelta = 0;
-    const newPositions = legs.map((l) => {
-      const dir = dirOf(l.action);
-      const effectiveQty = l.qty * multiplier;
-      cashDelta -= dir * l.price * lotSize * effectiveQty;
-      return {
-        id: `pos-${l.type}-${l.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        symbol,
-        type: l.type,
-        strike: l.strike,
-        expiry: l.expiry,
-        action: l.action,
-        qty: effectiveQty,
-        lotSize,
-        entryPremium: l.price,
-        entryTime: new Date().toISOString(),
-        strategyName: strategyName ?? "Custom",
-      };
-    });
-    setPaperCash((c) => c + cashDelta);
-    setPaperPositions((prev) => [...prev, ...newPositions]);
-    setLegs([]);
-    setStrategyName(null);
-    setShift(0);
-    setWidth(0);
-    setHedge(0);
-    setShowAddLeg(false);
-
-    // Auto-log the fill into the DB journal (trades + legs). Best-effort: the
-    // local simulator stays the source of truth if the backend is unreachable.
-    const order = {
-      symbol,
-      strategy_tag: strategyName ?? "Custom",
-      starting_capital: paperStartingCapital,
-      legs: legs.map((l) => ({
-        symbol,
-        expiration_date: l.expiry,
-        strike_price: l.strike,
-        option_type: l.type,
-        action: l.action,
-        premium: l.price,
-        quantity: l.qty * multiplier,
-        lot_size: lotSize,
-      })),
-    };
-    submitPaperFill(order)
-      .then((created) => {
-        const legIds = new Map(created.legs.map((lg, i) => [newPositions[i]?.id, lg.id]));
-        setPaperPositions((prev) =>
-          prev.map((p) => (legIds.has(p.id) ? { ...p, tradeId: created.id, legId: legIds.get(p.id) } : p))
-        );
-        loadJournal();
-      })
-      .catch((e) => {
-        console.warn("Paper journal sync failed (trade kept locally):", e.message);
+  const executeTradeAll = async () => {
+    if (legs.length === 0 || orderInFlightRef.current) return; // no double execution
+    orderInFlightRef.current = true;
+    setOrderInFlight(true);
+    try {
+      // Centralized market-hours gate, checked at the exact moment of execution.
+      const gateMsg = await assertMarketOpen();
+      if (gateMsg) {
+        alert(gateMsg);
+        return;
+      }
+      let cashDelta = 0;
+      const newPositions = legs.map((l) => {
+        const dir = dirOf(l.action);
+        const effectiveQty = l.qty * multiplier;
+        cashDelta -= dir * l.price * lotSize * effectiveQty;
+        return {
+          id: `pos-${l.type}-${l.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          symbol,
+          type: l.type,
+          strike: l.strike,
+          expiry: l.expiry,
+          action: l.action,
+          qty: effectiveQty,
+          lotSize,
+          entryPremium: l.price,
+          entryTime: new Date().toISOString(),
+          strategyName: strategyName ?? "Custom",
+        };
       });
+      const newPositionIds = new Set(newPositions.map((p) => p.id));
+      setPaperCash((c) => c + cashDelta);
+      setPaperPositions((prev) => [...prev, ...newPositions]);
+      setLegs([]);
+      setStrategyName(null);
+      setShift(0);
+      setWidth(0);
+      setHedge(0);
+      setShowAddLeg(false);
+
+      // Auto-log the fill into the DB journal (trades + legs). Best-effort: the
+      // local simulator stays the source of truth if the backend is unreachable.
+      const order = {
+        symbol,
+        strategy_tag: strategyName ?? "Custom",
+        starting_capital: paperStartingCapital,
+        legs: legs.map((l) => ({
+          symbol,
+          expiration_date: l.expiry,
+          strike_price: l.strike,
+          option_type: l.type,
+          action: l.action,
+          premium: l.price,
+          quantity: l.qty * multiplier,
+          lot_size: lotSize,
+        })),
+      };
+      submitPaperFill(order)
+        .then((created) => {
+          const legIds = new Map(created.legs.map((lg, i) => [newPositions[i]?.id, lg.id]));
+          setPaperPositions((prev) =>
+            prev.map((p) => (legIds.has(p.id) ? { ...p, tradeId: created.id, legId: legIds.get(p.id) } : p))
+          );
+          loadJournal();
+        })
+        .catch((e) => {
+          if (e.response?.status === 409) {
+            // The backend's own gate rejected the fill (market closed between
+            // our check and theirs). Roll the local execution back so no
+            // cash/position state survives a rejected order.
+            setPaperCash((c) => c - cashDelta);
+            setPaperPositions((prev) => prev.filter((p) => !newPositionIds.has(p.id)));
+            alert(e.message || MARKET_CLOSED_MSG);
+            return;
+          }
+          console.warn("Paper journal sync failed (trade kept locally):", e.message);
+        });
+    } finally {
+      orderInFlightRef.current = false;
+      setOrderInFlight(false);
+    }
   };
 
-  const closePosition = (id) => {
+  const closePosition = async (id) => {
     const position = paperPositions.find((p) => p.id === id);
-    if (!position) return;
-    const exitPrice = getCurrentLtp(position);
-    if (exitPrice == null) {
-      alert("No live price cached for this position's expiry yet. Select that expiry in the builder above once to load it, then try closing again.");
-      return;
-    }
-    const dir = dirOf(position.action);
-    const cashDelta = dir * exitPrice * position.lotSize * position.qty;
-    const realizedPnl = dir * (exitPrice - position.entryPremium) * position.lotSize * position.qty;
-    setPaperCash((c) => c + cashDelta);
-    setPaperPositions((prev) => prev.filter((p) => p.id !== id));
-    setPaperHistory((prev) => [{ ...position, exitPrice, exitTime: new Date().toISOString(), realizedPnl }, ...prev]);
+    if (!position || orderInFlightRef.current) return; // no double execution
+    orderInFlightRef.current = true;
+    setOrderInFlight(true);
+    try {
+      // Exits are sell orders: same market-hours gate, checked at execution time.
+      const gateMsg = await assertMarketOpen();
+      if (gateMsg) {
+        alert(gateMsg);
+        return;
+      }
+      const exitPrice = getCurrentLtp(position);
+      if (exitPrice == null) {
+        alert("No live price cached for this position's expiry yet. Select that expiry in the builder above once to load it, then try closing again.");
+        return;
+      }
+      const dir = dirOf(position.action);
+      const cashDelta = dir * exitPrice * position.lotSize * position.qty;
+      const realizedPnl = dir * (exitPrice - position.entryPremium) * position.lotSize * position.qty;
+      const historyEntry = { ...position, exitPrice, exitTime: new Date().toISOString(), realizedPnl };
+      setPaperCash((c) => c + cashDelta);
+      setPaperPositions((prev) => prev.filter((p) => p.id !== id));
+      setPaperHistory((prev) => [historyEntry, ...prev]);
 
-    // Sync the exit to the DB journal; the backend closes the whole trade
-    // once its last leg is closed (computing multi-leg net credit/debit).
-    if (position.tradeId && position.legId) {
-      closePaperLeg(position.tradeId, position.legId, exitPrice)
-        .then(loadJournal)
-        .catch((e) => console.warn("Journal leg close sync failed:", e.message));
+      // Sync the exit to the DB journal; the backend closes the whole trade
+      // once its last leg is closed (computing multi-leg net credit/debit).
+      if (position.tradeId && position.legId) {
+        closePaperLeg(position.tradeId, position.legId, exitPrice)
+          .then(loadJournal)
+          .catch((e) => {
+            if (e.response?.status === 409) {
+              // Backend gate rejected the exit; restore the position so the
+              // simulator does not act as though the close executed.
+              setPaperCash((c) => c - cashDelta);
+              setPaperPositions((prev) => [...prev, position]);
+              setPaperHistory((prev) => prev.filter((h) => h !== historyEntry));
+              alert(e.message || MARKET_CLOSED_MSG);
+              return;
+            }
+            console.warn("Journal leg close sync failed:", e.message);
+          });
+      }
+    } finally {
+      orderInFlightRef.current = false;
+      setOrderInFlight(false);
     }
   };
 
@@ -756,6 +857,12 @@ export default function PaperTradingPage() {
     background: bg,
     border: `1px solid ${bd}`,
   });
+  // Loading / unknown is treated conservatively as closed for button visuals;
+  // the execution gate re-validates live and is the real source of truth.
+  const marketNotOpen = marketStatus ? marketStatus.status !== "open" : true;
+  // Price provenance: quotes are only ever labeled "live" while the market
+  // is verified open; otherwise the UI shows last-available (closing) prices.
+  const priceLive = marketStatus?.status === "open";
   const eqLast = equityHistory.length ? equityHistory[equityHistory.length - 1].equity : null;
   const eqColor = eqLast != null ? (eqLast >= paperStartingCapital ? C.green : C.red) : C.gold;
   const eqDelta = eqLast != null ? eqLast - paperStartingCapital : null;
@@ -801,7 +908,23 @@ export default function PaperTradingPage() {
             📊 <span style={{ color: C.gold }}>{symbol}</span>
           </span>
           {spot != null && (
-            <span style={{ fontSize: fluid(13, 16), fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtIN(spot, 2)}</span>
+            <>
+              <span style={{ fontSize: fluid(13, 16), fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtIN(spot, 2)}</span>
+              <span
+                title={priceLive ? "Live market price" : marketStatus?.status === "closed" ? "Last traded / closing price — market closed" : "Price provenance unverified — not live"}
+                style={{
+                  ...badge(
+                    priceModeLabel(marketStatus?.status),
+                    priceLive ? C.green : C.muted,
+                    priceLive ? "rgba(68,201,134,0.1)" : "rgba(136,146,166,0.1)",
+                    priceLive ? "rgba(68,201,134,0.35)" : "rgba(136,146,166,0.35)"
+                  ),
+                  fontFamily: "monospace",
+                }}
+              >
+                {priceModeLabel(marketStatus?.status)}
+              </span>
+            </>
           )}
           {spotChg != null && (
             <span style={{ fontSize: 11.5, fontWeight: 700, color: spotChg >= 0 ? C.green : C.red, fontVariantNumeric: "tabular-nums" }}>
@@ -809,6 +932,36 @@ export default function PaperTradingPage() {
             </span>
           )}
           <span style={badge("SIMULATED MODE", C.gold, "rgba(201,161,90,0.12)", "rgba(201,161,90,0.35)")}>SIMULATED</span>
+          <span
+            title={
+              marketStatus
+                ? `${marketStatus.message}${marketStatus.tradeDate ? ` · ${marketStatus.tradeDate}` : ""} · source: ${marketStatus.source}${marketStatus.status === "closed" ? " · P&L uses last available prices" : ""}`
+                : "Checking market status…"
+            }
+            style={{
+              ...badge(
+                MARKET_STATUS_LABELS[marketStatus?.status ?? "unknown"],
+                marketStatus?.status === "open"
+                  ? C.green
+                  : marketStatus?.status === "closed"
+                    ? C.red
+                    : C.gold,
+                marketStatus?.status === "open"
+                  ? "rgba(68,201,134,0.12)"
+                  : marketStatus?.status === "closed"
+                    ? "rgba(225,82,82,0.12)"
+                    : "rgba(224,163,58,0.12)",
+                marketStatus?.status === "open"
+                  ? "rgba(68,201,134,0.35)"
+                  : marketStatus?.status === "closed"
+                    ? "rgba(225,82,82,0.35)"
+                    : "rgba(224,163,58,0.45)"
+              ),
+              whiteSpace: "nowrap",
+            }}
+          >
+            {marketStatus ? MARKET_STATUS_LABELS[marketStatus.status] : "⏳ Checking market…"}
+          </span>
         </div>
 
         <div style={{ fontSize: 11.5, color: C.muted, letterSpacing: 1.2, textAlign: "center" }}>
@@ -1113,9 +1266,21 @@ export default function PaperTradingPage() {
                 </button>
                 <button
                   onClick={executeTradeAll}
-                  style={{ fontSize: 11.5, fontWeight: 800, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 8, padding: "8px 6px", cursor: "pointer" }}
+                  disabled={orderInFlight}
+                  title={orderInFlight ? "Processing order…" : marketNotOpen ? MARKET_CLOSED_MSG : "Execute all legs at current market prices"}
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: 800,
+                    color: "#0B0E14",
+                    background: C.gold,
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 6px",
+                    cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer",
+                    opacity: orderInFlight || marketNotOpen ? 0.5 : 1,
+                  }}
                 >
-                  Trade All
+                  {orderInFlight ? "Placing…" : "Trade All"}
                 </button>
               </div>
 
@@ -1221,7 +1386,9 @@ export default function PaperTradingPage() {
                             </div>
                             <button
                               onClick={() => closePosition(p.id)}
-                              style={{ fontSize: 10, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 8px", cursor: "pointer", marginTop: 2 }}
+                              disabled={orderInFlight}
+                              title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Close this position at the current LTP"}
+                              style={{ fontSize: 10, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 8px", cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer", marginTop: 2, opacity: orderInFlight || marketNotOpen ? 0.5 : 1 }}
                             >
                               Close
                             </button>
@@ -1627,7 +1794,7 @@ export default function PaperTradingPage() {
             <div style={panel}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>⚡ ACTIVE POSITIONS & LIVE P&L</div>
+                  <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>⚡ ACTIVE POSITIONS {priceLive ? "& LIVE P&L" : "& P&L"}</div>
                   {positionsWithLtp.length > 0 && (
                     <span
                       style={{
@@ -1644,7 +1811,11 @@ export default function PaperTradingPage() {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 10.5, color: C.faint }}>mark-to-market · simplified simulator (no margin/brokerage/taxes)</div>
+                <div style={{ fontSize: 10.5, color: C.faint }}>
+                  {priceLive
+                    ? "mark-to-market at live prices · simplified simulator (no margin/brokerage/taxes)"
+                    : "mark-to-market at last available (closing) prices · market closed · simplified simulator"}
+                </div>
               </div>
               {positionsWithLtp.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: C.faint, padding: "18px 0" }}>No open positions.</div>
@@ -1657,8 +1828,8 @@ export default function PaperTradingPage() {
                         <th style={{ padding: 6, textAlign: "left" }}>Strategy</th>
                         <th style={{ padding: 6 }}>Qty</th>
                         <th style={{ padding: 6 }}>Entry Price</th>
-                        <th style={{ padding: 6 }}>Current LTP</th>
-                        <th style={{ padding: 6 }}>Live P&L</th>
+                        <th style={{ padding: 6 }}>{priceLive ? "Current LTP" : "Last Price"}</th>
+                        <th style={{ padding: 6 }}>{priceLive ? "Live P&L" : "P&L (last)"}</th>
                         <th style={{ padding: 6 }}></th>
                       </tr>
                     </thead>
@@ -1681,7 +1852,9 @@ export default function PaperTradingPage() {
                           <td style={{ padding: 6 }}>
                             <button
                               onClick={() => closePosition(p.id)}
-                              style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
+                              disabled={orderInFlight}
+                              title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Close this position at the current LTP"}
+                              style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer", opacity: orderInFlight || marketNotOpen ? 0.5 : 1 }}
                             >
                               Close
                             </button>

@@ -54,10 +54,11 @@ export function istClockParts(date) {
     weekday: "short",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hourCycle: "h23",
   }).formatToParts(date);
   const get = (type) => parts.find((p) => p.type === type)?.value;
-  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")) };
+  return { weekday: get("weekday"), hour: Number(get("hour")), minute: Number(get("minute")), second: Number(get("second")) };
 }
 
 // True when `date` falls inside NSE market hours (Mon–Fri 09:15–15:30 IST).

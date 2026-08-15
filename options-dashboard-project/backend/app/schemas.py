@@ -83,3 +83,14 @@ class JournalOut(BaseModel):
     account: AccountOut
     stats: JournalStatsOut
     trades: list[TradeOut]
+
+
+class MarketStatusOut(BaseModel):
+    """Current NSE market status for the paper-trading UI badge."""
+
+    status: Literal["open", "closed", "unknown"]
+    source: str
+    trade_date: str | None = None
+    checked_at: str
+    message: str
+    open: bool

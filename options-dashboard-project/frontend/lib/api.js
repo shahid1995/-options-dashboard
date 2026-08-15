@@ -53,6 +53,9 @@ export const closePaperLeg = (tradeId, legId, exitPrice) =>
 
 export const getPaperJournal = () => api.get("/paper/journal").then((r) => r.data);
 
+export const getMarketStatus = () =>
+  api.get("/paper/market-status").then((r) => ({ ...r.data, tradeDate: r.data.trade_date }));
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");

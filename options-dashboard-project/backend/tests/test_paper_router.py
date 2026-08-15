@@ -1,3 +1,6 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -6,7 +9,32 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.routers.paper import MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG
 from app.services import token_store
+
+
+@pytest.fixture(autouse=True)
+def market_open_gate():
+    """Default: the market-hours gate reports the market OPEN.
+
+    Keeps the pre-existing endpoint tests deterministic (no real Upstox calls,
+    no dependence on the current wall-clock time).
+    """
+    with gate_status("open"):
+        yield
+
+
+def gate_status(status_value):
+    """Context manager overriding the market-hours gate to a given status."""
+    status = SimpleNamespace(
+        status=status_value,
+        source="test",
+        trade_date="2026-08-14",
+        checked_at="2026-08-14T10:00:00+05:30",
+        message=f"test market status: {status_value}",
+        error=None,
+    )
+    return patch("app.routers.paper.get_market_status", new=AsyncMock(return_value=status))
 
 
 @pytest.fixture
@@ -148,6 +176,60 @@ def test_handlePaperOrderFill_net_debit_for_long_spread(db_session):
     trade = handlePaperOrderFill("user-1", order, db_session)
 
     assert trade.entry_net == 7800.0  # net debit paid
+
+
+# ---------- Market-hours execution gate ----------
+
+
+def test_market_status_endpoint_requires_login(client):
+    resp = client.get("/paper/market-status")
+    assert resp.status_code == 401
+
+
+def test_market_status_endpoint_reports_open(client, logged_in):
+    resp = client.get("/paper/market-status", headers=headers(logged_in))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "open"
+    assert body["open"] is True
+    assert body["source"] == "test"
+    assert body["message"]
+
+
+def test_fill_rejected_when_market_closed(client, logged_in, db_session):
+    from app.models import Leg, Trade
+
+    with gate_status("closed"):
+        resp = fill(client, logged_in, single_leg_order())
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == MARKET_CLOSED_MSG
+    # Nothing was recorded: no trade, no legs.
+    assert db_session.query(Trade).count() == 0
+    assert db_session.query(Leg).count() == 0
+
+
+def test_fill_rejected_when_market_unknown(client, logged_in, db_session):
+    from app.models import Leg, Trade
+
+    with gate_status("unknown"):
+        resp = fill(client, logged_in, single_leg_order())
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == MARKET_UNKNOWN_MSG
+    assert db_session.query(Trade).count() == 0
+    assert db_session.query(Leg).count() == 0
+
+
+def test_close_rejected_when_market_closed(client, logged_in):
+    trade = fill(client, logged_in, single_leg_order()).json()
+    leg_id = trade["legs"][0]["id"]
+
+    with gate_status("closed"):
+        resp = close_leg(client, logged_in, trade["id"], leg_id, 50.0)
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == MARKET_CLOSED_MSG
 
 
 # ---------- API: fills ----------
