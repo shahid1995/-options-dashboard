@@ -126,11 +126,11 @@ export function Centered({ children }) {
   );
 }
 
-export function Stat({ label, value, color }) {
+export function Stat({ label, value, color, fs = 15, labelFs = 10.5 }) {
   return (
     <div>
-      <div style={{ fontSize: 10.5, color: C.faint }}>{label}</div>
-      <div style={{ fontSize: 15, fontWeight: 700, color: color || C.text }}>{value}</div>
+      <div style={{ fontSize: labelFs, color: C.faint }}>{label}</div>
+      <div style={{ fontSize: fs, fontWeight: 700, color: color || C.text }}>{value}</div>
     </div>
   );
 }
