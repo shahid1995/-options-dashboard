@@ -13,8 +13,10 @@ router = APIRouter()
 INSTRUMENT_KEYS = {
     "NIFTY": "NSE_INDEX|Nifty 50",
     "BANKNIFTY": "NSE_INDEX|Nifty Bank",
-    "FINNIFTY": "NSE_INDEX|Nifty Financial Services",
-    "MIDCPNIFTY": "NSE_INDEX|Nifty Midcap Select",
+    # Note: FINNIFTY and MIDCPNIFTY use Upstox's older index names ("Nifty Fin
+    # Service", "NIFTY MID SELECT"), not the current official NSE names.
+    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
+    "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
     "NIFTYNXT50": "NSE_INDEX|Nifty Next 50",
     "SENSEX": "BSE_INDEX|SENSEX",
     "BANKEX": "BSE_INDEX|BANKEX",
