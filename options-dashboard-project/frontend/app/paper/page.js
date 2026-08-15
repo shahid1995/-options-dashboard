@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import {
   getStatus,
   getExpiries,
@@ -10,8 +10,9 @@ import {
   getPaperJournal,
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
-import { STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
+import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
+import { loadJSON, saveJSON } from "@/lib/storage";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
   ComposedChart, Bar, Line, Area, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
@@ -20,6 +21,10 @@ import {
 const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
 const JOURNAL_PAGE_SIZE = 10;
+const DRAFTS_KEY = "options_dashboard_drafts_v1";
+const SAVED_KEY = "options_dashboard_saved_v1";
+
+const LEG_COLORS = [C.green, C.red, "#5B9BD5", "#B48AD9", "#E0A33A", "#5AC8C8", "#F283B4", "#7FBF7F"];
 
 const fmtJournalDate = (iso) =>
   iso
@@ -31,6 +36,13 @@ const fmtJournalDate = (iso) =>
         minute: "2-digit",
       })
     : "—";
+
+const fmtExpiry = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+};
 
 // Fluid type scale: interpolates px font-size from `min` (narrow screens) up to
 // `max` (≥1920px viewports) so headings stay crisp on high-res displays.
@@ -54,6 +66,19 @@ export default function PaperTradingPage() {
   const [category, setCategory] = useState("Bullish");
   const [payoffTab, setPayoffTab] = useState("graph");
   const [targetPct, setTargetPct] = useState(0);
+
+  // ---- New UI state for the 40/60 strategy-lab layout ----
+  const [shift, setShift] = useState(0);
+  const [width, setWidth] = useState(0);
+  const [hedge, setHedge] = useState(0);
+  const [builderTab, setBuilderTab] = useState("ready");
+  const [showAddLeg, setShowAddLeg] = useState(false);
+  const [drafts, setDrafts] = useState([]);
+  const [savedStrategies, setSavedStrategies] = useState([]);
+  const [fundsOpen, setFundsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [spotChg, setSpotChg] = useState(null);
+  const firstSpotRef = useRef(null);
 
   const [paperCash, setPaperCash] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
@@ -94,6 +119,8 @@ export default function PaperTradingPage() {
     setLegs([]);
     setStrategyName(null);
     setLotSize(LOT_SIZES[symbol] ?? LOT_SIZES.NIFTY);
+    firstSpotRef.current = null;
+    setSpotChg(null);
     getExpiries(symbol)
       .then((d) => {
         setExpiries(d.expiries);
@@ -148,6 +175,20 @@ export default function PaperTradingPage() {
     }
   }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
 
+  // Draft portfolios + saved strategies (localStorage)
+  useEffect(() => {
+    setDrafts(loadJSON(DRAFTS_KEY, []));
+    setSavedStrategies(loadJSON(SAVED_KEY, []));
+  }, []);
+
+  useEffect(() => {
+    saveJSON(DRAFTS_KEY, drafts);
+  }, [drafts]);
+
+  useEffect(() => {
+    saveJSON(SAVED_KEY, savedStrategies);
+  }, [savedStrategies]);
+
   // Load the DB-backed paper journal (account, stats, trade log).
   const loadJournal = useCallback(() => {
     getPaperJournal()
@@ -188,6 +229,13 @@ export default function PaperTradingPage() {
     return best;
   }, [spot, strikesSorted]);
 
+  // Session change % for the header (vs the first spot seen for this symbol).
+  useEffect(() => {
+    if (spot == null) return;
+    if (firstSpotRef.current == null) firstSpotRef.current = spot;
+    else setSpotChg(((spot - firstSpotRef.current) / firstSpotRef.current) * 100);
+  }, [spot]);
+
   // P&L at a given underlying price, for the current legs
   const pnlAtPrice = useCallback(
     (price) => {
@@ -216,17 +264,67 @@ export default function PaperTradingPage() {
     });
   }, [strikesSorted, chainByStrike, legs, pnlAtPrice]);
 
+  // Strategy Chart data: one line per leg plus the combined position.
+  const legPayoffData = useMemo(() => {
+    if (strikesSorted.length === 0 || legs.length === 0) return [];
+    return strikesSorted.map((strike) => {
+      const point = { strike };
+      let combined = 0;
+      legs.forEach((l, i) => {
+        const intrinsic = l.type === "call" ? Math.max(0, strike - l.strike) : Math.max(0, l.strike - strike);
+        const dir = l.action === "buy" ? 1 : -1;
+        const pnl = dir * (intrinsic - l.price) * l.qty * lotSize * multiplier;
+        point[`leg${i}`] = Math.round(pnl);
+        combined += pnl;
+      });
+      point.combined = Math.round(combined);
+      return point;
+    });
+  }, [strikesSorted, legs, lotSize, multiplier]);
+
   const maxProfit = payoffData.length ? Math.max(...payoffData.map((p) => p.pnl)) : 0;
   const maxLoss = payoffData.length ? Math.min(...payoffData.map((p) => p.pnl)) : 0;
 
-  const targetPrice = spot ? spot * (1 + targetPct / 100) : null;
-  const targetPnl = targetPrice != null ? pnlAtPrice(targetPrice) : null;
+  // Detect truly unbounded wings by sampling far beyond the chain's shown range.
+  const lowExtreme = spot != null && legs.length ? pnlAtPrice(spot * 0.25) : null;
+  const highExtreme = spot != null && legs.length ? pnlAtPrice(spot * 4) : null;
+  const maxProfitUnlimited =
+    legs.length > 0 && ((lowExtreme != null && lowExtreme > maxProfit) || (highExtreme != null && highExtreme > maxProfit));
+  const maxLossUnlimited =
+    legs.length > 0 && ((lowExtreme != null && lowExtreme < maxLoss) || (highExtreme != null && highExtreme < maxLoss));
 
   const netPerLot = legs.reduce((sum, l) => {
     const dir = l.action === "buy" ? 1 : -1;
     return sum + dir * l.price * l.qty;
   }, 0);
   const netTotal = netPerLot * lotSize * multiplier;
+
+  const roiPct = legs.length && netTotal !== 0 ? (maxProfit / Math.abs(netTotal)) * 100 : null;
+  const rewardRisk = legs.length && maxLoss < 0 ? maxProfit / Math.abs(maxLoss) : null;
+
+  // Underlying price(s) where the payoff crosses zero (linear interpolation
+  // between neighbouring strikes).
+  const breakevens = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < payoffData.length - 1; i++) {
+      const a = payoffData[i];
+      const b = payoffData[i + 1];
+      if ((a.pnl >= 0 && b.pnl <= 0) || (a.pnl <= 0 && b.pnl >= 0)) {
+        const denom = a.pnl - b.pnl;
+        const t = denom === 0 ? 0 : a.pnl / denom;
+        out.push(Math.round(a.strike + t * (b.strike - a.strike)));
+      }
+    }
+    return out;
+  }, [payoffData]);
+
+  const targetPrice = spot ? spot * (1 + targetPct / 100) : null;
+  const targetPnl = targetPrice != null ? pnlAtPrice(targetPrice) : null;
+
+  const daysToExpiry = expiry
+    ? Math.max(0, Math.ceil((new Date(`${expiry}T00:00:00`) - new Date()) / 86400000))
+    : null;
+  const expiryFillPct = daysToExpiry != null ? Math.min(100, Math.max(0, ((30 - daysToExpiry) / 30) * 100)) : 0;
 
   const greeksRows = useMemo(() => {
     return legs.map((l) => {
@@ -291,6 +389,10 @@ export default function PaperTradingPage() {
     setPaperPositions((prev) => [...prev, ...newPositions]);
     setLegs([]);
     setStrategyName(null);
+    setShift(0);
+    setWidth(0);
+    setHedge(0);
+    setShowAddLeg(false);
 
     // Auto-log the fill into the DB journal (trades + legs). Best-effort: the
     // local simulator stays the source of truth if the backend is unreachable.
@@ -438,7 +540,156 @@ export default function PaperTradingPage() {
     const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry };
     setLegs(strategyDef.build(ctx));
     setStrategyName(strategyDef.name);
+    setShift(0);
+    setWidth(0);
+    setHedge(0);
+    setShowAddLeg(false);
   };
+
+  // ---- Strategy adjustment tools (Shift / Width / Hedge) ----
+  const moveLegByStrikes = (l, steps) => {
+    if (!steps || !l) return l;
+    const legChain = chainCache[l.expiry];
+    const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
+    if (strikes.length === 0) return l;
+    const idx = strikes.indexOf(l.strike);
+    if (idx === -1) return l;
+    const newIdx = Math.min(Math.max(idx + steps, 0), strikes.length - 1);
+    const newStrike = strikes[newIdx];
+    const row = legChain?.chain.find((r) => r.strike === newStrike) ?? chainByStrike.get(newStrike);
+    const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
+    return { ...l, strike: newStrike, price: price ?? l.price };
+  };
+
+  const resetAdjustments = () => {
+    setShift(0);
+    setWidth(0);
+    setHedge(0);
+  };
+
+  const applyShift = (delta) => {
+    setLegs((prev) => prev.map((l) => moveLegByStrikes(l, delta)));
+    setShift((s) => s + delta);
+    setStrategyName(null);
+  };
+
+  const applyWidth = (delta) => {
+    setLegs((prev) =>
+      prev.map((l) => {
+        const legChain = chainCache[l.expiry];
+        const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
+        const spotRef = legChain?.underlying_spot_price ?? spot;
+        if (strikes.length === 0 || spotRef == null) return l;
+        let atmIdx = 0;
+        let bestDiff = Infinity;
+        strikes.forEach((s, i) => {
+          const d = Math.abs(s - spotRef);
+          if (d < bestDiff) {
+            bestDiff = d;
+            atmIdx = i;
+          }
+        });
+        const idx = strikes.indexOf(l.strike);
+        if (idx === -1) return l;
+        const off = idx - atmIdx;
+        // Legs above ATM ride up, legs below ride down, ATM legs drift with
+        // their side — widening pushes wings out, narrowing pulls them in.
+        const dir = off === 0 ? (l.type === "call" ? 1 : -1) : Math.sign(off);
+        return moveLegByStrikes(l, dir * delta);
+      })
+    );
+    setWidth((w) => w + delta);
+    setStrategyName(null);
+  };
+
+  const applyHedge = (delta) => {
+    const nextHedge = Math.max(0, hedge + delta);
+    if (nextHedge === hedge) return;
+    if (delta > 0) {
+      // Add a protective long OTM leg, alternating call/put sides and creeping
+      // further OTM with each level (level 1 = long call +4, 2 = long put -4,
+      // 3 = long call +5, 4 = long put -5, ...).
+      const level = nextHedge;
+      const side = level % 2 === 1 ? "call" : "put";
+      const offset = 4 + Math.floor((level - 1) / 2);
+      const sign = side === "call" ? 1 : -1;
+      const strikeIdx = Math.min(Math.max(atmIndex + sign * offset, 0), strikesSorted.length - 1);
+      const strike = strikesSorted[strikeIdx];
+      if (strike == null) return;
+      const row = chainByStrike.get(strike);
+      const price = row ? (side === "call" ? row.call.ltp : row.put.ltp) : 0;
+      const newLeg = {
+        id: `hedge-${side}-${strike}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: side,
+        strike,
+        action: "buy",
+        qty: 1,
+        expiry,
+        price: price ?? 0,
+        hedge: true,
+      };
+      setLegs((prev) => [...prev, newLeg]);
+    } else {
+      setLegs((prev) => {
+        const hedgeLegs = prev.filter((l) => l.hedge);
+        if (hedgeLegs.length === 0) return prev;
+        const last = hedgeLegs[hedgeLegs.length - 1];
+        return prev.filter((l) => l.id !== last.id);
+      });
+    }
+    setHedge(nextHedge);
+    setStrategyName(null);
+  };
+
+  // ---- Draft portfolios & saved strategies ----
+  const addCustomLeg = ({ action, type, strike, qty, price }) => {
+    if (!strike || qty < 1) return;
+    setLegs((prev) => [
+      ...prev,
+      { id: `${type}-${strike}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, type, strike, action, qty, expiry, price: Number(price) || 0 },
+    ]);
+    setStrategyName(null);
+    setShowAddLeg(false);
+  };
+
+  const saveDraft = () => {
+    if (legs.length === 0) return;
+    const suggested = strategyName ?? `Draft ${drafts.length + 1}`;
+    const name = window.prompt("Name this draft portfolio:", suggested);
+    if (name === null) return;
+    setDrafts((prev) => [
+      { id: `draft-${Date.now()}`, name: name.trim() || suggested, symbol, expiry, legs: legs.map((l) => ({ ...l })), createdAt: new Date().toISOString() },
+      ...prev,
+    ]);
+  };
+
+  const deleteDraft = (id) => setDrafts((prev) => prev.filter((d) => d.id !== id));
+
+  const loadDraft = (d) => {
+    const sameSymbol = (d.symbol ?? "NIFTY") === symbol;
+    setStrategyName(null);
+    resetAdjustments();
+    setShowAddLeg(false);
+    if (sameSymbol) {
+      setLegs(d.legs.map((l) => ({ ...l })));
+      setExpiry(d.expiry ?? null);
+      if (d.expiry && !chainCache[d.expiry]) loadChain(d.expiry);
+    } else {
+      // The symbol-change effect resets the builder; re-apply the draft's legs
+      // after it has run.
+      setSymbol(d.symbol ?? "NIFTY");
+      setTimeout(() => {
+        setLegs(d.legs.map((l) => ({ ...l })));
+        setExpiry(d.expiry ?? null);
+        if (d.expiry && !chainCache[d.expiry]) loadChain(d.expiry);
+      }, 0);
+    }
+  };
+
+  const toggleSaved = (id) =>
+    setSavedStrategies((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const savedList = STRATEGIES.filter((s) => savedStrategies.includes(s.id));
 
   // ---- Zone C rows: DB journal (source of truth) + any local-only closed
   // trades that never synced (deduped by tradeId). ----
@@ -468,7 +719,38 @@ export default function PaperTradingPage() {
     );
   if (sessionExpired) return <SessionExpired />;
 
-  const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, minWidth: 0 };
+  const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
+  const popover = {
+    position: "absolute",
+    right: 0,
+    top: "calc(100% + 8px)",
+    zIndex: 60,
+    background: "#0F131B",
+    border: `1px solid ${C.border}`,
+    borderRadius: 10,
+    boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+    padding: "12px 14px",
+    minWidth: 280,
+  };
+  const headerBtn = {
+    fontSize: 11.5,
+    color: C.text,
+    background: C.surface2,
+    border: `1px solid ${C.border}`,
+    borderRadius: 7,
+    padding: "6px 12px",
+    cursor: "pointer",
+  };
+  const tabBtn = (active) => ({
+    fontSize: 10.5,
+    padding: "5px 11px",
+    borderRadius: 6,
+    border: `1px solid ${active ? C.gold : "transparent"}`,
+    background: active ? "rgba(201,161,90,0.1)" : "transparent",
+    color: active ? C.gold : C.muted,
+    cursor: "pointer",
+    fontWeight: active ? 700 : 400,
+  });
   const badge = (label, color, bg, bd) => ({
     padding: "2px 10px",
     borderRadius: 999,
@@ -483,14 +765,28 @@ export default function PaperTradingPage() {
   const eqColor = eqLast != null ? (eqLast >= paperStartingCapital ? C.green : C.red) : C.gold;
   const eqDelta = eqLast != null ? eqLast - paperStartingCapital : null;
 
+  const columnScroll = {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+    height: isMobile ? "auto" : "100%",
+    overflowY: isMobile ? "visible" : "auto",
+    paddingRight: isMobile ? 0 : 4,
+    paddingBottom: isMobile ? 0 : 2,
+  };
+
   return (
-    <div style={{ padding: isMobile ? 10 : 20 }}>
+    <div style={{ padding: isMobile ? 10 : 16 }}>
       <TopNav active="paper" />
       <style>{`
         .paper-row:hover { background: rgba(201,161,90,0.05); }
+        .od-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .od-scroll::-webkit-scrollbar-thumb { background: #242B3A; border-radius: 4px; }
+        .od-scroll::-webkit-scrollbar-track { background: transparent; }
       `}</style>
 
-      {/* ---------- Portfolio header bar ---------- */}
+      {/* ---------- Terminal header bar ---------- */}
       <div
         style={{
           display: "flex",
@@ -501,38 +797,107 @@ export default function PaperTradingPage() {
           background: C.surface,
           border: `1px solid ${C.border}`,
           borderRadius: 10,
-          padding: "12px 16px",
-          marginBottom: 16,
+          padding: "10px 14px",
+          marginBottom: 14,
         }}
       >
-        <div style={{ fontSize: fluid(14, 17), fontWeight: 800, letterSpacing: 1.5 }}>
-          📊 <span style={{ color: C.gold }}>PAPA TRADING</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: fluid(13, 15), fontWeight: 800, letterSpacing: 0.5 }}>
+            📊 <span style={{ color: C.gold }}>{symbol}</span>
+          </span>
+          {spot != null && (
+            <span style={{ fontSize: fluid(13, 16), fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{fmtIN(spot, 2)}</span>
+          )}
+          {spotChg != null && (
+            <span style={{ fontSize: 11.5, fontWeight: 700, color: spotChg >= 0 ? C.green : C.red, fontVariantNumeric: "tabular-nums" }}>
+              {spotChg >= 0 ? "▲" : "▼"} {Math.abs(spotChg).toFixed(2)}% <span style={{ color: C.faint, fontWeight: 400 }}>session</span>
+            </span>
+          )}
+          <span style={badge("SIMULATED MODE", C.gold, "rgba(201,161,90,0.12)", "rgba(201,161,90,0.35)")}>SIMULATED</span>
         </div>
+
         <div style={{ fontSize: 11.5, color: C.muted, letterSpacing: 1.2, textAlign: "center" }}>
           PAPER TRADING PORTFOLIO <span style={{ color: C.gold }}>· SIMULATED MODE</span>
         </div>
-        <div style={{ fontSize: fluid(13, 16) }}>
-          <span style={{ color: C.faint }}>💵 Balance: </span>
-          <span style={{ color: C.gold, fontWeight: 700 }}>₹{fmtIN(equity, 2)}</span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {/* Funds & Margins */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => { setFundsOpen((v) => !v); setSettingsOpen(false); }} style={headerBtn}>
+              💵 Funds &amp; Margins
+            </button>
+            {fundsOpen && (
+              <div style={popover}>
+                <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 8 }}>FUNDS &amp; MARGINS (MTM)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px" }}>
+                  <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital)}`} fs={12.5} />
+                  <Stat label="Cash" value={`₹${fmtIN(paperCash)}`} fs={12.5} />
+                  <Stat label="Equity (MTM)" value={`₹${fmtIN(equity)}`} fs={12.5} color={C.gold} />
+                  <Stat label="Total P&L" value={`₹${fmtIN(totalPnl)}`} fs={12.5} color={totalPnl >= 0 ? C.green : C.red} />
+                  <Stat label="Unrealized" value={`₹${fmtIN(totalUnrealized)}`} fs={12.5} color={totalUnrealized >= 0 ? C.green : C.red} />
+                  <Stat label="Realized" value={`₹${fmtIN(totalRealized)}`} fs={12.5} color={totalRealized >= 0 ? C.green : C.red} />
+                  <Stat label="Win rate" value={journal?.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"} fs={12.5} />
+                  <Stat
+                    label="Profit factor"
+                    value={journal?.stats.profit_factor != null ? journal.stats.profit_factor.toFixed(2) : "—"}
+                    fs={12.5}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Settings */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => { setSettingsOpen((v) => !v); setFundsOpen(false); }} style={headerBtn}>
+              ⚙️ Settings
+            </button>
+            {settingsOpen && (
+              <div style={popover}>
+                <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 8 }}>SETTINGS &amp; RESETS</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <button
+                    onClick={resetPaperPortfolio}
+                    style={{ fontSize: 11.5, color: C.red, background: "rgba(225,82,82,0.08)", border: "1px solid rgba(225,82,82,0.35)", borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}
+                  >
+                    Reset Paper Portfolio
+                  </button>
+                  <button
+                    onClick={exportHistoryCsv}
+                    style={{ fontSize: 11.5, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}
+                  >
+                    Export Trades CSV
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <span style={{ fontSize: fluid(12, 14) }}>
+            <span style={{ color: C.faint }}>💵 </span>
+            <span style={{ color: C.gold, fontWeight: 700 }}>₹{fmtIN(equity, 2)}</span>
+          </span>
         </div>
       </div>
 
       {!primaryChain ? (
         <Centered>Loading chain…</Centered>
       ) : (
+        /* ============ OUTER 40 / 60 SPLIT (independent column scroll) ============ */
         <div
+          className="od-scroll"
           style={{
             display: "grid",
-            gridTemplateColumns: isMobile ? "1fr" : "clamp(320px, 30vw, 450px) minmax(0, 1fr)",
-            gap: 16,
-            alignItems: "start",
+            gridTemplateColumns: isMobile ? "1fr" : "4fr 6fr",
+            gap: 14,
+            alignItems: "stretch",
+            height: isMobile ? "auto" : "calc(100vh - 178px)",
+            minHeight: isMobile ? 0 : 520,
           }}
         >
-          {/* Zone A widened ~50% (300px -> up to 450px) while staying fluid; the
-              Zone B column absorbs the rest via minmax(0, 1fr). */}
-          {/* ================= ZONE A · CONTROL SIDEBAR ================= */}
-          <aside style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
-            {/* New Strategy builder */}
+          {/* ================= ZONE A · CONTROL SIDEBAR (40%) ================= */}
+          <aside style={columnScroll}>
+            {/* ---------- New Strategy builder ---------- */}
             <div style={panel}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -547,16 +912,16 @@ export default function PaperTradingPage() {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      fontSize: 16,
+                      fontSize: 14,
                       fontWeight: 800,
                       lineHeight: 1,
                       flexShrink: 0,
                     }}
                   >
-                    +
+                    🛠️
                   </span>
                   <div>
-                    <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>CREATE NEW STRATEGY</div>
+                    <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>NEW STRATEGY BUILDER</div>
                     <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.4 }}>build legs from the live chain</div>
                   </div>
                 </div>
@@ -564,7 +929,7 @@ export default function PaperTradingPage() {
                   <button onClick={resetLegPrices} style={{ fontSize: 11, color: C.gold, background: "none", border: "none", cursor: "pointer" }}>
                     ↻ Reset Prices
                   </button>
-                  <button onClick={() => setLegs([])} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", cursor: "pointer" }}>
+                  <button onClick={() => { setLegs([]); resetAdjustments(); setShowAddLeg(false); }} style={{ fontSize: 11, color: C.muted, background: "none", border: "none", cursor: "pointer" }}>
                     Clear Trades
                   </button>
                 </div>
@@ -591,416 +956,676 @@ export default function PaperTradingPage() {
               </div>
               {error && <div style={{ color: C.red, fontSize: 11.5, marginTop: 8 }}>{error}</div>}
 
-              {legs.length === 0 ? (
-                <div style={{ fontSize: 12, color: C.faint, padding: "14px 0" }}>
-                  No legs yet. Pick a ready-made strategy below, or use the Option Chain page to build one.
-                </div>
-              ) : (
-                <>
-                  <div style={{ overflowX: "auto", marginTop: 10 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-                      <thead>
-                        <tr style={{ color: C.muted, fontSize: 10, textAlign: "left" }}>
-                          <th style={{ padding: 4 }}>B/S</th>
-                          <th style={{ padding: 4 }}>Strike</th>
-                          <th style={{ padding: 4 }}>Type</th>
-                          <th style={{ padding: 4 }}>Lots</th>
-                          <th style={{ padding: 4 }}>Price</th>
-                          <th style={{ padding: 4 }}></th>
+              {/* Legs table */}
+              <div style={{ overflowX: "auto", marginTop: 10 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                  <thead>
+                    <tr style={{ color: C.muted, fontSize: 9.5, textAlign: "left" }}>
+                      <th style={{ padding: 4 }}>B/S</th>
+                      <th style={{ padding: 4 }}>Expiry</th>
+                      <th style={{ padding: 4 }}>Strike</th>
+                      <th style={{ padding: 4 }}>Type</th>
+                      <th style={{ padding: 4 }}>Lots</th>
+                      <th style={{ padding: 4 }}>Price</th>
+                      <th style={{ padding: 4 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {legs.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} style={{ padding: "14px 4px", color: C.faint, fontSize: 11, lineHeight: 1.5 }}>
+                          No legs yet — pick a ready-made strategy below or hit <b>Add / Edit</b> to build one manually.
+                        </td>
+                      </tr>
+                    ) : (
+                      legs.map((l) => (
+                        <tr key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 4 }}>
+                            <button
+                              onClick={() => updateLeg(l.id, { action: l.action === "buy" ? "sell" : "buy" })}
+                              title="Toggle buy / sell"
+                              style={{
+                                background: l.action === "buy" ? C.green : C.red,
+                                color: "#0B0E14",
+                                border: "none",
+                                borderRadius: 4,
+                                padding: "2px 7px",
+                                fontWeight: 700,
+                                cursor: "pointer",
+                                fontSize: 10.5,
+                              }}
+                            >
+                              {l.action === "buy" ? "B" : "S"}
+                            </button>
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <select
+                              value={l.expiry ?? ""}
+                              onChange={(e) => changeLegExpiry(l.id, e.target.value)}
+                              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 2px", fontSize: 10, width: 74, maxWidth: 74 }}
+                            >
+                              {expiries.map((exp) => (
+                                <option key={exp} value={exp}>
+                                  {fmtExpiry(exp)}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <StepButton onClick={() => changeLegStrike(l.id, -1)}>−</StepButton>
+                              <span style={{ minWidth: 44, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{fmtIN(l.strike)}</span>
+                              <StepButton onClick={() => changeLegStrike(l.id, 1)}>+</StepButton>
+                            </div>
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <button
+                              onClick={() => updateLeg(l.id, { type: l.type === "call" ? "put" : "call" })}
+                              style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 7px", cursor: "pointer", fontSize: 10.5 }}
+                            >
+                              {l.type === "call" ? "CE" : "PE"}
+                            </button>
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                              <StepButton onClick={() => updateLeg(l.id, { qty: Math.max(1, l.qty - 1) })}>−</StepButton>
+                              <span
+                                style={{ minWidth: 18, textAlign: "center" }}
+                                title={multiplier > 1 ? `${l.qty} base lots × ${multiplier} multiplier` : undefined}
+                              >
+                                {l.qty * multiplier}
+                              </span>
+                              <StepButton onClick={() => updateLeg(l.id, { qty: l.qty + 1 })}>+</StepButton>
+                            </div>
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <input
+                              type="number"
+                              value={l.price}
+                              onChange={(e) => updateLeg(l.id, { price: Number(e.target.value) || 0 })}
+                              style={{ width: 54, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 4px", fontSize: 10.5 }}
+                            />
+                          </td>
+                          <td style={{ padding: 4 }}>
+                            <button
+                              onClick={() => removeLeg(l.id)}
+                              title="Remove leg"
+                              style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}
+                            >
+                              🗑️
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {legs.map((l) => (
-                          <tr key={l.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                            <td style={{ padding: 4 }}>
-                              <button
-                                onClick={() => updateLeg(l.id, { action: l.action === "buy" ? "sell" : "buy" })}
-                                style={{
-                                  background: l.action === "buy" ? C.green : C.red,
-                                  color: "#0B0E14",
-                                  border: "none",
-                                  borderRadius: 4,
-                                  padding: "2px 7px",
-                                  fontWeight: 700,
-                                  cursor: "pointer",
-                                  fontSize: 10.5,
-                                }}
-                              >
-                                {l.action === "buy" ? "B" : "S"}
-                              </button>
-                            </td>
-                            <td style={{ padding: 4 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                                <StepButton onClick={() => changeLegStrike(l.id, -1)}>−</StepButton>
-                                <span style={{ minWidth: 44, textAlign: "center" }}>{fmtIN(l.strike)}</span>
-                                <StepButton onClick={() => changeLegStrike(l.id, 1)}>+</StepButton>
-                              </div>
-                            </td>
-                            <td style={{ padding: 4 }}>
-                              <button
-                                onClick={() => updateLeg(l.id, { type: l.type === "call" ? "put" : "call" })}
-                                style={{ background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 7px", cursor: "pointer", fontSize: 10.5 }}
-                              >
-                                {l.type === "call" ? "CE" : "PE"}
-                              </button>
-                            </td>
-                            <td style={{ padding: 4 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                                <StepButton onClick={() => updateLeg(l.id, { qty: Math.max(1, l.qty - 1) })}>−</StepButton>
-                                <span
-                                  style={{ minWidth: 18, textAlign: "center" }}
-                                  title={multiplier > 1 ? `${l.qty} base lots × ${multiplier} multiplier` : undefined}
-                                >
-                                  {l.qty * multiplier}
-                                </span>
-                                <StepButton onClick={() => updateLeg(l.id, { qty: l.qty + 1 })}>+</StepButton>
-                              </div>
-                            </td>
-                            <td style={{ padding: 4 }}>
-                              <input
-                                type="number"
-                                value={l.price}
-                                onChange={(e) => updateLeg(l.id, { price: Number(e.target.value) || 0 })}
-                                style={{ width: 56, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 4px", fontSize: 10.5 }}
-                              />
-                            </td>
-                            <td style={{ padding: 4 }}>
-                              <button onClick={() => removeLeg(l.id)} style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 13 }}>
-                                ×
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-                  <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
-                    <label style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
-                      ×Multiplier
-                      <input
-                        type="number"
-                        min={1}
-                        value={multiplier}
-                        onChange={(e) => setMultiplier(Math.max(1, Number(e.target.value) || 1))}
-                        style={{ width: 46, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 4px", fontSize: 10.5 }}
-                      />
-                    </label>
-                    <div style={{ fontSize: 11.5 }}>
-                      <span style={{ color: C.faint }}>{netPerLot >= 0 ? "Pay" : "Receive"}: </span>
-                      <span style={{ fontWeight: 600 }}>{Math.abs(netPerLot).toFixed(2)}</span>
-                    </div>
-                    <div style={{ fontSize: 11.5 }}>
-                      <span style={{ color: C.faint }}>{netTotal >= 0 ? "Premium Pay" : "Premium Receive"}: </span>
-                      <span style={{ fontWeight: 600 }}>₹{fmtIN(Math.abs(netTotal))}</span>
-                    </div>
+              {legs.length > 0 && (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
+                    ×Multiplier
+                    <input
+                      type="number"
+                      min={1}
+                      value={multiplier}
+                      onChange={(e) => setMultiplier(Math.max(1, Number(e.target.value) || 1))}
+                      style={{ width: 46, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 4px", fontSize: 10.5 }}
+                    />
+                  </label>
+                  <div style={{ fontSize: 11.5 }}>
+                    <span style={{ color: C.faint }}>{netPerLot >= 0 ? "Pay" : "Receive"}: </span>
+                    <span style={{ fontWeight: 600 }}>{Math.abs(netPerLot).toFixed(2)}</span>
                   </div>
+                  <div style={{ fontSize: 11.5 }}>
+                    <span style={{ color: C.faint }}>{netTotal >= 0 ? "Premium Pay" : "Premium Receive"}: </span>
+                    <span style={{ fontWeight: 600 }}>₹{fmtIN(Math.abs(netTotal))}</span>
+                  </div>
+                </div>
+              )}
 
-                  <button
-                    onClick={executeTradeAll}
-                    style={{ marginTop: 12, width: "100%", background: C.gold, color: "#0B0E14", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontSize: 12.5 }}
-                  >
-                    Trade All (Paper)
-                  </button>
-                </>
+              {/* Strategy adjustment steppers */}
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                <StepperRow label="Shift" value={shift} onDec={() => applyShift(-1)} onInc={() => applyShift(1)} title="Move every leg one strike up or down" />
+                <StepperRow label="Width" value={width} onDec={() => applyWidth(-1)} onInc={() => applyWidth(1)} title="Push wings away from / pull toward the ATM strike" />
+                <StepperRow label="Hedge" value={hedge} onDec={() => applyHedge(-1)} onInc={() => applyHedge(1)} title="Add / remove a protective long OTM leg" />
+              </div>
+
+              {/* Action row */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.35fr", gap: 8, marginTop: 12 }}>
+                <button
+                  onClick={() => setShowAddLeg((v) => !v)}
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: showAddLeg ? C.gold : C.text,
+                    background: showAddLeg ? "rgba(201,161,90,0.1)" : C.surface2,
+                    border: `1px solid ${showAddLeg ? C.gold : C.border}`,
+                    borderRadius: 8,
+                    padding: "8px 6px",
+                    cursor: "pointer",
+                  }}
+                >
+                  {showAddLeg ? "Close" : "Add / Edit"}
+                </button>
+                <button
+                  onClick={saveDraft}
+                  title="Save the current legs as a draft portfolio"
+                  style={{ fontSize: 11.5, fontWeight: 700, color: C.text, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 6px", cursor: "pointer" }}
+                >
+                  Add to Drafts
+                </button>
+                <button
+                  onClick={executeTradeAll}
+                  style={{ fontSize: 11.5, fontWeight: 800, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 8, padding: "8px 6px", cursor: "pointer" }}
+                >
+                  Trade All
+                </button>
+              </div>
+
+              {showAddLeg && (
+                <AddLegForm onAdd={addCustomLeg} chainByStrike={chainByStrike} strikesSorted={strikesSorted} atmIndex={atmIndex} />
               )}
             </div>
 
-            {/* Ready-made strategies */}
+            {/* ---------- Lower navigation: ready-made / positions / saved / drafts ---------- */}
             <div style={panel}>
-              <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text, marginBottom: 10 }}>💎 READY-MADE STRATEGIES</div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-                {STRATEGY_CATEGORIES.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setCategory(cat)}
-                    style={{
-                      padding: "5px 12px",
-                      borderRadius: 16,
-                      fontSize: 11,
-                      border: `1px solid ${category === cat ? C.gold : C.border}`,
-                      background: category === cat ? "rgba(201,161,90,0.1)" : "transparent",
-                      color: category === cat ? C.gold : C.muted,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {cat}
+              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap", borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+                {[
+                  ["ready", "Ready-made"],
+                  ["positions", "Positions"],
+                  ["saved", "Saved Strategies"],
+                  ["drafts", "Draft Portfolios"],
+                ].map(([key, label]) => (
+                  <button key={key} onClick={() => setBuilderTab(key)} style={tabBtn(builderTab === key)}>
+                    {label}
                   </button>
                 ))}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
-                {strategiesFor(category).map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => loadStrategy(s)}
-                    style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", cursor: "pointer", textAlign: "left", width: "100%", minWidth: 0 }}
-                  >
-                    <span style={{ width: 34, flexShrink: 0 }}>
-                      <ShapeIcon shape={s.shape} />
-                    </span>
-                    <span style={{ fontSize: fluid(11, 12.5), color: C.text, lineHeight: 1.3 }}>{s.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
 
-            {/* Settings & resets */}
-            <div style={panel}>
-              <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text, marginBottom: 10 }}>⚙️ SETTINGS & RESETS</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <button
-                  onClick={resetPaperPortfolio}
-                  style={{ fontSize: 11.5, color: C.red, background: "rgba(225,82,82,0.08)", border: "1px solid rgba(225,82,82,0.35)", borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}
-                >
-                  Reset Paper Portfolio
-                </button>
-                <button
-                  onClick={exportHistoryCsv}
-                  style={{ fontSize: 11.5, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "8px 10px", cursor: "pointer" }}
-                >
-                  Export Trades CSV
-                </button>
-              </div>
+              {/* Ready-made strategies with category filter + thumbnails */}
+              {builderTab === "ready" && (
+                <>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                    {STRATEGY_CATEGORIES.map((cat) => (
+                      <button
+                        key={cat}
+                        onClick={() => setCategory(cat)}
+                        style={{
+                          padding: "4px 12px",
+                          borderRadius: 16,
+                          fontSize: 11,
+                          border: `1px solid ${category === cat ? C.gold : C.border}`,
+                          background: category === cat ? "rgba(201,161,90,0.1)" : "transparent",
+                          color: category === cat ? C.gold : C.muted,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
+                    {strategiesFor(category).map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => loadStrategy(s)}
+                        style={{
+                          position: "relative",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          background: C.surface2,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 8,
+                          padding: "10px 10px 8px",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <div style={{ width: "100%", flexShrink: 0 }}>
+                          <ShapeIcon shape={s.shape} />
+                        </div>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text, lineHeight: 1.25 }}>{s.name}</span>
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSaved(s.id);
+                          }}
+                          title={savedStrategies.includes(s.id) ? "Remove from saved" : "Save strategy"}
+                          style={{ position: "absolute", top: 6, right: 8, fontSize: 13, color: savedStrategies.includes(s.id) ? C.gold : C.faint, cursor: "pointer" }}
+                        >
+                          {savedStrategies.includes(s.id) ? "★" : "☆"}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Open positions quick view */}
+              {builderTab === "positions" &&
+                (positionsWithLtp.length === 0 ? (
+                  <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0" }}>No open positions. Trade a strategy to see it here.</div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {positionsWithLtp.map((p) => (
+                      <div key={p.id} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700 }}>
+                              <span style={{ color: p.action === "buy" ? C.green : C.red }}>{p.action.toUpperCase()}</span> {p.symbol}{" "}
+                              {fmtIN(p.strike)} {p.type === "call" ? "CE" : "PE"}×{p.qty}
+                            </div>
+                            <div style={{ fontSize: 10, color: C.faint }}>{p.strategyName ?? "Custom"} · {p.expiry}</div>
+                          </div>
+                          <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700, color: p.unrealizedPnl == null ? C.muted : p.unrealizedPnl >= 0 ? C.green : C.red }}>
+                              {p.unrealizedPnl == null ? "—" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl)}`}
+                            </div>
+                            <button
+                              onClick={() => closePosition(p.id)}
+                              style={{ fontSize: 10, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "2px 8px", cursor: "pointer", marginTop: 2 }}
+                            >
+                              Close
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+
+              {/* Bookmarked ready-made strategies */}
+              {builderTab === "saved" &&
+                (savedList.length === 0 ? (
+                  <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0", lineHeight: 1.5 }}>
+                    Nothing saved yet. Tap the ☆ on any ready-made strategy card to bookmark it here.
+                  </div>
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
+                    {savedList.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          loadStrategy(s);
+                          setBuilderTab("ready");
+                        }}
+                        style={{
+                          position: "relative",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 6,
+                          background: C.surface2,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 8,
+                          padding: "10px 10px 8px",
+                          cursor: "pointer",
+                          textAlign: "left",
+                        }}
+                      >
+                        <div style={{ width: "100%", flexShrink: 0 }}>
+                          <ShapeIcon shape={s.shape} />
+                        </div>
+                        <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text, lineHeight: 1.25 }}>{s.name}</span>
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleSaved(s.id);
+                          }}
+                          title="Remove from saved"
+                          style={{ position: "absolute", top: 6, right: 8, fontSize: 13, color: C.gold, cursor: "pointer" }}
+                        >
+                          ★
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+
+              {/* Draft portfolios */}
+              {builderTab === "drafts" &&
+                (drafts.length === 0 ? (
+                  <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0", lineHeight: 1.5 }}>
+                    No drafts yet. Build a strategy and press <b>Add to Drafts</b> to park it here for later.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {drafts.map((d) => (
+                      <div key={d.id} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 11.5, fontWeight: 700 }}>{d.name}</div>
+                            <div style={{ fontSize: 10, color: C.faint }}>
+                              {d.symbol} · {d.expiry} · {d.legs.length} leg{d.legs.length === 1 ? "" : "s"}
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                            <button
+                              onClick={() => loadDraft(d)}
+                              style={{ fontSize: 10.5, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 9px", cursor: "pointer" }}
+                            >
+                              Load
+                            </button>
+                            <button
+                              onClick={() => deleteDraft(d.id)}
+                              title="Delete draft"
+                              style={{ fontSize: 11, color: C.red, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
             </div>
           </aside>
 
-          {/* ================= ZONE B · ANALYTICS & MONITORING ================= */}
-          <section style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
-            {/* Stats strip */}
-            <div style={panel}>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? 118 : 132}px, 1fr))`, gap: 14 }}>
-                <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital)}`} fs={fluid(14, 18)} />
-                <Stat label="Cash" value={`₹${fmtIN(paperCash)}`} fs={fluid(14, 18)} />
-                <Stat label="Equity (MTM)" value={`₹${fmtIN(equity)}`} color={C.gold} fs={fluid(14, 18)} />
-                <Stat label="Unrealized P&L" value={`₹${fmtIN(totalUnrealized)}`} color={totalUnrealized >= 0 ? C.green : C.red} fs={fluid(14, 18)} />
-                <Stat label="Realized P&L" value={`₹${fmtIN(totalRealized)}`} color={totalRealized >= 0 ? C.green : C.red} fs={fluid(14, 18)} />
-                <Stat
-                  label="Win rate"
-                  value={journal?.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"}
-                  fs={fluid(14, 18)}
-                />
-                <Stat
-                  label="Profit factor"
-                  value={
-                    journal
-                      ? journal.stats.profit_factor != null
-                        ? journal.stats.profit_factor.toFixed(2)
-                        : journal.stats.closed_trades && journal.stats.gross_profit > 0
-                          ? "∞"
-                          : "—"
-                      : "—"
-                  }
-                  fs={fluid(14, 18)}
-                />
-                <Stat label="Total P&L" value={`₹${fmtIN(totalPnl)}`} color={totalPnl >= 0 ? C.green : C.red} fs={fluid(14, 18)} />
-              </div>
+          {/* ================= ZONE B · MAIN PERFORMANCE WORKSPACE (60%) ================= */}
+          <section style={columnScroll}>
+            {/* Header row: risk / reward summary blocks */}
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 10 }}>
+              <SummaryBlock
+                label="Max Profit"
+                value={!legs.length ? "—" : maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(maxProfit)}`}
+                sub={roiPct != null ? `+${roiPct.toFixed(1)}% on premium` : "shown range"}
+                color={C.green}
+              />
+              <SummaryBlock
+                label="Max Loss"
+                value={!legs.length ? "—" : maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(maxLoss))}`}
+                sub={netTotal < 0 ? "credit received" : netTotal > 0 ? "debit paid" : "shown range"}
+                color={C.red}
+              />
+              <SummaryBlock
+                label="Breakeven"
+                value={!legs.length ? "—" : breakevens.length ? breakevens.map((b) => fmtIN(b)).join(" · ") : "—"}
+                sub="P&L = 0 at expiry"
+                color={C.gold}
+              />
+              <SummaryBlock
+                label="Reward / Risk"
+                value={!legs.length ? "—" : rewardRisk != null ? rewardRisk.toFixed(2) : "—"}
+                sub="max profit ÷ max loss"
+                color={rewardRisk != null && rewardRisk >= 1 ? C.green : C.text}
+              />
             </div>
 
-            {/* Charts row: payoff (40%) + account growth equity curve (60%) */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 3fr", gap: 16, alignItems: "stretch" }}>
-              {/* Payoff graph / P&L table / Greeks */}
-              <div style={panel}>
-                <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-                  {[
-                    ["graph", "Payoff Graph"],
-                    ["table", "P&L Table"],
-                    ["greeks", "Greeks"],
-                  ].map(([key, label]) => (
-                    <button
-                      key={key}
-                      onClick={() => setPayoffTab(key)}
-                      style={{
-                        fontSize: 11,
-                        padding: "5px 10px",
-                        borderRadius: 6,
-                        border: `1px solid ${payoffTab === key ? C.gold : C.border}`,
-                        background: payoffTab === key ? "rgba(201,161,90,0.1)" : "transparent",
-                        color: payoffTab === key ? C.gold : C.muted,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {legs.length === 0 ? (
-                  <div style={{ fontSize: 12, color: C.faint, padding: "28px 0", textAlign: "center" }}>
-                    Add legs to see the payoff graph, table, and Greeks here.
-                  </div>
-                ) : payoffTab === "graph" ? (
-                  <>
-                    <div style={{ display: "flex", gap: 20, marginBottom: 10, flexWrap: "wrap" }}>
-                      <Stat label="Max profit (shown range)" value={`₹${fmtIN(maxProfit)}`} color={C.green} />
-                      <Stat label="Max loss (shown range)" value={`₹${fmtIN(maxLoss)}`} color={C.red} />
-                    </div>
-                    <div style={{ height: 280 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ComposedChart data={payoffData}>
-                          <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
-                          <XAxis dataKey="strike" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
-                          <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
-                          <YAxis yAxisId="oi" orientation="right" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
-                          <ReferenceLine yAxisId="pnl" y={0} stroke={C.faint} />
-                          {spot != null && <ReferenceLine yAxisId="pnl" x={strikesSorted.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))} stroke={C.gold} strokeDasharray="4 2" />}
-                          <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
-                          <Bar yAxisId="oi" dataKey="callOI" fill="rgba(225,82,82,0.5)" name="Call OI" />
-                          <Bar yAxisId="oi" dataKey="putOI" fill="rgba(76,175,125,0.5)" name="Put OI" />
-                          <Line yAxisId="pnl" type="monotone" dataKey="pnl" stroke={C.gold} strokeWidth={2} dot={false} name="P&L" />
-                        </ComposedChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
-                        Target price: <span style={{ color: C.gold, fontWeight: 600 }}>{targetPrice != null ? fmtIN(targetPrice, 2) : "-"}</span>{" "}
-                        ({targetPct >= 0 ? "+" : ""}
-                        {targetPct}%)
-                      </div>
-                      <input
-                        type="range"
-                        min={-15}
-                        max={15}
-                        step={0.5}
-                        value={targetPct}
-                        onChange={(e) => setTargetPct(Number(e.target.value))}
-                        style={{ width: "100%" }}
-                      />
-                      {targetPnl != null && (
-                        <div style={{ fontSize: 12, marginTop: 6 }}>
-                          Projected {targetPnl >= 0 ? "profit" : "loss"}:{" "}
-                          <span style={{ color: targetPnl >= 0 ? C.green : C.red, fontWeight: 700 }}>₹{fmtIN(Math.abs(targetPnl))}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    <div style={{ fontSize: 10, color: C.faint, marginTop: 10 }}>
-                      Bars show live open interest (red = Call OI, green = Put OI) at each strike, at expiry payoff.
-                    </div>
-                  </>
-                ) : payoffTab === "table" ? (
-                  <div style={{ overflowY: "auto", maxHeight: 340 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-                      <thead>
-                        <tr style={{ color: C.muted, fontSize: 10 }}>
-                          <th style={{ padding: 6, textAlign: "left" }}>Underlying at expiry</th>
-                          <th style={{ padding: 6 }}>P&L</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {payoffData.map((d) => (
-                          <tr key={d.strike} style={{ borderTop: `1px solid ${C.border}` }}>
-                            <td style={{ padding: 6 }}>{fmtIN(d.strike)}</td>
-                            <td style={{ padding: 6, color: d.pnl >= 0 ? C.green : C.red }}>₹{fmtIN(d.pnl)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, marginBottom: 10 }}>
-                      <thead>
-                        <tr style={{ color: C.muted, fontSize: 10, textAlign: "left" }}>
-                          <th style={{ padding: 6 }}>Leg</th>
-                          <th style={{ padding: 6 }}>Delta</th>
-                          <th style={{ padding: 6 }}>Gamma</th>
-                          <th style={{ padding: 6 }}>Theta</th>
-                          <th style={{ padding: 6 }}>Vega</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {greeksRows.map((r) => (
-                          <tr key={r.leg.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                            <td style={{ padding: 6 }}>
-                              {r.leg.action.toUpperCase()} {r.leg.strike} {r.leg.type === "call" ? "CE" : "PE"}
-                            </td>
-                            <td style={{ padding: 6 }}>{r.delta != null ? r.delta.toFixed(2) : "-"}</td>
-                            <td style={{ padding: 6 }}>{r.gamma != null ? r.gamma.toFixed(4) : "-"}</td>
-                            <td style={{ padding: 6 }}>{r.theta != null ? r.theta.toFixed(2) : "-"}</td>
-                            <td style={{ padding: 6 }}>{r.vega != null ? r.vega.toFixed(2) : "-"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 700 }}>
-                          <td style={{ padding: 6 }}>Total</td>
-                          <td style={{ padding: 6 }}>{greeksTotals.delta.toFixed(2)}</td>
-                          <td style={{ padding: 6 }}>{greeksTotals.gamma.toFixed(4)}</td>
-                          <td style={{ padding: 6 }}>{greeksTotals.theta.toFixed(2)}</td>
-                          <td style={{ padding: 6 }}>{greeksTotals.vega.toFixed(2)}</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                    <div style={{ fontSize: 10, color: C.faint }}>
-                      Position-level Greeks = each leg's Greek × direction × lots × lot size × multiplier, summed.
-                    </div>
-                  </div>
-                )}
+            {/* Feature navigation + interactive workspace */}
+            <div style={panel}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
+                {[
+                  ["graph", "Payoff Graph"],
+                  ["table", "P&L Table"],
+                  ["greeks", "Greeks"],
+                  ["strategyChart", "Strategy Chart"],
+                ].map(([key, label]) => (
+                  <button key={key} onClick={() => setPayoffTab(key)} style={tabBtn(payoffTab === key)}>
+                    {label}
+                  </button>
+                ))}
               </div>
 
-              {/* Account growth (equity curve) */}
-              <div style={panel}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>📈 ACCOUNT GROWTH (EQUITY CURVE)</div>
-                    {eqDelta != null && (
-                      <span
-                        style={{
-                          fontSize: 10.5,
-                          fontWeight: 700,
-                          color: eqDelta >= 0 ? C.green : C.red,
-                          background: eqDelta >= 0 ? "rgba(76,175,125,0.1)" : "rgba(225,82,82,0.1)",
-                          border: `1px solid ${eqDelta >= 0 ? "rgba(76,175,125,0.35)" : "rgba(225,82,82,0.35)"}`,
-                          borderRadius: 999,
-                          padding: "2px 9px",
-                        }}
-                      >
-                        {eqDelta >= 0 ? "▲" : "▼"} {fmtIN(Math.abs(eqDelta))} vs start
-                      </span>
-                    )}
-                  </div>
-                  {equityHistory.length > 1 && (
-                    <div style={{ fontSize: 11, color: C.faint }}>
-                      Last: <span style={{ color: eqColor, fontWeight: 700 }}>₹{fmtIN(eqLast)}</span>
-                    </div>
-                  )}
+              {legs.length === 0 ? (
+                <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>
+                  Add legs to see the payoff graph, P&amp;L table, Greeks and strategy chart here.
                 </div>
-                {equityHistory.length <= 1 ? (
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 280, fontSize: 12, color: C.faint, textAlign: "center", padding: "0 20px" }}>
-                    The equity curve builds while you trade during market hours (09:15–15:30 IST). Trade a few paper positions and it will draw here.
-                  </div>
-                ) : (
-                  <div style={{ height: 280 }}>
+              ) : payoffTab === "graph" ? (
+                <>
+                  <div style={{ height: isMobile ? 260 : 360 }}>
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={equityHistory}>
+                      <ComposedChart data={payoffData}>
                         <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
-                        <XAxis
-                          dataKey="time"
-                          stroke={C.faint}
-                          fontSize={10.5}
-                          tickFormatter={(t) => new Date(t).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
-                        />
-                        <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={80} />
-                        <ReferenceLine y={paperStartingCapital} stroke={C.faint} strokeDasharray="4 2" />
-                        <Tooltip
-                          contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }}
-                          labelFormatter={(t) => new Date(t).toLocaleString("en-IN")}
-                          formatter={(v) => [`₹${fmtIN(v)}`, "Equity"]}
-                        />
-                        <defs>
-                          <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={eqColor} stopOpacity={0.3} />
-                            <stop offset="100%" stopColor={eqColor} stopOpacity={0.02} />
-                          </linearGradient>
-                        </defs>
-                        <Area type="monotone" dataKey="equity" stroke="none" fill="url(#eqFill)" />
-                        <Line type="monotone" dataKey="equity" stroke={eqColor} strokeWidth={2} dot={false} name="Equity" />
-                      </LineChart>
+                        <XAxis dataKey="strike" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
+                        <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
+                        <YAxis yAxisId="oi" orientation="right" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
+                        <ReferenceLine yAxisId="pnl" y={0} stroke={C.faint} />
+                        {spot != null && (
+                          <ReferenceLine yAxisId="pnl" x={strikesSorted.reduce((a, b) => (Math.abs(b - spot) < Math.abs(a - spot) ? b : a))} stroke={C.gold} strokeDasharray="4 2" />
+                        )}
+                        <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
+                        <Bar yAxisId="oi" dataKey="callOI" fill="rgba(225,82,82,0.5)" name="Call OI" />
+                        <Bar yAxisId="oi" dataKey="putOI" fill="rgba(76,175,125,0.5)" name="Put OI" />
+                        <Line yAxisId="pnl" type="monotone" dataKey="pnl" stroke={C.gold} strokeWidth={2} dot={false} name="P&L" />
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
+
+                  {/* Bottom controls: target slider + date-to-expiry timeline */}
+                  <div style={{ marginTop: 12, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                      <span style={{ fontSize: 11.5, color: C.muted }}>
+                        <span style={{ color: C.text, fontWeight: 700 }}>{symbol}</span> Target:{" "}
+                        <span style={{ color: C.gold, fontWeight: 700 }}>{targetPrice != null ? fmtIN(targetPrice, 2) : "—"}</span>
+                        <span style={{ color: targetPct >= 0 ? C.green : C.red, fontWeight: 700 }}>
+                          {" "}({targetPct >= 0 ? "+" : ""}
+                          {targetPct}%)
+                        </span>
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <StepButton onClick={() => setTargetPct((v) => Math.max(-15, +(v - 0.5).toFixed(1)))}>−</StepButton>
+                        <span style={{ fontSize: 10.5, color: C.muted }}>0.5%</span>
+                        <StepButton onClick={() => setTargetPct((v) => Math.min(15, +(v + 0.5).toFixed(1)))}>+</StepButton>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min={-15}
+                      max={15}
+                      step={0.5}
+                      value={targetPct}
+                      onChange={(e) => setTargetPct(Number(e.target.value))}
+                      style={{ width: "100%" }}
+                    />
+                    {targetPnl != null && (
+                      <div style={{ fontSize: 12, marginTop: 6 }}>
+                        Projected {targetPnl >= 0 ? "profit" : "loss"}:{" "}
+                        <span style={{ color: targetPnl >= 0 ? C.green : C.red, fontWeight: 700 }}>₹{fmtIN(Math.abs(targetPnl))}</span>
+                      </div>
+                    )}
+                    {daysToExpiry != null && (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <span style={{ fontSize: 11, color: C.muted }}>
+                            Date to expiry: <span style={{ color: C.gold, fontWeight: 700 }}>{fmtExpiry(expiry)}</span>
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: daysToExpiry <= 3 ? C.red : C.muted }}>
+                            {daysToExpiry === 0 ? "EXPIRY DAY" : `D-${daysToExpiry}`}
+                          </span>
+                        </div>
+                        <div style={{ position: "relative", height: 6, borderRadius: 3, background: "#0B0E14", overflow: "hidden" }}>
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 0,
+                              bottom: 0,
+                              left: 0,
+                              width: `${expiryFillPct}%`,
+                              background: "linear-gradient(90deg, rgba(201,161,90,0.45), #C9A15A)",
+                              borderRadius: 3,
+                            }}
+                          />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9.5, color: C.faint }}>
+                          <span>NOW</span>
+                          <span>payoff shown at expiry</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ fontSize: 10, color: C.faint, marginTop: 8 }}>
+                    Bars show live open interest (red = Call OI, green = Put OI) at each strike, at expiry payoff.
+                  </div>
+                </>
+              ) : payoffTab === "table" ? (
+                <div style={{ overflowY: "auto", maxHeight: 420 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                    <thead>
+                      <tr style={{ color: C.muted, fontSize: 10 }}>
+                        <th style={{ padding: 6, textAlign: "left" }}>Underlying at expiry</th>
+                        <th style={{ padding: 6 }}>P&L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payoffData.map((d) => (
+                        <tr key={d.strike} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 6 }}>{fmtIN(d.strike)}</td>
+                          <td style={{ padding: 6, color: d.pnl >= 0 ? C.green : C.red }}>₹{fmtIN(d.pnl)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : payoffTab === "greeks" ? (
+                <div>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, marginBottom: 10 }}>
+                    <thead>
+                      <tr style={{ color: C.muted, fontSize: 10, textAlign: "left" }}>
+                        <th style={{ padding: 6 }}>Leg</th>
+                        <th style={{ padding: 6 }}>Delta</th>
+                        <th style={{ padding: 6 }}>Gamma</th>
+                        <th style={{ padding: 6 }}>Theta</th>
+                        <th style={{ padding: 6 }}>Vega</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {greeksRows.map((r) => (
+                        <tr key={r.leg.id} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: 6 }}>
+                            {r.leg.action.toUpperCase()} {r.leg.strike} {r.leg.type === "call" ? "CE" : "PE"}
+                          </td>
+                          <td style={{ padding: 6 }}>{r.delta != null ? r.delta.toFixed(2) : "-"}</td>
+                          <td style={{ padding: 6 }}>{r.gamma != null ? r.gamma.toFixed(4) : "-"}</td>
+                          <td style={{ padding: 6 }}>{r.theta != null ? r.theta.toFixed(2) : "-"}</td>
+                          <td style={{ padding: 6 }}>{r.vega != null ? r.vega.toFixed(2) : "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 700 }}>
+                        <td style={{ padding: 6 }}>Total</td>
+                        <td style={{ padding: 6 }}>{greeksTotals.delta.toFixed(2)}</td>
+                        <td style={{ padding: 6 }}>{greeksTotals.gamma.toFixed(4)}</td>
+                        <td style={{ padding: 6 }}>{greeksTotals.theta.toFixed(2)}</td>
+                        <td style={{ padding: 6 }}>{greeksTotals.vega.toFixed(2)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                  <div style={{ fontSize: 10, color: C.faint }}>
+                    Position-level Greeks = each leg's Greek × direction × lots × lot size × multiplier, summed.
+                  </div>
+                </div>
+              ) : (
+                /* Strategy Chart: one payoff line per leg + combined */
+                <div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+                    <div style={{ fontSize: 12, color: C.text, fontWeight: 700 }}>Leg-by-leg payoff at expiry</div>
+                    <div style={{ fontSize: 10.5, color: C.muted }}>Each line is one leg's P&amp;L vs the underlying; the gold line is the combined position.</div>
+                  </div>
+                  <div style={{ height: isMobile ? 260 : 340 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={legPayoffData}>
+                        <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                        <XAxis dataKey="strike" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
+                        <YAxis stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
+                        <ReferenceLine y={0} stroke={C.faint} />
+                        <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
+                        {legs.map((l, i) => (
+                          <Line
+                            key={l.id}
+                            type="monotone"
+                            dataKey={`leg${i}`}
+                            stroke={LEG_COLORS[i % LEG_COLORS.length]}
+                            strokeWidth={1.5}
+                            dot={false}
+                            name={`${l.action.toUpperCase()} ${fmtIN(l.strike)} ${l.type === "call" ? "CE" : "PE"}`}
+                          />
+                        ))}
+                        <Line type="monotone" dataKey="combined" stroke={C.gold} strokeWidth={2.5} dot={false} name="Combined" />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                    {legs.map((l, i) => (
+                      <span key={l.id} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: C.muted }}>
+                        <span style={{ width: 10, height: 3, borderRadius: 2, background: LEG_COLORS[i % LEG_COLORS.length] }} />
+                        {l.action.toUpperCase()} {fmtIN(l.strike)} {l.type === "call" ? "CE" : "PE"}×{l.qty * multiplier}
+                      </span>
+                    ))}
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10.5, color: C.muted }}>
+                      <span style={{ width: 10, height: 3, borderRadius: 2, background: C.gold }} />
+                      Combined
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Account growth (equity curve) */}
+            <div style={panel}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>📈 ACCOUNT GROWTH (EQUITY CURVE)</div>
+                  {eqDelta != null && (
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        color: eqDelta >= 0 ? C.green : C.red,
+                        background: eqDelta >= 0 ? "rgba(76,175,125,0.1)" : "rgba(225,82,82,0.1)",
+                        border: `1px solid ${eqDelta >= 0 ? "rgba(76,175,125,0.35)" : "rgba(225,82,82,0.35)"}`,
+                        borderRadius: 999,
+                        padding: "2px 9px",
+                      }}
+                    >
+                      {eqDelta >= 0 ? "▲" : "▼"} {fmtIN(Math.abs(eqDelta))} vs start
+                    </span>
+                  )}
+                </div>
+                {equityHistory.length > 1 && (
+                  <div style={{ fontSize: 11, color: C.faint }}>
+                    Last: <span style={{ color: eqColor, fontWeight: 700 }}>₹{fmtIN(eqLast)}</span>
+                  </div>
                 )}
               </div>
+              {equityHistory.length <= 1 ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 220, fontSize: 12, color: C.faint, textAlign: "center", padding: "0 20px" }}>
+                  The equity curve builds while you trade during market hours (09:15–15:30 IST). Trade a few paper positions and it will draw here.
+                </div>
+              ) : (
+                <div style={{ height: 220 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={equityHistory}>
+                      <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="time"
+                        stroke={C.faint}
+                        fontSize={10.5}
+                        tickFormatter={(t) => new Date(t).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      />
+                      <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={80} />
+                      <ReferenceLine y={paperStartingCapital} stroke={C.faint} strokeDasharray="4 2" />
+                      <Tooltip
+                        contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }}
+                        labelFormatter={(t) => new Date(t).toLocaleString("en-IN")}
+                        formatter={(v) => [`₹${fmtIN(v)}`, "Equity"]}
+                      />
+                      <defs>
+                        <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={eqColor} stopOpacity={0.3} />
+                          <stop offset="100%" stopColor={eqColor} stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <Area type="monotone" dataKey="equity" stroke="none" fill="url(#eqFill)" />
+                      <Line type="monotone" dataKey="equity" stroke={eqColor} strokeWidth={2} dot={false} name="Equity" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
 
             {/* Real-time active positions & P&L */}
@@ -1078,7 +1703,7 @@ export default function PaperTradingPage() {
       )}
 
       {/* ================= ZONE C · TRANSACTION LOG & HISTORICAL JOURNAL ================= */}
-      <div style={{ marginTop: 16, ...panel, padding: 18 }}>
+      <div style={{ marginTop: 14, ...panel, padding: 18 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ fontSize: fluid(13, 15), fontWeight: 800, letterSpacing: 0.5, color: C.text }}>📝 TRANSACTION LOG & HISTORICAL JOURNAL</div>
@@ -1237,6 +1862,96 @@ export default function PaperTradingPage() {
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Small presentational helpers ---------- */
+
+function SummaryBlock({ label, value, sub, color }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", minWidth: 0 }}>
+      <div style={{ fontSize: 9.5, letterSpacing: 1, color: C.faint }}>{label.toUpperCase()}</div>
+      <div style={{ fontSize: fluid(13, 16), fontWeight: 800, color: color || C.text, marginTop: 2, whiteSpace: "nowrap" }}>{value}</div>
+      {sub && <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function StepperRow({ label, value, onDec, onInc, title }) {
+  return (
+    <div
+      title={title}
+      style={{ display: "flex", alignItems: "center", gap: 6, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "6px 10px", flex: 1, minWidth: 0 }}
+    >
+      <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.5, color: C.muted, marginRight: "auto" }}>{label}</span>
+      <StepButton onClick={onDec}>−</StepButton>
+      <span style={{ minWidth: 22, textAlign: "center", fontSize: 12.5, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{value}</span>
+      <StepButton onClick={onInc}>+</StepButton>
+    </div>
+  );
+}
+
+function AddLegForm({ onAdd, chainByStrike, strikesSorted, atmIndex }) {
+  const [action, setAction] = useState("buy");
+  const [type, setType] = useState("call");
+  const [strike, setStrike] = useState("");
+  const [qty, setQty] = useState(1);
+  const [price, setPrice] = useState("");
+
+  // Auto-fill the live premium whenever strike or type changes (manual edits
+  // survive until one of those changes).
+  useEffect(() => {
+    if (!strike) return;
+    const row = chainByStrike.get(Number(strike));
+    const live = row ? (type === "call" ? row.call.ltp : row.put.ltp) : null;
+    if (live != null) setPrice(String(live));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strike, type]);
+
+  const atmStrike = strikesSorted[Math.min(Math.max(atmIndex, 0), strikesSorted.length - 1)] ?? "";
+
+  const submit = () => {
+    const s = Number(strike);
+    if (!s) return;
+    onAdd({ action, type, strike: s, qty: Math.max(1, Number(qty) || 1), price: Number(price) || 0 });
+  };
+
+  const field = { background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "4px 6px", fontSize: 11, width: 58 };
+  const toggle = (active) => ({
+    fontSize: 10.5,
+    fontWeight: 700,
+    padding: "4px 8px",
+    borderRadius: 4,
+    border: `1px solid ${active ? C.gold : C.border}`,
+    background: active ? "rgba(201,161,90,0.1)" : "transparent",
+    color: active ? C.gold : C.muted,
+    cursor: "pointer",
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+      <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint }}>ADD LEG MANUALLY</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={() => setAction(action === "buy" ? "sell" : "buy")} style={toggle(true)}>
+          {action === "buy" ? "BUY" : "SELL"}
+        </button>
+        <button onClick={() => setType(type === "call" ? "put" : "call")} style={toggle(true)}>
+          {type === "call" ? "CE" : "PE"}
+        </button>
+        <input type="number" value={strike} onChange={(e) => setStrike(e.target.value)} placeholder={atmStrike ? String(atmStrike) : "strike"} style={{ ...field, width: 84 }} />
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: C.muted }}>
+          Qty
+          <input type="number" min={1} value={qty} onChange={(e) => setQty(Number(e.target.value))} style={{ ...field, width: 46 }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: C.muted }}>
+          Price
+          <input type="number" step="0.05" value={price} onChange={(e) => setPrice(e.target.value)} style={{ ...field, width: 64 }} />
+        </label>
+        <button onClick={submit} style={{ fontSize: 11, fontWeight: 700, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>
+          Add Leg
+        </button>
       </div>
     </div>
   );
