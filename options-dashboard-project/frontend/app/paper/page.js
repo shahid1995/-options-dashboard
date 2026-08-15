@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
+import { hasUnlimitedLoss, hasUnlimitedProfit, payoffRange, pnlAt } from "@/lib/options";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
@@ -237,18 +238,7 @@ export default function PaperTradingPage() {
   }, [spot]);
 
   // P&L at a given underlying price, for the current legs
-  const pnlAtPrice = useCallback(
-    (price) => {
-      let pnl = 0;
-      legs.forEach((l) => {
-        const intrinsic = l.type === "call" ? Math.max(0, price - l.strike) : Math.max(0, l.strike - price);
-        const dir = l.action === "buy" ? 1 : -1;
-        pnl += dir * (intrinsic - l.price) * l.qty * lotSize * multiplier;
-      });
-      return pnl;
-    },
-    [legs, lotSize, multiplier]
-  );
+  const pnlAtPrice = useCallback((price) => pnlAt(legs, price, { lotSize, multiplier }), [legs, lotSize, multiplier]);
 
   // Payoff chart data: one point per real strike (so OI bars line up), plus P&L line
   const payoffData = useMemo(() => {
@@ -282,16 +272,14 @@ export default function PaperTradingPage() {
     });
   }, [strikesSorted, legs, lotSize, multiplier]);
 
-  const maxProfit = payoffData.length ? Math.max(...payoffData.map((p) => p.pnl)) : 0;
-  const maxLoss = payoffData.length ? Math.min(...payoffData.map((p) => p.pnl)) : 0;
-
-  // Detect truly unbounded wings by sampling far beyond the chain's shown range.
-  const lowExtreme = spot != null && legs.length ? pnlAtPrice(spot * 0.25) : null;
-  const highExtreme = spot != null && legs.length ? pnlAtPrice(spot * 4) : null;
-  const maxProfitUnlimited =
-    legs.length > 0 && ((lowExtreme != null && lowExtreme > maxProfit) || (highExtreme != null && highExtreme > maxProfit));
-  const maxLossUnlimited =
-    legs.length > 0 && ((lowExtreme != null && lowExtreme < maxLoss) || (highExtreme != null && highExtreme < maxLoss));
+  // Exact (unrounded) payoff min/max across the chain, plus structural
+  // unbounded-risk detection. "Unlimited" is assigned only when the position
+  // is actually net short (a naked short call or short put) — never for
+  // long-only positions or defined-risk spreads, and the rupee figure shown
+  // is the true value (no rounding artifacts).
+  const { maxProfit, maxLoss } = payoffRange(legs, strikesSorted, { lotSize, multiplier });
+  const maxProfitUnlimited = hasUnlimitedProfit(legs);
+  const maxLossUnlimited = hasUnlimitedLoss(legs);
 
   const netPerLot = legs.reduce((sum, l) => {
     const dir = l.action === "buy" ? 1 : -1;
