@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Options Dashboard",
-  description: "NSE options dashboard",
+  title: "Options Dashboard — Live Index Option Chains",
+  description: "A real-time index options terminal for NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50, SENSEX, BANKEX and SENSEX50 — live chains, max pain & PCR analytics, watchlist alerts, and paper trading. Powered by Upstox.",
 };
 
 export default function RootLayout({ children }) {
