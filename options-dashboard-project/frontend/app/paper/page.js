@@ -520,7 +520,16 @@ export default function PaperTradingPage() {
       {!primaryChain ? (
         <Centered>Loading chain…</Centered>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "300px minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : "clamp(320px, 30vw, 450px) minmax(0, 1fr)",
+            gap: 16,
+            alignItems: "start",
+          }}
+        >
+          {/* Zone A widened ~50% (300px -> up to 450px) while staying fluid; the
+              Zone B column absorbs the rest via minmax(0, 1fr). */}
           {/* ================= ZONE A · CONTROL SIDEBAR ================= */}
           <aside style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
             {/* New Strategy builder */}
@@ -719,17 +728,17 @@ export default function PaperTradingPage() {
                   </button>
                 ))}
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
                 {strategiesFor(category).map((s) => (
                   <button
                     key={s.id}
                     onClick={() => loadStrategy(s)}
-                    style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", cursor: "pointer", textAlign: "left", width: "100%" }}
+                    style={{ display: "flex", alignItems: "center", gap: 10, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", cursor: "pointer", textAlign: "left", width: "100%", minWidth: 0 }}
                   >
                     <span style={{ width: 34, flexShrink: 0 }}>
                       <ShapeIcon shape={s.shape} />
                     </span>
-                    <span style={{ fontSize: 11.5, color: C.text }}>{s.name}</span>
+                    <span style={{ fontSize: fluid(11, 12.5), color: C.text, lineHeight: 1.3 }}>{s.name}</span>
                   </button>
                 ))}
               </div>
