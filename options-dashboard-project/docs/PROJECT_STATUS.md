@@ -6,7 +6,7 @@ _Last updated: 2026-08-16_
 
 **Phase 4.1 — IV Analytics**
 
-Status: 🔵 **Next phase / prompt preparation**
+Status: ✅ **Complete**
 
 ## Overall progress
 
@@ -20,8 +20,8 @@ Status: 🔵 **Next phase / prompt preparation**
 | Phase 2.1 — Multi-expiry chain handling | ✅ Complete | Required-expiry detection, auto-loading, expiry-specific pricing and execution chain gate |
 | Phase 3 — Scenario & Time Analysis | ✅ Complete | Dependency-free Black-Scholes-style model, scenario engine, scenario matrices, modelled Greeks and minimal Scenario UI |
 | Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete | Canonical Greek units, live/model comparison, per-leg exposure, contributions and Scenario-panel integration |
-| Phase 4.1 — IV Analytics | 🔵 Next | Prompt preparation / implementation not started |
-| Phase 4.2 — Greek/IV Divergence & Advanced Signals | ⏳ Planned | Not started |
+| Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
+| Phase 4.2 — Greek/IV Divergence & Advanced Signals | 🔵 Next | Prompt preparation / implementation not started |
 | Phase 5 — Paper trading / portfolio upgrade | ⏳ Planned | Not started |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
@@ -34,9 +34,36 @@ Status: 🔵 **Next phase / prompt preparation**
 
 ## Latest verified implementation commit
 
-`9ae9966ca358a716c0e53d96203103f5e717e86f`
+`22f09073749db169905fd2dd06c81c3e37794e0a`
 
-This is the verified Phase 4.0 implementation baseline.
+This is the verified Phase 4.1 implementation baseline (the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
+
+## Phase 4.1 verification
+
+Status: ✅ Passed
+
+Implemented:
+
+- Canonical IV unit contract: internal representation = decimal fraction (0.1824 = 18.24%), UI display = percent, 1 volatility point = 0.01
+- Pure normalization helpers: normalizeIv / decimalToIvPercent / formatIvPercent / volPointsToDecimal / decimalToVolPoints
+- Broker chain IV (percent, e.g. 18.24 = 18.24%) normalized to canonical decimal once, before the pricing model consumes it — fixes the Phase 3 feed-vs-model unit issue
+- Per-leg IV analytics resolved against each leg's own expiry chain
+- ATM IV using the nearest strike to spot, same strike for CE and PE; ATM average only when both sides exist (partial/unavailable states otherwise)
+- IV curve by strike with moneyness (same formula for calls and puts)
+- Descriptive IV skew (OTM call/put IV vs ATM IV, in vol points) — analytical only, no signals
+- IV term structure across every loaded expiry (each expiry uses its own chain) with a descriptive slope in vol points/day
+- IV change tracking (vol-point change + relative %) with missing-observation handling
+- Historical IV foundation: IVObservation data model, guarded IV Rank/Percentile helpers (return null below 30 observations), backend `iv_observations` table + repository; collection DISABLED (IV_HISTORY_ENABLED=False) to avoid uncontrolled database growth
+- Compact IV Analytics UI: ATM summary, session IV change, ATM skew, IV-vs-strike curve chart, ATM-IV-vs-DTE term structure chart, structured warnings
+- No changes to paper execution or market-hours safety
+
+Verification:
+
+- Frontend: 391/391 tests passed (19 files)
+- Backend: 104/104 tests passed
+- `npx next build`: passed; all routes generated; no type/lint errors
+- User verification: passed
+- ChatGPT review: approved
 
 ## Phase 4.0 verification
 
@@ -132,6 +159,7 @@ Verified manually:
 - Scenario/time pricing engine ✅
 - Live-chain Greeks ✅
 - Canonical live/model Greek analytics ✅
+- Canonical IV analytics (ATM, curve, skew, term structure, change) ✅
 - Central strategy calculator ✅
 - Strategy templates ✅
 - Paper trading ✅
@@ -144,26 +172,23 @@ Verified manually:
 
 - `frontend/app/paper/page.js` remains a large orchestration component; future domain logic should stay outside it.
 - Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
-- Phase 3/4 model IV consumes chain IV as provided; feed-percent vs model-decimal reconciliation is a Phase 4.1 responsibility.
+- Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile stay hidden until a reliable sample exists.
 - Full capital/margin is not yet modeled.
 - Backend/database should become increasingly authoritative for persistent trading state.
 - Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
 
-## Current Phase 4.1 objective
+## Current Phase 4.2 objective
 
-Build IV analytics on top of the existing expiry-specific chain data and canonical Greek foundation.
+Build the Greek/IV divergence and advanced signal layer on top of the Phase 4.0 canonical Greek foundation and the Phase 4.1 canonical IV foundation.
 
 Planned goals:
 
-- Explicit IV unit normalization between live feed and model decimal representation
-- ATM IV and per-leg IV views
-- IV term structure by expiry
-- IV skew by strike/moneyness
-- IV percentile/rank only where enough historical observations exist
-- IV change tracking when reliable prior observations are available
-- Volatility regime views
-- Volatility-shock inputs for the existing Scenario engine
-- Clear separation between live IV and model/scenario IV
+- CE/PE IV divergence analytics
+- Vega divergence
+- Gamma anomaly
+- Delta dominance
+- VIX relationships
+- Neutral comparison framework first; no signals presented as advice
 
 ## Permanent project constraints
 
@@ -187,4 +212,4 @@ Planned goals:
 
 ## Next action
 
-**User:** Wait for the Phase 4.1 prompt from ChatGPT. Do not ask FreeBuff to implement Phase 4.1 until the prompt is provided.
+**User:** Wait for the Phase 4.2 prompt from ChatGPT. Do not ask FreeBuff to implement Phase 4.2 until the prompt is provided.
