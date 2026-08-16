@@ -19,6 +19,7 @@ import { calculateStrategyGreeks } from "@/lib/calculations/greekAnalytics";
 import ScenarioPanel from "./ScenarioPanel";
 import GreekAnalyticsPanel from "./GreekAnalyticsPanel";
 import IVAnalyticsPanel from "./IVAnalyticsPanel";
+import AnalyticsPanel from "./AnalyticsPanel";
 import {
   makeLeg,
   addLeg,
@@ -1832,6 +1833,7 @@ export default function PaperTradingPage() {
               <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
                 {[
                   ["iv", "IV"],
+                  ["analytics", "Analytics"],
                   ["graph", "Payoff Graph"],
                   ["table", "P&L Table"],
                   ["greeks", "Greeks"],
@@ -1844,7 +1846,9 @@ export default function PaperTradingPage() {
                 ))}
               </div>
 
-              {payoffTab === "iv" ? (
+              {payoffTab === "analytics" ? (
+                <AnalyticsPanel chainCache={chainCache} spot={spot} expiry={expiry} symbol={symbol} isMobile={isMobile} />
+              ) : payoffTab === "iv" ? (
                 <IVAnalyticsPanel chainCache={chainCache} spot={spot} expiry={expiry} isMobile={isMobile} />
               ) : legs.length === 0 ? (
                 <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>

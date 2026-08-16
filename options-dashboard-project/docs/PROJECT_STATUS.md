@@ -4,9 +4,9 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 4.1 — IV Analytics**
+**Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine**
 
-Status: ✅ **Complete**
+Status: 🔄 **Implemented / Pending Review**
 
 ## Overall progress
 
@@ -21,8 +21,8 @@ Status: ✅ **Complete**
 | Phase 3 — Scenario & Time Analysis | ✅ Complete | Dependency-free Black-Scholes-style model, scenario engine, scenario matrices, modelled Greeks and minimal Scenario UI |
 | Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete | Canonical Greek units, live/model comparison, per-leg exposure, contributions and Scenario-panel integration |
 | Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
-| Phase 4.2 — Greek/IV Divergence & Advanced Signals | 🔵 Next | Prompt preparation / implementation not started |
-| Phase 5 — Paper trading / portfolio upgrade | ⏳ Planned | Not started |
+| Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
+| Phase 5 — Paper trading / portfolio upgrade | 🔵 Next | Not started |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
@@ -37,6 +37,32 @@ Status: ✅ **Complete**
 `22f09073749db169905fd2dd06c81c3e37794e0a`
 
 This is the verified Phase 4.1 implementation baseline (the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
+
+The Phase 4.2 implementation is committed in the same commit as this status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
+
+## Phase 4.2 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (generic analytics + statistical measurements ONLY — no trading methodology, no signals, no buy/sell advice):
+
+- Generic pure statistics module (`frontend/lib/calculations/statistics.js`): rolling mean/median/std-dev/min/max, z-score, mean-rank percentile, neutral 0–100 anomaly measurement — empty/insufficient/constant-history handling, invalid entries ignored safely, nothing fabricated
+- Generic market analytics module (`frontend/lib/calculations/marketAnalytics.js`): canonical observation model (symbol + expiry + strike identity, CE/PE sides with price, canonical decimal IV, per-unit delta/gamma/thetaPerDay/vegaPerVolPoint, OI, volume, optional VIX), safe change helpers (absolute/percent/vol-point/direction/ratio — no NaN/Infinity), CE-vs-PE comparisons with dominant side (numeric only), price/IV and price/Greek relationships, Pearson correlation, data-quality status (available/partial/unavailable), neutral condition framework with strictly separate strength vs confidence, multi-expiry isolation (never mixes expiries), VIX handling that never substitutes ATM/average IV
+- Historical baselines are NOT collected in this phase: IV/greek z-scores, percentiles and anomaly scores stay null with structured INSUFFICIENT_HISTORY warnings rather than fabricated values
+- Neutral Analytics UI (`frontend/app/paper/AnalyticsPanel.js`, new "Analytics" tab): CE vs PE table, price/IV relationship, statistics (unavailable until history exists), expandable IV detail, VIX status, provenance legend (LIVE / DERIVED / STATISTICS) — no buy/sell buttons or signals
+- Reuses the existing chain cache and poll architecture — no new polling loop, no new market-data request
+- No changes to paper execution, market-hours protection, scenario engine or Greek/IV canonical units
+
+Automated tests (actual):
+
+- Frontend: 461/461 tests passed (21 files) — 70 new (23 statistics + 47 market analytics)
+- Backend: 104/104 tests passed
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
 
 ## Phase 4.1 verification
 
@@ -160,6 +186,7 @@ Verified manually:
 - Live-chain Greeks ✅
 - Canonical live/model Greek analytics ✅
 - Canonical IV analytics (ATM, curve, skew, term structure, change) ✅
+- Generic statistics + market analytics (neutral measurements, CE/PE comparisons, relationships, correlation) ✅
 - Central strategy calculator ✅
 - Strategy templates ✅
 - Paper trading ✅
@@ -172,23 +199,21 @@ Verified manually:
 
 - `frontend/app/paper/page.js` remains a large orchestration component; future domain logic should stay outside it.
 - Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
-- Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile stay hidden until a reliable sample exists.
+- Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile AND Phase 4.2 z-scores/percentiles/anomaly scores stay unavailable until a reliable sample exists.
 - Full capital/margin is not yet modeled.
 - Backend/database should become increasingly authoritative for persistent trading state.
 - Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
 
-## Current Phase 4.2 objective
+## Next phase objective — Phase 5: Paper Trading / Portfolio Upgrade
 
-Build the Greek/IV divergence and advanced signal layer on top of the Phase 4.0 canonical Greek foundation and the Phase 4.1 canonical IV foundation.
+Phase 4.2 (generic analytics + statistical measurements) is implemented and pending review. The next milestone is the paper trading / portfolio upgrade:
 
-Planned goals:
+- Paper positions dashboard improvements (open positions, live P&L per leg, close flows)
+- Portfolio-level metrics (exposure, concentration, cash accounting)
+- Enhanced journal and performance views
+- Reuse the Phase 4.2 generic analytics layer where measurements are needed
 
-- CE/PE IV divergence analytics
-- Vega divergence
-- Gamma anomaly
-- Delta dominance
-- VIX relationships
-- Neutral comparison framework first; no signals presented as advice
+The Phase 5 prompt has not been prepared yet; wait for it from ChatGPT.
 
 ## Permanent project constraints
 
@@ -212,4 +237,4 @@ Planned goals:
 
 ## Next action
 
-**User:** Wait for the Phase 4.2 prompt from ChatGPT. Do not ask FreeBuff to implement Phase 4.2 until the prompt is provided.
+**User:** Manually verify the Phase 4.2 Analytics tab (ATM-strike CE vs PE table, price/IV relationship after a second observation, statistics intentionally unavailable). Then ChatGPT reviews the diff. Only after approval does Phase 5 begin.
