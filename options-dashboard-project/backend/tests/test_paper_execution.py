@@ -422,6 +422,30 @@ def test_unrealized_pnl_helper():
     assert unrealized_pnl(0, 100.0, 120.0, LOT) == 0.0  # closed
 
 
+def test_execution_realized_includes_partial_exits(client, logged_in, db_session, chain_quotes):
+    """Regression: an execution's realized P&L must accumulate on PARTIAL exits
+    too, so it always equals the sum of its positions' realizations (Phase 5.1
+    analytics treats that sum as the authoritative strategy result)."""
+    from app.models import StrategyExecution
+
+    chain_quotes[EXPIRY][24350]["call"] = 100.0
+    execute(client, logged_in, single_leg_payload(client_order_id="exec-partial-real", legs=[{
+        "symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 24350,
+        "option_type": "call", "action": "buy", "quantity": 5, "lot_size": LOT,
+    }]))
+    pos = first_position(db_session)
+
+    chain_quotes[EXPIRY][24350]["call"] = 120.0
+    exit_position(client, logged_in, pos.id, {"client_order_id": "exit-partial-real-1", "quantity": 2})
+    chain_quotes[EXPIRY][24350]["call"] = 130.0
+    exit_position(client, logged_in, pos.id, {"client_order_id": "exit-partial-real-2", "quantity": 3})
+
+    execution = db_session.query(StrategyExecution).first()
+    # (120-100)*2 + (130-100)*3 realized, in rupees.
+    assert execution.realized_pnl == pytest.approx((20 * 2 + 30 * 3) * LOT, abs=0.01)
+    assert execution.exit_at is not None  # set only when fully closed
+
+
 def test_full_exit_realized_matches_partial_sum(client, logged_in, db_session, chain_quotes):
     chain_quotes[EXPIRY][24350]["call"] = 100.0
     execute(client, logged_in, single_leg_payload(client_order_id="exec-sum", legs=[{

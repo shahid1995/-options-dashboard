@@ -77,6 +77,13 @@ export const getPaperReconcile = () => api.get("/paper/reconcile").then((r) => r
 export const resetPaperPortfolio = () =>
   api.post("/paper/portfolio/reset").then((r) => r.data);
 
+// ---- Phase 5.1: portfolio & journal analytics ----
+// ONE authoritative analytics response (summary + performance + equity curve
+// + drawdown + strategy performance + positions + journal).
+
+export const getPaperAnalytics = (params) =>
+  api.get("/paper/analytics", { params }).then((r) => r.data);
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");

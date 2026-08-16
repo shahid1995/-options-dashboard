@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, api } from "./api";
+import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, api } from "./api";
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", "http://localhost:8000");
@@ -61,6 +61,16 @@ describe("paper journal api", () => {
     expect(spy).toHaveBeenCalledWith("/paper/market-status");
     expect(st.status).toBe("open");
     expect(st.tradeDate).toBe("2026-08-14");
+    spy.mockRestore();
+  });
+
+  it("gets the Phase 5.1 analytics from /paper/analytics with optional filters", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { performance: { total_completed_trades: 3 } } });
+    const result = await getPaperAnalytics({ date_from: "2026-08-01", strategy: "Long Call" });
+    expect(spy).toHaveBeenCalledWith("/paper/analytics", {
+      params: { date_from: "2026-08-01", strategy: "Long Call" },
+    });
+    expect(result.performance.total_completed_trades).toBe(3);
     spy.mockRestore();
   });
 });

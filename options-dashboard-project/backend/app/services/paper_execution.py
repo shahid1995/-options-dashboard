@@ -527,7 +527,7 @@ def exit_position(user_id: str, position_id: int, request, db: Session, fill_pri
 
     _close_journal_legs(user_id, position, qty, fill_price, db, now)
 
-    if was_open and new_net == 0 and position.strategy_execution_id:
+    if position.strategy_execution_id:
         execution = db.scalar(
             select(StrategyExecution).where(
                 StrategyExecution.user_id == user_id,
@@ -535,9 +535,13 @@ def exit_position(user_id: str, position_id: int, request, db: Session, fill_pri
             )
         )
         if execution is not None:
+            # Accumulate realized P&L on EVERY exit (partial OR full) so the
+            # execution's total equals the sum of its positions' realizations.
+            # exit_at marks the moment the strategy fully closes (last leg).
             execution.realized_pnl = round((execution.realized_pnl or 0.0) + realized, 2)
-            execution.exit_at = now
             execution.updated_at = now
+            if new_net == 0:
+                execution.exit_at = now
 
     db.commit()
     db.refresh(position)

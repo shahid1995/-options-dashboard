@@ -5,6 +5,7 @@ from app.db import get_db
 from app.routers.chains import INSTRUMENT_KEYS, transform_chain
 from app.routers.deps import get_session_id
 from app.schemas import (
+    AnalyticsOut,
     ExecutionOut,
     ExecutionRequestIn,
     ExitOut,
@@ -27,6 +28,7 @@ from app.services.journal import (
     handlePaperOrderFill,
 )
 from app.services.market_status import get_market_status
+from app.services.performance import get_analytics
 from app.services.paper_execution import (
     PaperExecutionError,
     execute_strategy,
@@ -303,6 +305,29 @@ def portfolio_reconcile(
     """Verify orders, positions, cash and executions agree; report discrepancies."""
     user_id, _access_token = require_session(session_id)
     return reconcile(user_id, db)
+
+
+@router.get("/analytics", response_model=AnalyticsOut)
+def analytics(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    strategy: str | None = None,
+):
+    """ONE authoritative analytics response: summary + performance + equity
+    curve + drawdown + strategy performance + positions + journal.
+
+    Read-only (never mutates trading state) and always available regardless
+    of market status. ``date_from`` / ``date_to`` (YYYY-MM-DD) and
+    ``strategy`` filter the completed-trade set used for performance, equity
+    curve, drawdown, strategy groups and journal; the canonical summary
+    always reflects the full portfolio.
+    """
+    user_id, _access_token = require_session(session_id)
+    return get_analytics(
+        user_id, db, date_from=date_from, date_to=date_to, strategy=strategy
+    )
 
 
 @router.get("/journal")

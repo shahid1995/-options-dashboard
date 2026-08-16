@@ -6,7 +6,7 @@ _Last updated: 2026-08-16_
 
 **Phase 5.1 — Portfolio & Journal Analytics**
 
-Status: 🔵 **Next**
+Status: 🔄 **Implemented / Pending Review**
 
 ## Overall progress
 
@@ -23,8 +23,8 @@ Status: 🔵 **Next**
 | Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
 | Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
-| Phase 5.1 — Portfolio & Journal Analytics | 🔵 Next | Not started |
-| Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
+| Phase 5.1 — Portfolio & Journal Analytics | 🔄 Implemented | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal — pending review |
+| Phase 6 — Capital & margin analysis | 🔵 Next | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -40,6 +40,8 @@ Status: 🔵 **Next**
 This is the verified Phase 5.0 implementation baseline (the Phase 4.1 baseline remains `22f09073749db169905fd2dd06c81c3e37794e0a`, and the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
 
 The Phase 4.2 implementation is committed in the same commit as its status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
+
+The Phase 5.1 implementation is committed in the SAME commit as this status update but is NOT yet user-verified or ChatGPT-reviewed; its SHA will be recorded here once approved.
 
 ## Phase 4.2 implementation
 
@@ -100,21 +102,32 @@ Overall: ✅ **Complete**
 
 ## Phase 5.1 implementation
 
-Status: 🔵 **Next — NOT implemented yet**
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
 
-Objective — Portfolio & Journal Analytics:
+Implemented (portfolio & journal analytics ONLY — no real-money trading, no margin engine, no signals, no backtesting):
 
-- portfolio dashboard
-- realized/unrealized P&L analytics
-- position exposure and concentration
-- strategy-grouped performance
-- trade journal improvements
-- win rate
-- average winner/loser
-- profit factor
-- expectancy
-- drawdown
-- holding duration
+- **Performance analytics layer** (`backend/app/services/performance.py`): pure, independently-tested helpers for win/loss/breakeven classification, win rate, average winner/loser, profit factor (never Infinity), expectancy, largest win/loss, win/loss streaks, holding duration (seconds + user-friendly label, avg/median/shortest/longest), realized equity curve, drawdown (current/max + %), daily realized P&L, strategy grouping and position exposure
+- **Server-authoritative source of truth**: a strategy execution counts as ONE completed trade once ALL its positions are closed; its realized P&L = the SUM of its positions' `realized_pnl` (positions aggregate partial AND full exits exactly; legacy journal rows are never double-counted). Open strategies, pending/rejected/cancelled orders and individual legs are never counted as trades
+- **Correctness fix (proven by a regression test)**: `execution.realized_pnl` now accumulates on PARTIAL exits too (previously only full exits), so the execution total always equals the sum of its positions' realizations
+- **Canonical summary**: starting capital, available cash (cash-ledger based), open exposure at entry value (explicitly NOT margin), realized/unrealized split, total P&L, return % (totalPnl / startingCapital × 100 only when startingCapital > 0 — never called ROI/margin)
+- **Unrealized P&L is never fabricated**: stays `null` server-side (no live marks); `current_marks` and `historical_unrealized` are reported as `unavailable` in `data_quality`; the frontend overlays its chain-cache marks for display (the platform's existing market-data path)
+- **REALIZED equity curve**: equity = starting capital + cumulative realized P&L, dated by each trade's exit day, with an explicit baseline point; labeled "Realized Equity Curve" (never presented as total historical equity); drawdown derived from it
+- **Strategy-level analytics**: one row per strategy tag (reuses existing strategy identity) — trades, wins/losses, win rate, total/avg P&L, profit factor, expectancy; multi-leg executions appear as ONE journal row with legs underneath
+- **Position analytics**: long/short/total exposure at entry value server-side; mark-based market value + concentration (mark value / total absolute open exposure, measurement only) computed client-side where marks exist
+- **API**: ONE authoritative `GET /paper/analytics` (summary + performance + equity curve + drawdown + daily P&L + strategies + positions + journal + data quality + applied filters) with optional `date_from` / `date_to` / `strategy` filters applied server-side; read-only and always available regardless of market status; reuses Phase 5.0 reconciliation and surfaces `PORTFOLIO_DATA_INCONSISTENT` warnings without silently fixing data
+- **Frontend**: compact Portfolio Analytics dashboard (`frontend/app/paper/PortfolioAnalyticsPanel.js`) — summary, performance, drawdown, realized equity curve (Recharts, no new charting library), strategy performance table, mark-based exposure/concentration chips, grouped journal (Date / Strategy / Entry / Exit / Duration / P&L / Result with WIN/LOSS/BREAKEVEN badges and date/P&L/duration sorting); pure display helpers in `frontend/lib/analytics.js` (no formulas duplicated client-side); empty states show "No completed trades" instead of 0%/NaN/Infinity
+- No changes to paper execution semantics, market-hours protection, chain handling, Greek/IV analytics, reconciliation or the Phase 5.0 cash ledger
+
+Automated tests (actual):
+
+- Frontend: 502/502 tests passed (22 files) — 21 new (20 analytics display helpers + 1 API contract)
+- Backend: 195/195 tests passed — 41 new (40 analytics tests covering the §38 matrix + 1 execution-accounting regression test)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
 
 ## Phase 4.1 verification
 
@@ -245,6 +258,7 @@ Verified manually:
 - Market-hours protection ✅
 - Multi-expiry chain handling ✅
 - Journal/database foundation ✅
+- Portfolio & journal analytics (summary, performance, equity curve, drawdown, strategy groups) ✅
 - Frontend unit tests ✅
 
 ### Current architecture concerns
@@ -258,23 +272,9 @@ Verified manually:
 - Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
 - The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Next phase objective — Phase 5.1
+## Next phase objective — Phase 6
 
-Phase 5.0 (server-authoritative paper trading & portfolio foundation) is ✅ complete. The next milestone is **Phase 5.1 — Portfolio & Journal Analytics**:
-
-- portfolio dashboard
-- realized/unrealized P&L analytics
-- position exposure and concentration
-- strategy-grouped performance
-- trade journal improvements
-- win rate
-- average winner/loser
-- profit factor
-- expectancy
-- drawdown
-- holding duration
-
-Phase 5.1 is NOT implemented yet. Wait for the implementation prompt from ChatGPT.
+Phase 5.1 (portfolio & journal analytics) is implemented and pending review. The next milestone is **Phase 6 — Capital & Margin Analysis** (SPAN / exposure margin, return on capital) after Phase 5.1 is verified and approved. The Phase 6 implementation prompt has not been prepared yet; wait for it from ChatGPT.
 
 ## Permanent project constraints
 
@@ -298,4 +298,4 @@ Phase 5.1 is NOT implemented yet. Wait for the implementation prompt from ChatGP
 
 ## Next action
 
-Wait for ChatGPT to provide the Phase 5.1 implementation prompt.
+**User:** Manually verify Phase 5.1 (portfolio analytics dashboard renders; execute a strategy, fully exit it, and check win rate / profit factor / expectancy / realized equity curve / drawdown / strategy groups / grouped journal with WIN-LOSS-BREAKEVEN and durations; duplicate clicks don't double-trade; reload the page → server state persists; market closed → orders blocked). Then ChatGPT reviews the diff. Only after approval does Phase 6 begin.
