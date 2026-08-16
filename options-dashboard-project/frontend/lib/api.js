@@ -56,6 +56,27 @@ export const getPaperJournal = () => api.get("/paper/journal").then((r) => r.dat
 export const getMarketStatus = () =>
   api.get("/paper/market-status").then((r) => ({ ...r.data, tradeDate: r.data.trade_date }));
 
+// ---- Phase 5.0: server-authoritative paper trading ----
+// The backend decides fills, positions, cash, realized P&L and order status;
+// these endpoints expose that state. The frontend only displays it.
+
+export const submitPaperExecution = (payload) =>
+  api.post("/paper/executions", payload).then((r) => r.data);
+
+export const exitPaperPosition = (positionId, payload) =>
+  api.post(`/paper/positions/${positionId}/exit`, payload).then((r) => r.data);
+
+export const getPaperPositions = () => api.get("/paper/positions").then((r) => r.data);
+
+export const getPaperOrders = () => api.get("/paper/orders").then((r) => r.data);
+
+export const getPaperPortfolio = () => api.get("/paper/portfolio").then((r) => r.data);
+
+export const getPaperReconcile = () => api.get("/paper/reconcile").then((r) => r.data);
+
+export const resetPaperPortfolio = () =>
+  api.post("/paper/portfolio/reset").then((r) => r.data);
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");

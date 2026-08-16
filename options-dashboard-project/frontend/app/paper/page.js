@@ -5,10 +5,13 @@ import {
   getExpiries,
   getChain,
   isAuthError,
-  submitPaperFill,
-  closePaperLeg,
   getPaperJournal,
   getMarketStatus,
+  getPaperPositions,
+  getPaperPortfolio,
+  submitPaperExecution,
+  exitPaperPosition,
+  resetPaperPortfolio as apiResetPaperPortfolio,
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
@@ -41,6 +44,15 @@ import { buildStrategyContext, buildChainContext, requiredExpiries, missingChain
 import { validateLeg, validateStrategy, validateExecution } from "@/lib/strategy/strategyValidation";
 import { newStrategyId, deriveStrategy, strategySourceLabel } from "@/lib/strategy/strategyIdentity";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
+import {
+  buildExecutionRequest,
+  buildExitRequest,
+  paperErrorMessage,
+  portfolioDisplay,
+  toFrontendPosition,
+  unrealizedPnl as markUnrealizedPnl,
+  validateExitQuantity,
+} from "@/lib/portfolio";
 import { nseCalendarStatus, priceModeLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
@@ -117,6 +129,10 @@ export default function PaperTradingPage() {
   const [spotChg, setSpotChg] = useState(null);
   const firstSpotRef = useRef(null);
 
+  // Phase 5.0: paper portfolio state mirrors the SERVER (the backend decides
+  // fills, positions, cash and realized P&L). These are display mirrors only.
+  const [portfolio, setPortfolio] = useState(null);
+  const [portfolioError, setPortfolioError] = useState(null);
   const [paperCash, setPaperCash] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperPositions, setPaperPositions] = useState([]);
@@ -125,6 +141,8 @@ export default function PaperTradingPage() {
   const [journal, setJournal] = useState(null);
   const [journalError, setJournalError] = useState(null);
   const [journalPage, setJournalPage] = useState(0);
+  // Per-position exit quantity (lots) for partial exits; defaults to full.
+  const [exitQtyMap, setExitQtyMap] = useState({});
 
   // ---- Market-hours execution gate ----
   const [marketStatus, setMarketStatus] = useState(null); // { status, source, message, checkedAt, tradeDate }
@@ -249,33 +267,28 @@ export default function PaperTradingPage() {
     };
   }, [loggedIn, pollTargets, loadChain]);
 
-  // Load / save paper trading state to the browser
+  // Phase 5.0: positions / cash / history are SERVER-AUTHORITATIVE (persisted
+  // in the backend database, never decided client-side). Only the session's
+  // equity chart is kept locally, as a pure visualization of fetched state.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(PAPER_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        setPaperCash(parsed.cash ?? DEFAULT_STARTING_CAPITAL);
-        setPaperStartingCapital(parsed.startingCapital ?? DEFAULT_STARTING_CAPITAL);
-        setPaperPositions(parsed.positions ?? []);
-        setPaperHistory(parsed.history ?? []);
         setEquityHistory(sanitizeEquityHistory(parsed.equityHistory ?? []));
       }
     } catch (e) {
-      console.warn("Could not load paper portfolio from localStorage:", e);
+      console.warn("Could not load equity history from localStorage:", e);
     }
   }, []);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(
-        PAPER_KEY,
-        JSON.stringify({ cash: paperCash, startingCapital: paperStartingCapital, positions: paperPositions, history: paperHistory, equityHistory })
-      );
+      window.localStorage.setItem(PAPER_KEY, JSON.stringify({ equityHistory }));
     } catch (e) {
-      console.warn("Could not save paper portfolio to localStorage:", e);
+      console.warn("Could not save equity history to localStorage:", e);
     }
-  }, [paperCash, paperStartingCapital, paperPositions, paperHistory, equityHistory]);
+  }, [equityHistory]);
 
   // Draft portfolios + saved strategies (localStorage)
   useEffect(() => {
@@ -298,10 +311,61 @@ export default function PaperTradingPage() {
       .catch((e) => setJournalError(e.message));
   }, []);
 
+  // Phase 5.0: load the SERVER-AUTHORITATIVE portfolio (summary + positions).
+  // The backend decides positions, cash, realized P&L and order status; the
+  // frontend only mirrors what it returns.
+  const loadPortfolio = useCallback(async () => {
+    try {
+      const [port, positions] = await Promise.all([getPaperPortfolio(), getPaperPositions()]);
+      setPortfolio(port);
+      setPortfolioError(null);
+      const summary = portfolioDisplay(port);
+      setPaperStartingCapital(summary.startingCash);
+      setPaperCash(summary.availableCash ?? summary.startingCash);
+      const shaped = positions.map(toFrontendPosition);
+      setPaperPositions(shaped);
+      setExitQtyMap((prev) => {
+        const next = {};
+        shaped.forEach((p) => { next[p.positionId] = prev[p.positionId] ?? p.qty; });
+        return next;
+      });
+    } catch (e) {
+      setPortfolioError(paperErrorMessage(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (!loggedIn) return;
+    loadPortfolio();
     loadJournal();
-  }, [loggedIn, loadJournal]);
+  }, [loggedIn, loadPortfolio, loadJournal]);
+
+  // Closed-trade history for the CSV export + per-strategy stats is derived
+  // from the backend journal (trades the server actually closed).
+  useEffect(() => {
+    if (!journal) return;
+    const closed = (journal.trades ?? [])
+      .filter((t) => t.status === "closed")
+      .flatMap((t) =>
+        t.legs.map((l) => ({
+          symbol: l.symbol,
+          type: l.option_type,
+          strike: l.strike_price,
+          expiry: l.expiration_date,
+          action: l.action,
+          qty: l.quantity,
+          lotSize: l.lot_size,
+          strategyName: t.strategy_tag ?? "Custom",
+          entryPremium: l.premium,
+          exitPrice: l.exit_price,
+          realizedPnl: l.realized_pnl,
+          entryTime: l.entry_at,
+          exitTime: l.exit_at,
+          tradeId: t.id,
+        }))
+      );
+    setPaperHistory(closed);
+  }, [journal]);
 
   const primaryChain = chainCache[expiry];
   const spot = primaryChain?.underlying_spot_price ?? null;
@@ -559,42 +623,41 @@ export default function PaperTradingPage() {
     orderInFlightRef.current = true;
     setOrderInFlight(true);
     try {
-      // Centralized market-hours gate, checked at the exact moment of execution.
+      // Frontend fast-fail pre-checks (the BACKEND is the final authority and
+      // re-validates everything at the exact moment of execution).
       const gateMsg = await assertMarketOpen();
       if (gateMsg) {
         alert(gateMsg);
         return;
       }
-      // Chain-availability gate, also checked at the exact moment of execution:
-      // every expiry referenced by the legs must have its chain loaded before
-      // the order fills (prices must come from the correct expiry's data).
       const missingAtExecution = missingChainExpiries(legs, chainCache);
       if (missingAtExecution.length > 0) {
         alert(`Required chain data for ${missingAtExecution.join(", ")} is not loaded yet. Paper order was not executed.`);
         return;
       }
-      let cashDelta = 0;
-      const newPositions = legs.map((l) => {
-        const dir = dirOf(l.action);
-        const effectiveQty = l.qty * multiplier;
-        cashDelta -= dir * l.price * lotSize * effectiveQty;
-        return {
-          id: `pos-${l.type}-${l.strike}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          symbol,
-          type: l.type,
-          strike: l.strike,
-          expiry: l.expiry,
-          action: l.action,
-          qty: effectiveQty,
-          lotSize,
-          entryPremium: l.price,
-          entryTime: new Date().toISOString(),
-          strategyName: strategy.name,
-        };
+      // Submit an idempotent strategy execution. The backend decides the fill
+      // prices (from its own chain fetches), position quantities, cash and P&L
+      // — the frontend never simulates the fill.
+      const order = buildExecutionRequest({
+        symbol,
+        strategy,
+        legs,
+        lotSize,
+        multiplier,
+        startingCapital: paperStartingCapital,
       });
-      const newPositionIds = new Set(newPositions.map((p) => p.id));
-      setPaperCash((c) => c + cashDelta);
-      setPaperPositions((prev) => [...prev, ...newPositions]);
+      try {
+        await submitPaperExecution(order);
+      } catch (e) {
+        if (isAuthError(e)) {
+          setSessionExpired(true);
+          return;
+        }
+        alert(paperErrorMessage(e));
+        return;
+      }
+      // Success: reload the authoritative state and reset the builder.
+      await Promise.all([loadPortfolio(), loadJournal()]);
       setLegs([]);
       setStrategyName(null);
       setStrategyId(newStrategyId());
@@ -605,44 +668,6 @@ export default function PaperTradingPage() {
       setWidth(0);
       setHedge(0);
       setShowAddLeg(false);
-
-      // Auto-log the fill into the DB journal (trades + legs). Best-effort: the
-      // local simulator stays the source of truth if the backend is unreachable.
-      const order = {
-        symbol,
-        strategy_tag: strategy.name,
-        starting_capital: paperStartingCapital,
-        legs: legs.map((l) => ({
-          symbol,
-          expiration_date: l.expiry,
-          strike_price: l.strike,
-          option_type: l.type,
-          action: l.action,
-          premium: l.price,
-          quantity: l.qty * multiplier,
-          lot_size: lotSize,
-        })),
-      };
-      submitPaperFill(order)
-        .then((created) => {
-          const legIds = new Map(created.legs.map((lg, i) => [newPositions[i]?.id, lg.id]));
-          setPaperPositions((prev) =>
-            prev.map((p) => (legIds.has(p.id) ? { ...p, tradeId: created.id, legId: legIds.get(p.id) } : p))
-          );
-          loadJournal();
-        })
-        .catch((e) => {
-          if (e.response?.status === 409) {
-            // The backend's own gate rejected the fill (market closed between
-            // our check and theirs). Roll the local execution back so no
-            // cash/position state survives a rejected order.
-            setPaperCash((c) => c - cashDelta);
-            setPaperPositions((prev) => prev.filter((p) => !newPositionIds.has(p.id)));
-            alert(e.message || MARKET_CLOSED_MSG);
-            return;
-          }
-          console.warn("Paper journal sync failed (trade kept locally):", e.message);
-        });
     } finally {
       orderInFlightRef.current = false;
       setOrderInFlight(false);
@@ -668,72 +693,70 @@ export default function PaperTradingPage() {
     await executeTradeAll();
   };
 
-  const closePosition = async (id) => {
-    const position = paperPositions.find((p) => p.id === id);
+  const closePosition = async (id, qty) => {
+    const position = paperPositions.find((p) => p.positionId === id || p.id === id);
     if (!position || orderInFlightRef.current) return; // no double execution
     orderInFlightRef.current = true;
     setOrderInFlight(true);
     try {
-      // Exits are sell orders: same market-hours gate, checked at execution time.
+      const requestedQty = qty ?? exitQtyMap[position.positionId] ?? position.qty;
+      const check = validateExitQuantity(position, requestedQty);
+      if (!check.ok) {
+        alert(check.error);
+        return;
+      }
+      // Exits go through the same market-hours gate (re-checked at execution
+      // time); the backend validates and fills at its own market price.
       const gateMsg = await assertMarketOpen();
       if (gateMsg) {
         alert(gateMsg);
         return;
       }
-      const exitPrice = getCurrentLtp(position);
-      if (exitPrice == null) {
-        alert("No live price cached for this position's expiry yet. Select that expiry in the builder above once to load it, then try closing again.");
+      try {
+        await exitPaperPosition(position.positionId, buildExitRequest(requestedQty));
+      } catch (e) {
+        if (isAuthError(e)) {
+          setSessionExpired(true);
+          return;
+        }
+        alert(paperErrorMessage(e));
         return;
       }
-      const dir = dirOf(position.action);
-      const cashDelta = dir * exitPrice * position.lotSize * position.qty;
-      const realizedPnl = dir * (exitPrice - position.entryPremium) * position.lotSize * position.qty;
-      const historyEntry = { ...position, exitPrice, exitTime: new Date().toISOString(), realizedPnl };
-      setPaperCash((c) => c + cashDelta);
-      setPaperPositions((prev) => prev.filter((p) => p.id !== id));
-      setPaperHistory((prev) => [historyEntry, ...prev]);
-
-      // Sync the exit to the DB journal; the backend closes the whole trade
-      // once its last leg is closed (computing multi-leg net credit/debit).
-      if (position.tradeId && position.legId) {
-        closePaperLeg(position.tradeId, position.legId, exitPrice)
-          .then(loadJournal)
-          .catch((e) => {
-            if (e.response?.status === 409) {
-              // Backend gate rejected the exit; restore the position so the
-              // simulator does not act as though the close executed.
-              setPaperCash((c) => c - cashDelta);
-              setPaperPositions((prev) => [...prev, position]);
-              setPaperHistory((prev) => prev.filter((h) => h !== historyEntry));
-              alert(e.message || MARKET_CLOSED_MSG);
-              return;
-            }
-            console.warn("Journal leg close sync failed:", e.message);
-          });
-      }
+      // Success: reload the authoritative portfolio + journal.
+      await Promise.all([loadPortfolio(), loadJournal()]);
     } finally {
       orderInFlightRef.current = false;
       setOrderInFlight(false);
     }
   };
 
-  const resetPaperPortfolio = () => {
+  const resetPaperPortfolio = async () => {
     if (!window.confirm("Reset your paper portfolio? This clears all open positions and trade history.")) return;
-    setPaperCash(paperStartingCapital);
-    setPaperPositions([]);
-    setPaperHistory([]);
+    try {
+      const port = await apiResetPaperPortfolio();
+      setPortfolio(port);
+      const summary = portfolioDisplay(port);
+      setPaperStartingCapital(summary.startingCash);
+      setPaperCash(summary.availableCash ?? summary.startingCash);
+      setPaperPositions([]);
+      setExitQtyMap({});
+      loadJournal();
+    } catch (e) {
+      alert(paperErrorMessage(e));
+    }
   };
 
+  // Marks come from the existing chain cache (the platform market-data path);
+  // everything else (qty, avg entry, realized, cash) is the backend's state.
   const positionsWithLtp = paperPositions.map((p) => {
     const ltp = getCurrentLtp(p);
-    const dir = dirOf(p.action);
-    const unrealizedPnl = ltp != null ? dir * (ltp - p.entryPremium) * p.lotSize * p.qty : null;
-    return { ...p, currentLtp: ltp, unrealizedPnl };
+    return { ...p, currentLtp: ltp, unrealizedPnl: markUnrealizedPnl(p, ltp) };
   });
   const totalUnrealized = positionsWithLtp.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const equity = paperCash + positionsWithLtp.reduce((sum, p) => (p.currentLtp == null ? sum : sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty), 0);
   const totalPnl = equity - paperStartingCapital;
-  const totalRealized = paperHistory.reduce((sum, h) => sum + h.realizedPnl, 0);
+  // Realized P&L is server-authoritative (summed over the user's positions).
+  const totalRealized = portfolioDisplay(portfolio).realizedPnl ?? paperHistory.reduce((sum, h) => sum + (h.realizedPnl ?? 0), 0);
   const perStrategy = useMemo(() => strategyStats(paperHistory), [paperHistory]);
 
   // Record an equity snapshot (at most one per minute, market hours only) while
@@ -2124,8 +2147,15 @@ export default function PaperTradingPage() {
                     : "mark-to-market at last available (closing) prices · market closed · simplified simulator"}
                 </div>
               </div>
+              {portfolioError && (
+                <div style={{ fontSize: 11.5, color: C.gold, marginBottom: 8, lineHeight: 1.5 }}>
+                  ⚠️ Could not load the server portfolio: {portfolioError} — positions and cash below are not authoritative.
+                </div>
+              )}
               {positionsWithLtp.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: C.faint, padding: "18px 0" }}>No open positions.</div>
+                <div style={{ fontSize: 12.5, color: C.faint, padding: "18px 0" }}>
+                  {portfolioError ? "No position data loaded from the server." : "No open positions."}
+                </div>
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -2137,7 +2167,7 @@ export default function PaperTradingPage() {
                         <th style={{ padding: 6 }}>Entry Price</th>
                         <th style={{ padding: 6 }}>{priceLive ? "Current LTP" : "Last Price"}</th>
                         <th style={{ padding: 6 }}>{priceLive ? "Live P&L" : "P&L (last)"}</th>
-                        <th style={{ padding: 6 }}></th>
+                        <th style={{ padding: 6 }}>Exit</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2157,14 +2187,28 @@ export default function PaperTradingPage() {
                             {p.unrealizedPnl == null ? "-" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl)}`}
                           </td>
                           <td style={{ padding: 6 }}>
-                            <button
-                              onClick={() => closePosition(p.id)}
-                              disabled={orderInFlight}
-                              title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Close this position at the current LTP"}
-                              style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer", opacity: orderInFlight || marketNotOpen ? 0.5 : 1 }}
-                            >
-                              Close
-                            </button>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
+                              <input
+                                type="number"
+                                min={1}
+                                max={p.qty}
+                                value={exitQtyMap[p.positionId] ?? p.qty}
+                                onChange={(e) =>
+                                  setExitQtyMap((prev) => ({ ...prev, [p.positionId]: Math.max(1, Number(e.target.value) || 1) }))
+                                }
+                                disabled={orderInFlight}
+                                title="Exit quantity in lots (partial exits supported)"
+                                style={{ width: 46, fontSize: 11, textAlign: "center", background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px" }}
+                              />
+                              <button
+                                onClick={() => closePosition(p.positionId ?? p.id)}
+                                disabled={orderInFlight}
+                                title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Exit this many lots at the current market price"}
+                                style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer", opacity: orderInFlight || marketNotOpen ? 0.5 : 1 }}
+                              >
+                                Exit
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -23,7 +23,16 @@ class PaperAccount(Base):
 
 
 class Trade(Base):
-    """A paper trade: one strategy execution, made up of one or more legs."""
+    """A paper trade: one strategy execution, made up of one or more legs.
+
+    Phase 5.0: the authoritative execution layer lives in
+    ``StrategyExecution`` / ``PaperOrder`` / ``Position`` /
+    ``PaperTransaction``; this table remains the user-facing JOURNAL record
+    (account stats, trade log). Every journal record created by the
+    authoritative engine carries the same ``strategy_execution_id`` as its
+    execution so journal and portfolio stay reconcilable, and
+    ``client_order_id`` guards against duplicate journal writes on retries.
+    """
 
     __tablename__ = "trades"
 
@@ -40,6 +49,11 @@ class Trade(Base):
     exit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    # Phase 5.0 linkage to the authoritative execution layer (nullable so the
+    # legacy journal path keeps working unchanged; columns added to existing
+    # databases by ``db.init_db``'s ensure_column migration).
+    strategy_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    client_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     legs: Mapped[list["Leg"]] = relationship(
         back_populates="trade", cascade="all, delete-orphan", order_by="Leg.id"
@@ -67,6 +81,148 @@ class Leg(Base):
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     trade: Mapped[Trade] = relationship(back_populates="legs")
+
+
+# ---- Phase 5.0: server-authoritative paper trading domain ----------------
+#
+# The backend is the single source of truth for orders, fills, positions,
+# cash and P&L. The four tables below are the authoritative layer; the
+# legacy ``Trade``/``Leg`` journal rows are written by the same engine (and
+# carry the same ``strategy_execution_id``) so the journal UI keeps working.
+# Quantities are LOTS everywhere; rupee exposure scales by lot_size.
+
+
+class StrategyExecution(Base):
+    """One strategy execution: a grouped multi-leg paper trade.
+
+    ``client_order_id`` is the idempotency key at the execution boundary:
+    the unique per-user constraint means a retried request can never create
+    a second execution, a second set of orders, double-counted cash or
+    duplicate journal records.
+
+    ``status`` uses the execution states PENDING / FILLED / PARTIAL /
+    FAILED / CANCELLED. The current engine pre-validates everything (market
+    gate, chain data, prices) before writing, so it executes atomically:
+    a successful request is FILLED with every order filled; any failure
+    writes nothing (no misleading "fully executed" results).
+    """
+
+    __tablename__ = "strategy_executions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    execution_id: Mapped[str] = mapped_column(String(40), index=True)
+    client_order_id: Mapped[str] = mapped_column(String(64))
+    strategy_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    strategy_tag: Mapped[str] = mapped_column(String(64), default="Custom")
+    symbol: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(12), default="PENDING")
+    # Net entry money flow in rupees — same convention as ``Trade.entry_net``:
+    # positive = net debit paid, negative = net credit received.
+    entry_net: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    exit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "client_order_id", name="uq_execution_client_order"),)
+
+
+class PaperOrder(Base):
+    """One paper order (one leg of an entry, or one exit fill).
+
+    Status lifecycle: PENDING → FILLED / PARTIALLY_FILLED / CANCELLED /
+    REJECTED. The current engine fills atomically (PENDING → FILLED), but the
+    full state model and transition validator exist so future async/partial
+    fills cannot violate the lifecycle.
+
+    ``client_order_id`` is the per-order idempotency key (unique per user);
+    exits reuse it so duplicate exit requests return the original result.
+    """
+
+    __tablename__ = "paper_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    client_order_id: Mapped[str] = mapped_column(String(64))
+    execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    position_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # entry (part of a strategy execution) | exit (closes a position)
+    kind: Mapped[str] = mapped_column(String(8), default="entry")
+    symbol: Mapped[str] = mapped_column(String(16))
+    expiry: Mapped[str] = mapped_column(String(10))
+    strike: Mapped[float] = mapped_column(Float)
+    option_type: Mapped[str] = mapped_column(String(8))  # call | put
+    action: Mapped[str] = mapped_column(String(8))  # buy | sell (fill direction)
+    quantity: Mapped[int] = mapped_column(Integer)  # lots
+    lot_size: Mapped[int] = mapped_column(Integer)  # contracts per lot
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    filled_quantity: Mapped[int] = mapped_column(Integer, default=0)  # lots filled
+    fill_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_source: Mapped[str] = mapped_column(String(16), default="market")
+    realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)  # exits only
+    rejected_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    journal_leg_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # legacy Leg row
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "client_order_id", name="uq_order_client_order"),)
+
+
+class Position(Base):
+    """Netted paper position for one tradable instrument.
+
+    Identity: user + symbol + expiry + strike + option_type (unique).
+    ``net_quantity`` is signed LOTS: BUY = +, SELL = −. Same-direction fills
+    update the weighted-average entry price; opposite-direction fills realize
+    P&L against that average. A zero net quantity marks the position CLOSED
+    but keeps the record queryable (history is never silently overwritten).
+    """
+
+    __tablename__ = "positions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    symbol: Mapped[str] = mapped_column(String(16))
+    expiry: Mapped[str] = mapped_column(String(10))
+    strike: Mapped[float] = mapped_column(Float)
+    option_type: Mapped[str] = mapped_column(String(8))  # call | put
+    net_quantity: Mapped[int] = mapped_column(Integer, default=0)  # signed lots
+    average_entry_price: Mapped[float] = mapped_column(Float, default=0.0)
+    lot_size: Mapped[int] = mapped_column(Integer, default=0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)  # rupees
+    status: Mapped[str] = mapped_column(String(8), default="open")  # open | closed
+    strategy_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "symbol", "expiry", "strike", "option_type", name="uq_position_instrument"
+        ),
+    )
+
+
+class PaperTransaction(Base):
+    """Auditable cash-ledger record for every cash-affecting paper execution.
+
+    ``amount`` is the signed rupee change applied to available cash
+    (buy pays out = negative, sell receives = positive). Available cash is
+    derived as ``starting_capital + SUM(amount)`` — the ledger is the only
+    writer, so cash can always be reconciled to recorded transactions.
+    """
+
+    __tablename__ = "paper_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    type: Mapped[str] = mapped_column(String(20))  # ENTRY_DEBIT | ENTRY_CREDIT | EXIT_DEBIT | EXIT_CREDIT
+    amount: Mapped[float] = mapped_column(Float)  # signed rupees applied to cash
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class IVObservation(Base):

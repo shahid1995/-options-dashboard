@@ -4,7 +4,7 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine**
+**Phase 5.0 — Paper Trading & Portfolio Foundation**
 
 Status: 🔄 **Implemented / Pending Review**
 
@@ -22,7 +22,7 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete | Canonical Greek units, live/model comparison, per-leg exposure, contributions and Scenario-panel integration |
 | Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
-| Phase 5 — Paper trading / portfolio upgrade | 🔵 Next | Not started |
+| Phase 5.0 — Paper Trading & Portfolio Foundation | 🔄 Implemented | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI — pending review |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
@@ -38,7 +38,9 @@ Status: 🔄 **Implemented / Pending Review**
 
 This is the verified Phase 4.1 implementation baseline (the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
 
-The Phase 4.2 implementation is committed in the same commit as this status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
+The Phase 4.2 implementation is committed in the same commit as its status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
+
+The Phase 5.0 implementation is committed in the SAME commit as this status update but is NOT yet user-verified or ChatGPT-reviewed.
 
 ## Phase 4.2 implementation
 
@@ -57,6 +59,40 @@ Automated tests (actual):
 
 - Frontend: 461/461 tests passed (21 files) — 70 new (23 statistics + 47 market analytics)
 - Backend: 104/104 tests passed
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
+
+## Phase 5.0 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (paper trading only — no real-money execution, no margin engine, no signals):
+
+- **Server-authoritative paper trading layer** (`backend/app/services/paper_execution.py` + new `strategy_executions`, `paper_orders`, `positions`, `paper_transactions` tables): the backend now decides fills, position quantities, cash and realized P&L; the frontend only displays backend state
+- **Order lifecycle**: PENDING / FILLED / PARTIALLY_FILLED / CANCELLED / REJECTED with a pure transition validator (no CANCELLED→FILLED etc.); execution states PENDING / FILLED / PARTIAL / FAILED / CANCELLED
+- **Idempotency**: `client_order_id` unique per user at the execution AND exit boundaries — retries/double-clicks/browser retries return the ORIGINAL result, never a second execution, double-counted cash or duplicate journal record (tested)
+- **Fill prices from authoritative market data**: the backend fetches each required expiry chain itself and uses the LTP of each leg's own strike/side; missing chain/strike/quote blocks execution (no stale client values, no cross-expiry fallback)
+- **Netted positions**: same user + symbol + expiry + strike + option type net into one row (BUY = +, SELL = −); weighted-average entry on adds; realized P&L on reductions against the average; partial/full exits; reversals; zero quantity marks CLOSED but keeps the record
+- **Realized vs unrealized P&L kept separate**: realized is server-computed from exits; unrealized is a mark-to-market display using the existing chain-cache market-data path (never fabricated server-side — stays null without a mark)
+- **Cash ledger**: every cash-affecting execution writes a `paper_transactions` record (ENTRY_DEBIT/CREDIT, EXIT_DEBIT/CREDIT); available cash = starting capital + ledger sum — fully auditable and reconcilable
+- **Multi-leg grouping**: all orders of one strategy share `strategy_execution_id`; execution is ATOMIC (validated fully before writing, so a failure writes nothing — never a misleading partial success); strategy-grouped portfolio view
+- **Exits**: full or partial, idempotent, market-gated, chain-price-resolved, closes journal legs FIFO and closes the legacy journal trade when fully exited
+- **Portfolio API**: GET `/paper/portfolio` (summary + strategy groups), GET `/paper/positions`, GET `/paper/orders`, GET `/paper/reconcile`, POST `/paper/executions`, POST `/paper/positions/{id}/exit`, POST `/paper/portfolio/reset`
+- **Structured errors** (MARKET_CLOSED, CHAIN_DATA_MISSING, INVALID_QUANTITY, POSITION_NOT_FOUND, INSUFFICIENT_POSITION, INVALID_STATE_TRANSITION, EXECUTION_FAILED) with human-readable messages, no stack traces
+- **Concurrency protection**: unique (user_id, client_order_id) constraints as the hard backstop against double fills, with the available-quantity re-check performed inside the same transaction as the position update (SQLite file locking / Postgres transaction isolation serialize writers)
+- **User isolation**: all queries scoped by `user_id`; user B can never read or exit user A's positions/orders (tested)
+- **Persistence**: SQLAlchemy models + `init_db()` — new tables via `create_all`, plus an idempotent `ensure_column` migration for the two new nullable columns on the pre-existing `trades` table; state survives restart
+- **Frontend**: portfolio/positions/cash mirror the backend (localStorage simulator removed as a source of truth); execution and exits call the new idempotent endpoints and reload authoritative state; partial-exit quantity control in the active-positions table; legacy `/paper/fills` + leg-close endpoints retained for backward compatibility
+- **Pure frontend helpers** (`frontend/lib/portfolio.js`): idempotency keys, position shaping, mark P&L, exit-quantity validation, structured error messages, request builders
+
+Automated tests (actual):
+
+- Frontend: 481/481 tests passed (22 files) — 20 new portfolio tests
+- Backend: 148/148 tests passed — 44 new Phase 5.0 tests (lifecycle, idempotency, netting/weighted average, partial/full exits, reversal, realized/unrealized, portfolio, multi-leg grouping, atomic failure, market/chain gates, concurrency-style duplicates, isolation, journal linkage, reconciliation)
 - `npx next build`: passed; all routes generated; no type/lint errors
 
 Manual verification: ⏳ pending
@@ -201,19 +237,19 @@ Verified manually:
 - Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
 - Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile AND Phase 4.2 z-scores/percentiles/anomaly scores stay unavailable until a reliable sample exists.
 - Full capital/margin is not yet modeled.
-- Backend/database should become increasingly authoritative for persistent trading state.
+- Phase 5.0 made the backend authoritative for orders/positions/cash/realized P&L; unrealized P&L remains a mark-to-market display fed by the frontend chain cache (the platform's market-data path).
 - Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
+- Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
+- The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Next phase objective — Phase 5: Paper Trading / Portfolio Upgrade
+## Next phase objective — Phase 5.1 or Phase 6 (after review)
 
-Phase 4.2 (generic analytics + statistical measurements) is implemented and pending review. The next milestone is the paper trading / portfolio upgrade:
+Phase 5.0 (server-authoritative paper trading & portfolio foundation) is implemented and pending review. The next milestone is **Phase 5.1 or Phase 6**, depending on what the review recommends:
 
-- Paper positions dashboard improvements (open positions, live P&L per leg, close flows)
-- Portfolio-level metrics (exposure, concentration, cash accounting)
-- Enhanced journal and performance views
-- Reuse the Phase 4.2 generic analytics layer where measurements are needed
+- Phase 5.1 candidates: paper position dashboard polish, portfolio-level exposure/concentration views, enhanced journal/performance views (reusing the Phase 4.2 generic analytics layer)
+- Phase 6: capital & margin analysis (SPAN / exposure margin, return on capital)
 
-The Phase 5 prompt has not been prepared yet; wait for it from ChatGPT.
+The next-phase prompt has not been prepared yet; wait for it from ChatGPT.
 
 ## Permanent project constraints
 
@@ -237,4 +273,4 @@ The Phase 5 prompt has not been prepared yet; wait for it from ChatGPT.
 
 ## Next action
 
-**User:** Manually verify the Phase 4.2 Analytics tab (ATM-strike CE vs PE table, price/IV relationship after a second observation, statistics intentionally unavailable). Then ChatGPT reviews the diff. Only after approval does Phase 5 begin.
+**User:** Manually verify Phase 5.0 (execute a strategy → backend portfolio shows positions/cash; partial & full exits → realized P&L updates; duplicate clicks don't double-trade; reload the page → state persists from the server; market closed → orders blocked). Then ChatGPT reviews the diff. Only after approval does Phase 5.1 / Phase 6 begin.
