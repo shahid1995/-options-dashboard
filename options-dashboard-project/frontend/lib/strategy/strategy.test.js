@@ -279,3 +279,48 @@ describe("expiry changes", () => {
     expect(changeLegExpiry(legs, "nope", "2026-09-04", ctx)).toBe(legs);
   });
 });
+
+describe("multi-expiry chain pricing (Phase 2.1)", () => {
+  // Two expiries loaded with different LTPs at the same strike: the far leg
+  // must be priced from its own chain, never the primary-chain fallback.
+  function makeTwoExpiryCtx() {
+    const primary = { strike: 25000, call: { ltp: 200 }, put: { ltp: 150 } };
+    const far = { strike: 25000, call: { ltp: 320 }, put: { ltp: 260 } };
+    return buildChainContext({
+      chainCache: {
+        "2026-08-28": { chain: [primary], underlying_spot_price: 25000 },
+        "2026-09-04": { chain: [far], underlying_spot_price: 25000 },
+      },
+      strikes: [25000],
+      chainByStrike: new Map([[25000, primary]]),
+      spot: 25000,
+      atmIndex: 0,
+      expiry: "2026-08-28",
+    });
+  }
+
+  it("prices each leg from its own expiry's chain", () => {
+    const ctx = makeTwoExpiryCtx();
+    expect(priceForLeg(ctx, "call", 25000, "2026-08-28")).toBe(200);
+    expect(priceForLeg(ctx, "call", 25000, "2026-09-04")).toBe(320);
+    expect(priceForLeg(ctx, "put", 25000, "2026-09-04")).toBe(260);
+  });
+
+  it("resetLegPrices refreshes every leg from its own expiry's chain", () => {
+    const ctx = makeTwoExpiryCtx();
+    const legs = [
+      leg({ id: "near", expiry: "2026-08-28", price: 1 }),
+      leg({ id: "far", expiry: "2026-09-04", price: 1 }),
+    ];
+    const next = resetLegPrices(legs, ctx);
+    expect(next[0].price).toBe(200);
+    expect(next[1].price).toBe(320);
+  });
+
+  it("changeLegExpiry re-prices from the loaded far chain, not the primary", () => {
+    const ctx = makeTwoExpiryCtx();
+    const next = changeLegExpiry([leg({ id: "a", price: 123 })], "a", "2026-09-04", ctx);
+    expect(next[0].expiry).toBe("2026-09-04");
+    expect(next[0].price).toBe(320); // far chain's call LTP, not the primary's 200
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStrategyContext, buildChainContext } from "./strategyUtils";
+import { buildStrategyContext, buildChainContext, requiredExpiries, missingChainExpiries } from "./strategyUtils";
 
 describe("buildStrategyContext", () => {
   const chain = (expiry) => ({
@@ -77,5 +77,44 @@ describe("buildChainContext", () => {
     const ctx = buildChainContext({ chainCache: { "2026-09-04": null }, strikes: [25000], chainByStrike: new Map(), spot: null, atmIndex: 0, expiry: "2026-08-28" });
     expect(ctx.chainsByExpiry).toEqual({});
     expect(ctx.strikes).toEqual([25000]);
+  });
+});
+
+describe("requiredExpiries", () => {
+  const leg = (overrides = {}) => ({ type: "call", action: "buy", strike: 25000, qty: 1, expiry: "2026-08-28", price: 200, ...overrides });
+
+  it("a same-expiry strategy requires exactly one chain", () => {
+    expect(requiredExpiries([leg(), leg({ type: "put", strike: 24900 })])).toEqual(["2026-08-28"]);
+  });
+
+  it("a multi-expiry strategy requires every referenced chain, deduped and sorted", () => {
+    expect(requiredExpiries([leg({ expiry: "2026-09-04" }), leg(), leg({ expiry: "2026-09-04" })])).toEqual([
+      "2026-08-28",
+      "2026-09-04",
+    ]);
+  });
+
+  it("ignores legs without an expiry and returns [] for no legs", () => {
+    expect(requiredExpiries([])).toEqual([]);
+    expect(requiredExpiries(null)).toEqual([]);
+    expect(requiredExpiries([leg({ expiry: null }), leg({ expiry: "" })])).toEqual([]);
+  });
+});
+
+describe("missingChainExpiries", () => {
+  const calendarLegs = [{ expiry: "2026-08-28" }, { expiry: "2026-09-04" }];
+
+  it("returns [] when every required chain is loaded", () => {
+    expect(missingChainExpiries(calendarLegs, { "2026-08-28": {}, "2026-09-04": {} })).toEqual([]);
+  });
+
+  it("lists the secondary expiry whose chain is missing", () => {
+    expect(missingChainExpiries(calendarLegs, { "2026-08-28": {} })).toEqual(["2026-09-04"]);
+  });
+
+  it("treats a missing or empty chain map conservatively", () => {
+    expect(missingChainExpiries(calendarLegs, null)).toEqual(["2026-08-28", "2026-09-04"]);
+    expect(missingChainExpiries(calendarLegs, {})).toEqual(["2026-08-28", "2026-09-04"]);
+    expect(missingChainExpiries([], { "2026-08-28": {} })).toEqual([]);
   });
 });

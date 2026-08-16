@@ -32,7 +32,7 @@ import {
   removeLastHedgeLeg,
   priceForLeg,
 } from "@/lib/strategy/strategy";
-import { buildStrategyContext, buildChainContext } from "@/lib/strategy/strategyUtils";
+import { buildStrategyContext, buildChainContext, requiredExpiries, missingChainExpiries } from "@/lib/strategy/strategyUtils";
 import { validateLeg, validateStrategy, validateExecution } from "@/lib/strategy/strategyValidation";
 import { newStrategyId, deriveStrategy, strategySourceLabel } from "@/lib/strategy/strategyIdentity";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
@@ -215,12 +215,26 @@ export default function PaperTradingPage() {
       });
   }, [loggedIn, symbol]);
 
-  // Poll the primary expiry's chain every 5s
+  // Multi-expiry chain requirements (Phase 2.1): every expiry referenced by
+  // the legs must have its chain loaded before the strategy can be priced or
+  // validated for execution. Calendar/diagonal templates add a second expiry
+  // the moment they are applied — the auto-load effect below fetches any
+  // missing chain, and the poll loop keeps it fresh.
+  const requiredExps = useMemo(() => requiredExpiries(legs), [legs]);
+
+  // Poll every chain the strategy needs every 5s: the selected expiry plus any
+  // expiry referenced by legs (multi-expiry strategies). Keeping every required
+  // chain fresh means leg premiums and position LTPs come from the right
+  // expiry even when the strategy spans two expiries. The key is stringified so
+  // a re-priced legs array (same expiries) never restarts the interval.
+  const pollKey = [expiry, ...requiredExps].filter(Boolean).join(",");
+  const pollTargets = useMemo(() => (pollKey ? pollKey.split(",") : []), [pollKey]);
+
   useEffect(() => {
-    if (!loggedIn || !expiry) return;
+    if (!loggedIn || pollTargets.length === 0) return;
     let cancelled = false;
     const tick = () => {
-      if (!cancelled) loadChain(expiry);
+      if (!cancelled) pollTargets.forEach((exp) => loadChain(exp));
     };
     tick();
     const interval = setInterval(tick, 5000);
@@ -228,7 +242,7 @@ export default function PaperTradingPage() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [loggedIn, expiry, loadChain]);
+  }, [loggedIn, pollTargets, loadChain]);
 
   // Load / save paper trading state to the browser
   useEffect(() => {
@@ -346,6 +360,23 @@ export default function PaperTradingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chainCache, chainCtx, legs.length]);
 
+  // Request any chain the strategy references that is not loaded yet. This is
+  // what makes calendar/diagonal templates work end-to-end: the moment a
+  // second expiry enters the legs, its chain is fetched automatically (the
+  // fresh-chain effect above then re-prices those legs from the correct
+  // expiry's data). In-flight requests are tracked so a re-render never fires
+  // a duplicate fetch; a failed load is retried by the poll loop above.
+  const requestedChainsRef = useRef(new Set());
+  useEffect(() => {
+    const missing = missingChainExpiries(legs, chainCache);
+    if (missing.length === 0) return;
+    missing.forEach((exp) => {
+      if (requestedChainsRef.current.has(exp)) return;
+      requestedChainsRef.current.add(exp);
+      loadChain(exp).finally(() => requestedChainsRef.current.delete(exp));
+    });
+  }, [legs, chainCache, loadChain]);
+
   // Session change % for the header (vs the first spot seen for this symbol).
   useEffect(() => {
     if (spot == null) return;
@@ -379,6 +410,10 @@ export default function PaperTradingPage() {
       }),
     [strategyId, strategyName, symbol, expiry, legs, strategySource, strategyCreatedAt]
   );
+
+  // Expiries still missing from the cache while the strategy references them
+  // (drives the inline loading hint under the legs table).
+  const missingRequiredExpiries = useMemo(() => missingChainExpiries(legs, chainCache), [legs, chainCache]);
 
   // Structural validation, shown inline under the legs table; and the
   // pre-execution validation (structure + market status + chain availability)
@@ -471,6 +506,14 @@ export default function PaperTradingPage() {
       const gateMsg = await assertMarketOpen();
       if (gateMsg) {
         alert(gateMsg);
+        return;
+      }
+      // Chain-availability gate, also checked at the exact moment of execution:
+      // every expiry referenced by the legs must have its chain loaded before
+      // the order fills (prices must come from the correct expiry's data).
+      const missingAtExecution = missingChainExpiries(legs, chainCache);
+      if (missingAtExecution.length > 0) {
+        alert(`Required chain data for ${missingAtExecution.join(", ")} is not loaded yet. Paper order was not executed.`);
         return;
       }
       let cashDelta = 0;
@@ -1273,6 +1316,13 @@ export default function PaperTradingPage() {
                       {msg}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {missingRequiredExpiries.length > 0 && (
+                <div style={{ marginTop: 10, fontSize: 10.5, color: C.gold, lineHeight: 1.5 }}>
+                  ⏳ Loading chain{missingRequiredExpiries.length > 1 ? "s" : ""} for {missingRequiredExpiries.join(", ")} —
+                  premiums will refresh automatically when the data arrives.
                 </div>
               )}
 

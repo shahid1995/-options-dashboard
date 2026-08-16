@@ -119,3 +119,68 @@ describe("validateExecution — pre-execution gate", () => {
     expect(r.valid).toBe(true);
   });
 });
+
+describe("validateExecution — multi-expiry chain requirements (Phase 2.1)", () => {
+  // Calendar-style spread: primary expiry + a second (far) expiry.
+  const calendarLegs = [
+    leg({ expiry: "2026-08-28" }),
+    leg({ expiry: "2026-09-04", type: "call", strike: 25000, action: "sell", price: 180 }),
+  ];
+  const bothChains = {
+    "2026-08-28": [25000],
+    "2026-09-04": [25000],
+  };
+  const expiriesAll = ["2026-08-28", "2026-09-04"];
+
+  it("a same-expiry strategy requires only its one chain", () => {
+    const r = validateExecution([leg(), leg({ type: "put", strike: 24900 })], {
+      marketStatus: { status: "open" },
+      chains: { "2026-08-28": [24900, 25000] },
+      expiries: ["2026-08-28"],
+    });
+    expect(r.valid).toBe(true);
+    expect(r.issues).toEqual([]);
+  });
+
+  it("a missing secondary chain blocks execution", () => {
+    const r = validateExecution(calendarLegs, {
+      marketStatus: { status: "open" },
+      chains: { "2026-08-28": [25000] },
+      expiries: expiriesAll,
+    });
+    expect(r.valid).toBe(false);
+    expect(r.issues).toContain("Leg 2: Chain data for expiry 2026-09-04 is not loaded.");
+  });
+
+  it("loading the secondary chain clears the chain-missing error", () => {
+    const r = validateExecution(calendarLegs, {
+      marketStatus: { status: "open" },
+      chains: bothChains,
+      expiries: expiriesAll,
+    });
+    expect(r.valid).toBe(true);
+    expect(r.issues).toEqual([]);
+  });
+
+  it("market CLOSED still blocks execution when every chain is available", () => {
+    const r = validateExecution(calendarLegs, {
+      marketStatus: { status: "closed" },
+      chains: bothChains,
+      expiries: expiriesAll,
+    });
+    expect(r.valid).toBe(false);
+    expect(r.issues).toContain("Market is closed. Paper order was not executed.");
+    expect(r.issues.some((m) => m.includes("not loaded"))).toBe(false);
+  });
+
+  it("a missing secondary chain is never bypassed by an unknown market status", () => {
+    const r = validateExecution(calendarLegs, {
+      marketStatus: { status: "unknown" },
+      chains: { "2026-08-28": [25000] },
+      expiries: expiriesAll,
+    });
+    expect(r.valid).toBe(false);
+    expect(r.issues).toContain("Unable to verify market status. Order was not executed.");
+    expect(r.issues).toContain("Leg 2: Chain data for expiry 2026-09-04 is not loaded.");
+  });
+});
