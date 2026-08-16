@@ -4,9 +4,9 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 2 — Professional Payoff & Risk Engine**
+**Phase 4 — Advanced Greeks / IV Analytics**
 
-Status: 🔵 **Prompt prepared / implementation pending**
+Status: 🔵 **Next phase / prompt preparation**
 
 ## Overall progress
 
@@ -16,9 +16,10 @@ Status: 🔵 **Prompt prepared / implementation pending**
 | Phase 0.5 — Strategy/calculation refactor | ✅ Complete | Reusable strategy and calculation domains created |
 | Phase 1 — Strategy Builder 2.0 | ✅ Complete | Strategy identity, validation, leg management, review-before-trade added |
 | Phase 1.1 — Risk metrics correction | ✅ Complete | Unlimited-profit handling for Reward/Risk and Premium ROI corrected |
-| Phase 2 — Professional Payoff & Risk Engine | 🔵 In progress | Prompt prepared; FreeBuff implementation is next |
-| Phase 3 — Scenario & Time Analysis | ⏳ Planned | Not started |
-| Phase 4 — Advanced Greeks / IV analytics | ⏳ Planned | Not started |
+| Phase 2 — Professional Payoff & Risk Engine | ✅ Complete | Chain-independent theoretical payoff, risk tails, exact same-expiry breakevens, S >= 0 handling |
+| Phase 2.1 — Multi-expiry chain handling | ✅ Complete | Required-expiry detection, auto-loading, expiry-specific pricing and execution chain gate |
+| Phase 3 — Scenario & Time Analysis | ✅ Complete | Dependency-free Black-Scholes-style model, scenario engine, scenario matrices, modelled Greeks and minimal Scenario UI |
+| Phase 4 — Advanced Greeks / IV analytics | 🔵 Next | Prompt preparation / implementation not started |
 | Phase 5 — Paper trading / portfolio upgrade | ⏳ Planned | Not started |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
@@ -29,11 +30,11 @@ Status: 🔵 **Prompt prepared / implementation pending**
 | Phase 12 — Multi-broker architecture | ⏳ Planned | Not started |
 | Phase 13 — Community | ⏳ Planned | Not started |
 
-## Latest known implementation commit
+## Latest verified implementation commit
 
-`3c0430b924ae97cb37e73f279a2337b63e32a393`
+`dbea20a1e39a88d13390e44ba18766231d1815ea`
 
-This is the verified Phase 1.1 implementation baseline.
+This is the verified Phase 2.1 implementation baseline. Phase 3 changes are reported as present in `main`; the latest exact Phase 3 commit SHA should be recorded after GitHub commit review if not yet identified in the current session.
 
 ## Phase 0.5 verification
 
@@ -104,6 +105,63 @@ Verified behavior:
 - UI indicates market closed.
 - Final execution-time check remains server-side.
 
+## Phase 2 verification
+
+Status: ✅ Passed
+
+Verified manually:
+
+- Long Call: PASS
+- Long Put: PASS
+- Bull Call Spread: PASS
+- Short Put: PASS
+- Mixed-expiry warning: PASS
+
+Phase 2 automated tests included theoretical payoff, tail behavior, breakevens, ratio/asymmetric quantities, S=0 boundaries and visible-chain independence.
+
+## Phase 2.1 verification
+
+Status: ✅ Passed
+
+Verified behavior:
+
+- Required expiry detection: PASS
+- Secondary expiry auto-load: PASS
+- Every required expiry polled/freshened: PASS
+- Each leg priced from its own expiry chain: PASS
+- Missing required chain blocks execution: PASS
+- Market CLOSED still blocks even when chains are available: PASS
+
+## Phase 3 verification
+
+Status: ✅ Passed / reported verified by user
+
+Implemented:
+
+- Dependency-free Black-Scholes-style European pricing engine
+- Normal PDF/CDF and d1/d2 helpers
+- T=0 intrinsic-value handoff to Phase 2 payoff
+- Edge-safe low-volatility and invalid-input handling
+- Model-consistent Delta/Gamma/Theta/Vega
+- Reusable scenario engine
+- Spot / IV / time / rate / dividend scenarios
+- Combined scenarios
+- Multi-expiry leg-by-leg modelling using each leg's own expiry and IV
+- Structured scenario warnings
+- Scenario P&L vs entry
+- Scenario change vs current live mark
+- Spot×IV, Spot×Time and IV×Time scenario matrices
+- Minimal Strategy Builder Scenario UI
+- LIVE vs MODELLED separation
+- Scenario analysis isolated from paper execution/positions/cash/market gate
+
+User-reported verification:
+
+- Frontend: 323 tests passed across 17 files
+- Backend: 99 tests passed
+- JSX parse check: PASS
+- Invalid scenario spot returns null totals instead of misleading ₹0
+
 ## Current architecture status
 
 ### Working foundations
@@ -111,38 +169,51 @@ Verified behavior:
 - Strategy domain ✅
 - Strategy identity ✅
 - Strategy validation ✅
-- Payoff calculation layer ✅
-- Risk calculation layer ✅
-- Basic Greeks calculation layer ✅
+- Chain-independent expiry payoff/risk ✅
+- Scenario/time pricing engine ✅
+- Live-chain Greeks ✅
+- Modelled scenario Greeks ✅
 - Central strategy calculator ✅
 - Strategy templates ✅
 - Paper trading ✅
 - Market-hours protection ✅
+- Multi-expiry chain handling ✅
 - Journal/database foundation ✅
 - Frontend unit tests ✅
 
 ### Current architecture concerns
 
 - `frontend/app/paper/page.js` is still a large orchestration component and should not become the home for future domain logic.
-- Payoff/risk theoretical results must be separated from visible option-chain/chart sampling.
-- Multi-expiry strategies currently need explicit analytical-mode handling until time-value modeling exists.
+- Live-chain Greeks and scenario-model Greeks must remain clearly distinguished.
 - Full capital/margin is not yet modeled.
 - Backend/database should become increasingly authoritative for persistent trading state.
+- Multi-expiry scenario valuation is leg-by-leg modelled and should remain clearly marked as an approximation for expiry payoff behaviour.
 
-## Current Phase 2 objective
+## Current Phase 4 objective
 
-Replace visible-chain-dependent theoretical risk analysis with a mathematically stronger payoff engine.
+Build the advanced Greeks and volatility analytics layer on top of both live-chain data and the Phase 3 scenario model.
 
-Phase 2 goals:
+Planned Phase 4 goals:
 
-- Determine theoretical max profit/max loss from strategy legs and payoff tails, not chart endpoints.
-- Handle the underlying domain correctly with `S >= 0`.
-- Derive exact finite max profit/loss for same-expiry strategies.
-- Derive exact theoretical breakevens from the piecewise-linear payoff.
-- Separate theoretical payoff from chart/display grid.
-- Correctly handle asymmetric quantities and ratio structures.
-- Preserve existing unlimited-profit/loss flags and Phase 1.1 metric behavior.
-- Clearly mark mixed/multi-expiry analytical limitations rather than returning misleading exact values.
+- Unified strategy-level Greek dashboard
+- Live vs modelled Greek comparison
+- IV rank / percentile style analytics where sufficient historical data exists
+- IV skew / term structure views from user-authorized market data
+- Vega / gamma / theta concentration
+- Delta dominance and strategy Greek divergence
+- Greek scenario curves
+- Volatility shock analysis
+- Cleaner Greek interpretation for the future terminal/dashboard
+
+## Permanent project constraints
+
+- Paper trading only for the current product stage.
+- User-authorized broker/data architecture is planned; current broker integration is Upstox.
+- Broker secrets remain backend-only.
+- Do not centrally redistribute broker market data unless applicable permissions/terms allow it.
+- Prefer genuinely free/open-source/self-hostable tooling; avoid trial/credit-dependent core services.
+- Every important financial rule should have automated tests.
+- Distinguish live broker data from modelled values in the UI and calculation layer.
 
 ## Current FreeBuff workflow
 
@@ -154,17 +225,6 @@ Phase 2 goals:
 6. ChatGPT approves or supplies a corrective prompt.
 7. Only after approval does the project move to the next phase.
 
-## Permanent project constraints
-
-- Paper trading only for the current product stage.
-- User-authorized broker/data architecture is planned; current broker integration is Upstox.
-- Broker secrets remain backend-only.
-- Do not centrally redistribute broker market data unless applicable permissions/terms allow it.
-- Prefer genuinely free/open-source/self-hostable tooling; avoid trial/credit-dependent core services.
-- Every important financial rule should have automated tests.
-
 ## Next action
 
-**User:** Submit the prepared Phase 2 prompt to FreeBuff.
-
-**After FreeBuff finishes:** tell ChatGPT that Phase 2 is in `main`, provide the FreeBuff completion report, and wait for GitHub review before starting Phase 3.
+**User:** Wait for the Phase 4 prompt from ChatGPT and do not ask FreeBuff to start Phase 4 until the current Phase 3 implementation has been inspected and approved.
