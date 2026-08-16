@@ -11,8 +11,18 @@
 // are labelled separately and never mixed: a modelled value is never shown in a
 // field labelled LTP, and the live LTP is never overwritten by the model.
 // Heatmap colours are a UI concern — the calculation layer returns numbers only.
+//
+// Greek comparison (Phase 4.0 §21): the LIVE vs MODELLED table below is derived
+// from THIS panel's scenario result via scenarioGreekComparison() — the same
+// calculateScenario() output already rendered here, never a duplicate
+// calculation. It consumes ONLY the canonical units (theta per calendar day,
+// vega per 1 volatility point, exposure-scaled). The per-leg Δ/Γ/Θ/V columns
+// remain Phase 3 model outputs in raw model units and are labelled as such, so
+// theta/year is never confused with theta/day.
 
+import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
+import { scenarioGreekComparison } from "@/lib/calculations/greekAnalytics";
 
 const chip = (active) => ({
   fontSize: 10.5,
@@ -29,6 +39,18 @@ const field = { background: C.surface2, color: C.text, border: `1px solid ${C.bo
 
 const fmtSigned = (v, digits = 0) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(digits)}`);
 const fmtRupee = (v) => (v == null ? "—" : `₹${fmtIN(v)}`);
+const fmtRupeeSigned = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v))}`);
+
+// Canonical Greek formatters (Phase 4.0 unit contract): delta/gamma are
+// unitless, thetaPerDay and vegaPerVolPoint are rupee exposure figures.
+const GREEK_ROWS = [
+  { key: "delta", label: "Delta", digits: 1, rupee: false },
+  { key: "gamma", label: "Gamma", digits: 4, rupee: false },
+  { key: "thetaPerDay", label: "Theta/day", digits: 0, rupee: true },
+  { key: "vegaPerVolPoint", label: "Vega/1pt", digits: 0, rupee: true },
+];
+const fmtGreekValue = (row, v) =>
+  v == null ? "—" : row.rupee ? fmtRupeeSigned(v) : fmtSigned(v, row.digits);
 const fmtPct = (v) => (v == null ? "—" : `${(v * 100).toFixed(1)}%`);
 const fmtNum = (v, digits = 2) => (v == null ? "—" : v.toFixed(digits));
 
@@ -60,6 +82,12 @@ export default function ScenarioPanel({
   onReset,
   isMobile,
 }) {
+  // ---- LIVE vs MODELLED Greek comparison (Phase 4.0 §21) -------------------
+  // Derived from THIS scenario result — no second calculation. Live Greeks are
+  // the current broker/chain state; MODELLED Greeks use the active scenario's
+  // spot / IV / time inputs. Canonical units only.
+  const greekCmp = useMemo(() => (result ? scenarioGreekComparison(result) : null), [result]);
+
   if (!result) {
     return <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>Add legs to run scenario analysis.</div>;
   }
@@ -157,12 +185,60 @@ export default function ScenarioPanel({
         />
       </div>
 
-      {/* Modelled Greeks */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 12 }}>
-        <Summary label="Delta (modelled)" value={fmtNum(result.totals.delta)} color={C.text} />
-        <Summary label="Gamma (modelled)" value={fmtNum(result.totals.gamma, 4)} color={C.text} />
-        <Summary label="Theta (modelled)" value={fmtNum(result.totals.theta)} color={C.text} />
-        <Summary label="Vega (modelled)" value={fmtNum(result.totals.vega)} color={C.text} />
+      {/* LIVE vs MODELLED Greeks (canonical units, derived from this result) */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.6, color: C.text, marginBottom: 6 }}>
+          GREEKS — LIVE vs MODELLED
+          <span style={{ color: C.faint, fontWeight: 400 }}> · scenario state: spot {result.spot == null ? "—" : fmtSigned((result.scenario.spotPct ?? 0) * 100, 1)}%, IV {fmtSigned((result.scenario.ivShift ?? 0) * 100, 0)} vol, {result.scenario.timeShiftDays ?? 0}D</span>
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+          <thead>
+            <tr style={{ color: C.muted, fontSize: 9.5, textAlign: "left" }}>
+              <th style={{ padding: "6px 8px" }}>GREEK</th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}><span style={{ color: C.green, fontWeight: 700 }}>LIVE</span></th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}><span style={{ color: C.gold, fontWeight: 700 }}>MODELLED</span></th>
+              <th style={{ padding: "6px 8px", textAlign: "right" }}><span style={{ color: C.muted, fontWeight: 700 }}>Δ MODEL</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {GREEK_ROWS.map((row) => {
+              const live = greekCmp.live[row.key];
+              const model = greekCmp.model[row.key];
+              const diff = greekCmp.difference[row.key];
+              const st = (src) =>
+                greekCmp.status[src][row.key] === "partial" ? " · partial" : greekCmp.status[src][row.key] === "unavailable" ? " · unavailable" : "";
+              return (
+                <tr key={row.key} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, color: C.text }}>{row.label}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ fontWeight: 700, color: live == null ? C.faint : C.green }}>{fmtGreekValue(row, live)}</span>
+                    {st("live") && <span style={{ color: C.faint, fontSize: 9 }}>{st("live")}</span>}
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ fontWeight: 700, color: model == null ? C.faint : C.gold }}>{fmtGreekValue(row, model)}</span>
+                    {st("model") && <span style={{ color: C.faint, fontSize: 9 }}>{st("model")}</span>}
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: diff == null ? C.faint : diff === 0 ? C.muted : diff > 0 ? C.green : C.red,
+                      }}
+                    >
+                      {fmtGreekValue(row, diff)}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <div style={{ fontSize: 9.5, color: C.faint, marginTop: 5 }}>
+          <span style={{ color: C.green, fontWeight: 700 }}>LIVE</span> = broker/chain Greeks (current state) ·{" "}
+          <span style={{ color: C.gold, fontWeight: 700 }}>MODELLED</span> = Black-Scholes under the active scenario ·{" "}
+          <span style={{ color: C.muted, fontWeight: 700 }}>Δ MODEL</span> = model − live (neutral comparison, not a signal).
+          Theta per calendar day, Vega per 1 vol point; exposure = dir × qty × lot size × multiplier. Missing values stay “—” and are never substituted.
+        </div>
       </div>
 
       {/* Heatmap */}
@@ -268,6 +344,8 @@ export default function ScenarioPanel({
         <span style={{ color: C.green, fontWeight: 700 }}>LIVE</span> = broker/chain LTP ·{" "}
         <span style={{ color: C.gold, fontWeight: 700 }}>MODELLED</span> = Black-Scholes estimate from scenario inputs (spot, IV, time, rate, dividend).
         Each leg uses its own expiry and its own chain IV — the model value never overwrites the live LTP, and a modelled value is never shown as LTP.
+        The per-leg Δ/Γ/Θ/V columns are per-leg model values in raw model units (theta per YEAR, vega per 1.00 vol fraction);
+        the strategy-level LIVE vs MODELLED table above is the canonical comparison (theta per day, vega per 1 vol point).
       </div>
 
       {/* Warnings */}

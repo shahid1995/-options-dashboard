@@ -14,9 +14,10 @@ import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
-import { aggregateGreeks } from "@/lib/calculations/greeks";
 import { calculateScenario, calculateScenarioMatrix } from "@/lib/calculations/scenario";
+import { calculateStrategyGreeks } from "@/lib/calculations/greekAnalytics";
 import ScenarioPanel from "./ScenarioPanel";
+import GreekAnalyticsPanel from "./GreekAnalyticsPanel";
 import {
   makeLeg,
   addLeg,
@@ -483,11 +484,6 @@ export default function PaperTradingPage() {
     : null;
   const expiryFillPct = daysToExpiry != null ? Math.min(100, Math.max(0, ((30 - daysToExpiry) / 30) * 100)) : 0;
 
-  const { rows: greeksRows, totals: greeksTotals } = useMemo(
-    () => aggregateGreeks(legs, chainCache, { lotSize, multiplier }),
-    [legs, chainCache, lotSize, multiplier]
-  );
-
   // ---- Scenario Analysis (Phase 3) ----
   // Analytical only: prices the strategy under hypothetical spot / IV / time /
   // rate / dividend inputs with the Black-Scholes model. It never touches
@@ -522,6 +518,18 @@ export default function PaperTradingPage() {
   const scenarioMatrix = useMemo(
     () => (legs.length ? calculateScenarioMatrix(legs, scenarioContext, { axis: scenGridAxis }) : null),
     [legs, scenarioContext, scenGridAxis]
+  );
+
+  // ---- Greek Analytics (Phase 4.0) ----
+  // One memoized calculation consumed by the Greeks tab (and reused by the
+  // Scenario tab via the scenario result): LIVE broker-chain Greeks vs
+  // MODELLED Black-Scholes Greeks in canonical units. Reuses the same
+  // scenarioContext so model inputs (spot, per-leg IV/time, rate, dividend)
+  // are identical to the Scenario panel. Analytical only — never touches
+  // execution, positions, cash or the journal.
+  const greekAnalytics = useMemo(
+    () => (legs.length ? calculateStrategyGreeks(legs, scenarioContext, { scenario: {} }) : null),
+    [legs, scenarioContext]
   );
 
   const resetScenario = () => {
@@ -1946,44 +1954,13 @@ export default function PaperTradingPage() {
                   </table>
                 </div>
               ) : payoffTab === "greeks" ? (
-                <div>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, marginBottom: 10 }}>
-                    <thead>
-                      <tr style={{ color: C.muted, fontSize: 10, textAlign: "left" }}>
-                        <th style={{ padding: 6 }}>Leg</th>
-                        <th style={{ padding: 6 }}>Delta</th>
-                        <th style={{ padding: 6 }}>Gamma</th>
-                        <th style={{ padding: 6 }}>Theta</th>
-                        <th style={{ padding: 6 }}>Vega</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {greeksRows.map((r) => (
-                        <tr key={r.leg.id} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
-                          <td style={{ padding: 6 }}>
-                            {r.leg.action.toUpperCase()} {r.leg.strike} {r.leg.type === "call" ? "CE" : "PE"}
-                          </td>
-                          <td style={{ padding: 6 }}>{r.delta != null ? r.delta.toFixed(2) : "-"}</td>
-                          <td style={{ padding: 6 }}>{r.gamma != null ? r.gamma.toFixed(4) : "-"}</td>
-                          <td style={{ padding: 6 }}>{r.theta != null ? r.theta.toFixed(2) : "-"}</td>
-                          <td style={{ padding: 6 }}>{r.vega != null ? r.vega.toFixed(2) : "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr style={{ borderTop: `2px solid ${C.border}`, fontWeight: 700 }}>
-                        <td style={{ padding: 6 }}>Total</td>
-                        <td style={{ padding: 6 }}>{greeksTotals.delta.toFixed(2)}</td>
-                        <td style={{ padding: 6 }}>{greeksTotals.gamma.toFixed(4)}</td>
-                        <td style={{ padding: 6 }}>{greeksTotals.theta.toFixed(2)}</td>
-                        <td style={{ padding: 6 }}>{greeksTotals.vega.toFixed(2)}</td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                  <div style={{ fontSize: 10, color: C.faint }}>
-                    Position-level Greeks = each leg's Greek × direction × lots × lot size × multiplier, summed.
+                greekAnalytics ? (
+                  <GreekAnalyticsPanel analytics={greekAnalytics} isMobile={isMobile} />
+                ) : (
+                  <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>
+                    Add legs to see live vs modelled Greek analytics.
                   </div>
-                </div>
+                )
               ) : payoffTab === "scenario" ? (
                 <ScenarioPanel
                   result={scenarioResult}

@@ -66,8 +66,12 @@ export function scenarioWarning(code, message, legId = null) {
 
 // Resolve the current market data for every leg against ITS OWN expiry chain.
 // Returns { legData, warnings } where each entry is:
-//   { leg, currentLtp, currentIv, baseT }
+//   { leg, currentLtp, currentIv, liveGreeks, baseT }
 // `baseT` is the year-fraction time to expiry from the current valuation date.
+// `liveGreeks` is the RAW broker/chain Greek set { delta, gamma, theta, vega }
+// at per-unit contract level (see lib/calculations/greekAnalytics.js for the
+// documented unit conventions) — kept raw here so the analytics layer owns all
+// unit normalization; it is never substituted for the model Greeks below.
 export function resolveScenarioLegs(legs, marketContext = {}) {
   const chainCache = marketContext.chainCache ?? {};
   const valuationDate = marketContext.valuationDate ?? new Date().toISOString().slice(0, 10);
@@ -79,6 +83,14 @@ export function resolveScenarioLegs(legs, marketContext = {}) {
     const currentIv = side?.iv != null ? Number(side.iv) : null;
     const currentLtp = side?.ltp != null ? Number(side.ltp) : null;
     const baseT = timeToExpiry(valuationDate, leg.expiry);
+    const liveGreeks = side
+      ? {
+          delta: side.delta != null ? Number(side.delta) : null,
+          gamma: side.gamma != null ? Number(side.gamma) : null,
+          theta: side.theta != null ? Number(side.theta) : null,
+          vega: side.vega != null ? Number(side.vega) : null,
+        }
+      : null;
 
     if (!row) {
       warnings.push(
@@ -94,7 +106,7 @@ export function resolveScenarioLegs(legs, marketContext = {}) {
         )
       );
     }
-    return { leg, currentIv, currentLtp, baseT };
+    return { leg, currentIv, currentLtp, liveGreeks, baseT };
   });
   return { legData, warnings };
 }
@@ -172,9 +184,14 @@ export function evaluateScenario(legData, marketContext, scenario = {}, baseWarn
     return {
       leg,
       // LIVE market data (from the leg's own expiry chain) — never overwritten
-      // by the model value below.
+      // by the model value below. `liveGreeks` stays RAW (per-unit contract
+      // level); `scale` is the exposure multiplier dir × qty × lot × mult so
+      // the Greek analytics layer can normalize both sources to the canonical
+      // exposure units from exactly the same inputs.
       currentLtp: entry.currentLtp,
       currentIv: entry.currentIv,
+      liveGreeks: entry.liveGreeks,
+      scale,
       // MODELLED scenario state.
       scenarioIv,
       scenarioT,
@@ -187,7 +204,9 @@ export function evaluateScenario(legData, marketContext, scenario = {}, baseWarn
         unitValue != null && entry.currentLtp != null
           ? dirOf(leg.action) * (unitValue - entry.currentLtp) * leg.qty * lotSize * multiplier
           : null,
-      // Model Greeks, scaled like the live Greeks tab (dir × qty × lot × mult).
+      // Model Greeks, exposure-scaled (dir × qty × lot × mult) — raw model
+      // units (theta per year, vega per 1.00 vol fraction); the analytics
+      // layer converts these to the canonical theta/day and vega/vol-point.
       delta: greeks.delta != null ? greeks.delta * scale : null,
       gamma: greeks.gamma != null ? greeks.gamma * scale : null,
       theta: greeks.theta != null ? greeks.theta * scale : null,
