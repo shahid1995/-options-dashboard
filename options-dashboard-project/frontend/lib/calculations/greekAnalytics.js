@@ -48,11 +48,10 @@ export const LIVE_GREEK_CONVENTION = {
   gamma: "per 1 underlying point (per unit)",
   theta: "₹ per calendar day (per unit) — Indian-market standard",
   vega: "₹ per 1 volatility point = 1% IV (per unit) — Indian-market standard",
-  // IV is NOT consumed by this module. Note for Phase 4.1 (IV analytics): the
-  // broker feed represents iv in percent (e.g. 18.24 = 18.24%) while the
-  // Phase 3 scenario/model engine consumes chain iv as a decimal fraction
-  // (0.18 = 18%). Reconciling feed vs model IV units is deferred to that
-  // phase — Phase 4.0 changes no IV handling.
+  // IV is NOT consumed by this module, but its unit convention IS resolved
+  // (Phase 4.1): the broker feed represents iv in percent (e.g. 18.24 =
+  // 18.24%). lib/calculations/ivAnalytics.js normalizes it to the canonical
+  // decimal fraction (0.1824) before the scenario/model engine ever uses it.
 };
 export const LIVE_THETA_PER_DAY_FACTOR = 1; // chain theta is already per calendar day
 export const LIVE_VEGA_PER_VOL_POINT_FACTOR = 1; // chain vega is already per 1 vol point

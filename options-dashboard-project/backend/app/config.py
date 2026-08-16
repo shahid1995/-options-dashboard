@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     # a PostgreSQL URL (e.g. a Railway Postgres DATABASE_URL) for durable,
     # shared production storage.
     DATABASE_URL: str | None = None
+    # Historical IV foundation (Phase 4.1): the persistence model and
+    # repository exist, but collection is DISABLED by default. A future phase
+    # that turns it on must honour these bounds to avoid uncontrolled
+    # database growth (sampling interval, retention, per-key caps).
+    IV_HISTORY_ENABLED: bool = False
+    IV_HISTORY_SAMPLE_SECONDS: int = 300
+    IV_HISTORY_RETENTION_DAYS: int = 90
 
     class Config:
         env_file = ".env"

@@ -67,3 +67,30 @@ class Leg(Base):
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     trade: Mapped[Trade] = relationship(back_populates="legs")
+
+
+class IVObservation(Base):
+    """One stored implied-volatility observation (Phase 4.1 data foundation).
+
+    Nothing records observations yet — the collection job is deliberately NOT
+    implemented in Phase 4.1 (no uncontrolled database growth). This table and
+    the service in ``app/services/iv_history.py`` are the persistence
+    interfaces a FUTURE collector will use, and it must honour the
+    configurable sampling interval / retention in ``app/config.py``.
+
+    ``iv`` is stored as a CANONICAL DECIMAL FRACTION (0.1824 = 18.24%) — the
+    exact unit contract used by the frontend calculation layer. Never store
+    the raw broker percent here.
+    """
+
+    __tablename__ = "iv_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    expiry: Mapped[str] = mapped_column(String(10))
+    strike: Mapped[float] = mapped_column(Float)
+    option_type: Mapped[str] = mapped_column(String(8))  # call | put
+    iv: Mapped[float] = mapped_column(Float)  # canonical decimal (0.1824 = 18.24%)
+    spot: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(32), default="upstox")
+    observed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)

@@ -18,6 +18,7 @@ import { calculateScenario, calculateScenarioMatrix } from "@/lib/calculations/s
 import { calculateStrategyGreeks } from "@/lib/calculations/greekAnalytics";
 import ScenarioPanel from "./ScenarioPanel";
 import GreekAnalyticsPanel from "./GreekAnalyticsPanel";
+import IVAnalyticsPanel from "./IVAnalyticsPanel";
 import {
   makeLeg,
   addLeg,
@@ -1830,6 +1831,7 @@ export default function PaperTradingPage() {
             <div style={panel}>
               <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", borderBottom: `1px solid ${C.border}`, paddingBottom: 10 }}>
                 {[
+                  ["iv", "IV"],
                   ["graph", "Payoff Graph"],
                   ["table", "P&L Table"],
                   ["greeks", "Greeks"],
@@ -1842,9 +1844,11 @@ export default function PaperTradingPage() {
                 ))}
               </div>
 
-              {legs.length === 0 ? (
+              {payoffTab === "iv" ? (
+                <IVAnalyticsPanel chainCache={chainCache} spot={spot} expiry={expiry} isMobile={isMobile} />
+              ) : legs.length === 0 ? (
                 <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>
-                  Add legs to see the payoff graph, P&amp;L table, Greeks, strategy chart and scenario analysis here.
+                  Add legs to see the payoff graph, P&amp;L table, Greeks, strategy chart and scenario analysis here (the IV tab works from the loaded chain alone).
                 </div>
               ) : payoffTab === "graph" ? (
                 <>

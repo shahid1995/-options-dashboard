@@ -6,7 +6,10 @@ const NEAR = "2026-08-28";
 const FAR = "2026-09-25";
 const VALUATION = "2026-08-25"; // near expiry = 3 days out, far = 31 days out
 
-function makeChain(strikes, { callLtp = 200, putLtp = 150, callIv = 0.18, putIv = 0.2 } = {}) {
+// Chain IV follows the real broker convention: the backend delivers iv as a
+// PERCENT (18 = 18%). The scenario engine normalizes it to canonical decimal
+// (0.18) before pricing — so expectations below are the canonical decimals.
+function makeChain(strikes, { callLtp = 200, putLtp = 150, callIv = 18, putIv = 20 } = {}) {
   return {
     underlying_spot_price: 25000,
     chain: strikes.map((s) => ({
@@ -26,8 +29,8 @@ function marketContext(overrides = {}) {
     lotSize: 1,
     multiplier: 1,
     chainCache: {
-      [NEAR]: makeChain([24900, 25000, 25100], { callIv: 0.18, putIv: 0.2 }),
-      [FAR]: makeChain([24900, 25000, 25100], { callIv: 0.25, putIv: 0.27 }),
+      [NEAR]: makeChain([24900, 25000, 25100], { callIv: 18, putIv: 20 }), // → canonical 0.18 / 0.20
+      [FAR]: makeChain([24900, 25000, 25100], { callIv: 25, putIv: 27 }), // → canonical 0.25 / 0.27
     },
     ...overrides,
   };

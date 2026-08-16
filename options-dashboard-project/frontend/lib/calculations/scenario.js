@@ -41,6 +41,7 @@
 
 import { dirOf } from "../options";
 import { bsValue, bsGreeks, timeToExpiry, addDays, MIN_VOLATILITY } from "./pricing";
+import { normalizeIv } from "./ivAnalytics";
 
 export const SCENARIO_DEFAULT_RATE = 0;
 export const SCENARIO_DEFAULT_DIVIDEND = 0;
@@ -80,7 +81,11 @@ export function resolveScenarioLegs(legs, marketContext = {}) {
     const chain = chainCache?.[leg.expiry];
     const row = chain?.chain?.find((r) => r.strike === leg.strike);
     const side = row ? (leg.type === "call" ? row.call : row.put) : null;
-    const currentIv = side?.iv != null ? Number(side.iv) : null;
+    // Canonical IV (Phase 4.1): the broker feed delivers iv as a PERCENT
+    // (18.24 = 18.24%); normalizeIv converts it to the canonical decimal
+    // fraction the pricing model consumes (0.1824). Invalid/missing stays
+    // null — never 0, never a model substitute.
+    const currentIv = side?.iv != null ? normalizeIv(side.iv) : null;
     const currentLtp = side?.ltp != null ? Number(side.ltp) : null;
     const baseT = timeToExpiry(valuationDate, leg.expiry);
     const liveGreeks = side

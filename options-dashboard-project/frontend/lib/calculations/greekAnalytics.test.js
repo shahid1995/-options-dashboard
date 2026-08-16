@@ -20,7 +20,10 @@ const NEAR = "2026-08-28";
 const FAR = "2026-09-25";
 const VALUATION = "2026-08-25"; // near = 3 days out, far = 31 days out
 
-function makeChain(strikes, { callIv = 0.18, putIv = 0.2, greeks = {} } = {}) {
+// Chain IV follows the real broker convention: PERCENT (18 = 18%). The
+// scenario engine normalizes to canonical decimal before pricing, so model
+// Greeks below are computed at 0.18 / 0.20 / 0.25 / 0.27 as before.
+function makeChain(strikes, { callIv = 18, putIv = 20, greeks = {} } = {}) {
   return {
     underlying_spot_price: 25000,
     chain: strikes.map((s) => ({
@@ -56,8 +59,8 @@ function marketContext(overrides = {}) {
     lotSize: 1,
     multiplier: 1,
     chainCache: {
-      [NEAR]: makeChain([24900, 25000, 25100], { callIv: 0.18, putIv: 0.2 }),
-      [FAR]: makeChain([24900, 25000, 25100], { callIv: 0.25, putIv: 0.27 }),
+      [NEAR]: makeChain([24900, 25000, 25100], { callIv: 18, putIv: 20 }),
+      [FAR]: makeChain([24900, 25000, 25100], { callIv: 25, putIv: 27 }),
     },
     ...overrides,
   };
@@ -273,7 +276,7 @@ describe("live vs model difference", () => {
     const ctx = marketContext();
     ctx.chainCache[NEAR].chain = ctx.chainCache[NEAR].chain.map((r) => ({
       ...r,
-      call: { ...r.call, iv: 0.5 },
+      call: { ...r.call, iv: 50 }, // 50% → canonical 0.50
     }));
     const a = calculateStrategyGreeks([leg()], ctx);
     const r = a.rows[0];
