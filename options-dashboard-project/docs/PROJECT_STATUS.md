@@ -4,7 +4,7 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 5.1 — Portfolio & Journal Analytics**
+**Phase 6.0 — Capital & Margin Foundation**
 
 Status: 🔄 **Implemented / Pending Review**
 
@@ -23,8 +23,9 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
 | Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
-| Phase 5.1 — Portfolio & Journal Analytics | 🔄 Implemented | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal — pending review |
-| Phase 6 — Capital & margin analysis | 🔵 Next | Not started |
+| Phase 5.1 — Portfolio & Journal Analytics | ✅ Complete | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal |
+| Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — pending review |
+| Phase 6.1 — Broker Margin Integration | 🔵 Next | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -35,13 +36,13 @@ Status: 🔄 **Implemented / Pending Review**
 
 ## Latest verified implementation commit
 
-`f72b5c0fde522bf5110b125ce310d3685ffb75b4`
+`3d032f2` — Phase 5.1: portfolio and journal analytics (verified).
 
-This is the verified Phase 5.0 implementation baseline (the Phase 4.1 baseline remains `22f09073749db169905fd2dd06c81c3e37794e0a`, and the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
+Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1 `22f09073749db169905fd2dd06c81c3e37794e0a`, Phase 4.0 `9ae9966ca358a716c0e53d96203103f5e717e86f`.
 
-The Phase 4.2 implementation is committed in the same commit as its status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
+The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
 
-The Phase 5.1 implementation is committed in the SAME commit as this status update but is NOT yet user-verified or ChatGPT-reviewed; its SHA will be recorded here once approved.
+The Phase 6.0 implementation is NOT committed yet: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
 
 ## Phase 4.2 implementation
 
@@ -102,7 +103,7 @@ Overall: ✅ **Complete**
 
 ## Phase 5.1 implementation
 
-Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+Status: ✅ Complete (verified and approved; superseded by Phase 6.0)
 
 Implemented (portfolio & journal analytics ONLY — no real-money trading, no margin engine, no signals, no backtesting):
 
@@ -118,11 +119,39 @@ Implemented (portfolio & journal analytics ONLY — no real-money trading, no ma
 - **Frontend**: compact Portfolio Analytics dashboard (`frontend/app/paper/PortfolioAnalyticsPanel.js`) — summary, performance, drawdown, realized equity curve (Recharts, no new charting library), strategy performance table, mark-based exposure/concentration chips, grouped journal (Date / Strategy / Entry / Exit / Duration / P&L / Result with WIN/LOSS/BREAKEVEN badges and date/P&L/duration sorting); pure display helpers in `frontend/lib/analytics.js` (no formulas duplicated client-side); empty states show "No completed trades" instead of 0%/NaN/Infinity
 - No changes to paper execution semantics, market-hours protection, chain handling, Greek/IV analytics, reconciliation or the Phase 5.0 cash ledger
 
+Verification:
+
+- Frontend: 502/502 tests passed (22 files)
+- Backend: 195/195 tests passed
+- `npx next build`: passed; all routes generated; no type/lint errors
+- User manual verification: passed
+- ChatGPT code review: approved
+- Implementation commit: `3d032f2`
+
+Overall: ✅ **Complete**
+
+## Phase 6.0 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (capital & margin foundation ONLY — no SPAN calculator, no exposure-margin calculator, no Return-on-Capital metric, no real-money execution):
+
+- **Capital domain** (`backend/app/services/capital.py`): five concepts kept strictly separate — PREMIUM OUTLAY (gross premium paid on long entry legs, CALCULATED from the server-authoritative Phase 5.0 fill records), BROKER MARGIN (BROKER_REPORTED only; unavailable — never invented), ESTIMATED CAPITAL (model-derived; Phase 6.0 supports only the deterministic premium basis for defined-debit strategies), BROKER AVAILABLE FUNDS (BROKER_REPORTED only), and PAPER CAPITAL (paper starting capital + paper available cash derived from the Phase 5.0 cash ledger, never renamed as broker funds)
+- **Source classification (§3/§4/§12)**: every figure carries its source — BROKER_REPORTED | ESTIMATED | CALCULATED | UNAVAILABLE — and its availability status — available | partial | unavailable; missing values are `null`, never 0; NaN/Infinity/negative values never become valid capital figures
+- **Estimated capital (§8/§9)**: defined-debit strategies get the strategy's NET premium paid at entry labeled "Estimated Capital — Premium Basis" (whole-strategy `entry_net`, not per-leg sums); credit/naked strategies return `unavailable` — premium received is NOT capital required, and no valid analytical model exists yet
+- **Broker provider abstraction (§6/§7/§18)**: `MarginProvider` interface with `get_capital_snapshot(context)` receiving the authenticated user's FULL open strategy set (multi-leg strategies are ONE capital unit, never per-leg margin numbers summed); the current Upstox integration exposes no margin/funds endpoint, so the default provider honestly returns BROKER_REPORTED = unavailable; a `StaticMarginProvider` test/example implementation proves the abstraction surfaces real broker values without broker-specific naming leaking into the domain
+- **User isolation (§19)**: every query scoped by `user_id`; user B can never see user A's capital, strategies or funds (tested)
+- **Future Return-on-Capital preparation (§15/§16)**: `capital_efficiency_inputs()` returns exactly `{pnl, capital_used, available}` — the metric itself is NOT computed in Phase 6.0, and `available` is False whenever an input is missing so a future phase can never divide by an unknown denominator
+- **Capital data contract (§4)**: `premium_outlay`, `broker_margin`, `estimated_capital`, `broker_available_funds`, `paper_starting_capital`, `paper_available_cash`, `capital_used`, `remaining_capital`, `roc_inputs`, per-open-strategy capital units, `generated_at` timestamp and overall `status` — all with source/status; stale-cache discipline via `timestamp`/`generated_at` (§20)
+- **API**: ONE read-only `GET /paper/capital` endpoint (auth required; always available regardless of market status; never mutates trading state) + `CapitalOut` / `CapitalValueOut` / `CapitalStrategyOut` / `RocInputsOut` schemas
+- **UI** (`frontend/app/paper/CapitalPanel.js` + `frontend/lib/capital.js`): compact capital summary with explicit labels (Paper Starting Capital, Paper Available Cash, Premium Outlay, Broker Margin, Estimated Capital — Premium Basis, Broker Available Funds, Capital Used), per-row source/status badges, per-strategy capital-unit cards, "Return on Capital: inputs ready · not computed" chip — pure display helpers only, no financial formula duplicated client-side
+- No changes to scenario calculations (§21), paper execution semantics, market-hours protection, chain handling, Greek/IV analytics or the Phase 5.0 cash ledger; the strategy review panel's Net Debit / Max Loss / Max Profit / Premium ROI fields are untouched (§22)
+
 Automated tests (actual):
 
-- Frontend: 502/502 tests passed (22 files) — 21 new (20 analytics display helpers + 1 API contract)
-- Backend: 195/195 tests passed — 41 new (40 analytics tests covering the §38 matrix + 1 execution-accounting regression test)
-- `npx next build`: passed; all routes generated; no type/lint errors
+- Frontend: 512/512 tests passed (23 files) — 10 new (capital display helpers + API contract)
+- Backend: 215/215 tests passed — 20 new (Phase 6.0 §23 matrix: source classification, available vs unavailable, premium vs capital separation, defined-debit estimate, credit unavailable, broker margin unavailable + available via provider, paper cash vs broker funds, user isolation, multi-leg whole-strategy context, null vs zero, no NaN/Infinity, source labels preserved, no ROI aliasing, no Return-on-Capital computation)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
 
 Manual verification: ⏳ pending
 ChatGPT review: ⏳ pending
@@ -259,6 +288,7 @@ Verified manually:
 - Multi-expiry chain handling ✅
 - Journal/database foundation ✅
 - Portfolio & journal analytics (summary, performance, equity curve, drawdown, strategy groups) ✅
+- Capital & margin foundation (source-classified capital, broker margin abstraction, estimated capital, capital summary) ✅
 - Frontend unit tests ✅
 
 ### Current architecture concerns
@@ -266,15 +296,15 @@ Verified manually:
 - `frontend/app/paper/page.js` remains a large orchestration component; future domain logic should stay outside it.
 - Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
 - Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile AND Phase 4.2 z-scores/percentiles/anomaly scores stay unavailable until a reliable sample exists.
-- Full capital/margin is not yet modeled.
+- Broker margin and broker available funds are BROKER_REPORTED-only: the current Upstox integration exposes no margin/funds endpoint, so both stay unavailable (never estimated). Estimated capital in Phase 6.0 covers only the premium basis for defined-debit strategies; credit/naked strategies report unavailable until a valid analytical model exists (Phase 6.1+). Return on Capital is not computed yet — only its inputs are prepared.
 - Phase 5.0 made the backend authoritative for orders/positions/cash/realized P&L; unrealized P&L remains a mark-to-market display fed by the frontend chain cache (the platform's market-data path).
 - Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
 - Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
 - The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Next phase objective — Phase 6
+## Next phase objective — Phase 6.1
 
-Phase 5.1 (portfolio & journal analytics) is implemented and pending review. The next milestone is **Phase 6 — Capital & Margin Analysis** (SPAN / exposure margin, return on capital) after Phase 5.1 is verified and approved. The Phase 6 implementation prompt has not been prepared yet; wait for it from ChatGPT.
+Phase 6.0 (capital & margin foundation) is implemented and pending review. The next milestone is **Phase 6.1 — Broker Margin Integration** (connect a real broker margin/funds provider behind the `MarginProvider` interface; the current Upstox integration has no such endpoint yet). Do not implement Phase 6.1 until Phase 6.0 is verified and approved.
 
 ## Permanent project constraints
 
@@ -298,4 +328,4 @@ Phase 5.1 (portfolio & journal analytics) is implemented and pending review. The
 
 ## Next action
 
-**User:** Manually verify Phase 5.1 (portfolio analytics dashboard renders; execute a strategy, fully exit it, and check win rate / profit factor / expectancy / realized equity curve / drawdown / strategy groups / grouped journal with WIN-LOSS-BREAKEVEN and durations; duplicate clicks don't double-trade; reload the page → server state persists; market closed → orders blocked). Then ChatGPT reviews the diff. Only after approval does Phase 6 begin.
+**User:** Manually verify Phase 6.0 (capital panel renders with source/status labels: Paper Starting Capital, Paper Available Cash, Premium Outlay, Broker Margin = Unavailable, Estimated Capital = Premium Basis on a long call / bull call spread, and NO estimate on a short put; execute and fully exit a strategy and confirm capital figures update). Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.1 (Broker Margin Integration) begin. The project owner creates the Phase 6.0 commit/push from the Changes panel — FreeBuff does not commit or push this phase.
