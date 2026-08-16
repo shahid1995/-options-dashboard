@@ -10,6 +10,7 @@ import {
   getPaperPositions,
   getPaperPortfolio,
   getPaperAnalytics,
+  getPaperCapital,
   submitPaperExecution,
   exitPaperPosition,
   resetPaperPortfolio as apiResetPaperPortfolio,
@@ -25,6 +26,7 @@ import GreekAnalyticsPanel from "./GreekAnalyticsPanel";
 import IVAnalyticsPanel from "./IVAnalyticsPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PortfolioAnalyticsPanel from "./PortfolioAnalyticsPanel";
+import CapitalPanel from "./CapitalPanel";
 import {
   makeLeg,
   addLeg,
@@ -139,6 +141,10 @@ export default function PaperTradingPage() {
   // equity curve + drawdown + strategy groups + journal). Display mirror only.
   const [analytics, setAnalytics] = useState(null);
   const [analyticsError, setAnalyticsError] = useState(null);
+  // Phase 6.0: server-authoritative capital summary (premium outlay, broker
+  // margin, estimated capital, paper capital — source/status classified).
+  const [capital, setCapital] = useState(null);
+  const [capitalError, setCapitalError] = useState(null);
   const [paperCash, setPaperCash] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperPositions, setPaperPositions] = useState([]);
@@ -322,13 +328,16 @@ export default function PaperTradingPage() {
   // frontend only mirrors what it returns.
   const loadPortfolio = useCallback(async () => {
     try {
-      const [port, positions, analytics] = await Promise.all([
+      const [port, positions, analytics, capital] = await Promise.all([
         getPaperPortfolio(),
         getPaperPositions(),
         getPaperAnalytics(),
+        getPaperCapital(),
       ]);
       setPortfolio(port);
       setAnalytics(analytics);
+      setCapital(capital);
+      setCapitalError(null);
       setAnalyticsError(null);
       setPortfolioError(null);
       const summary = portfolioDisplay(port);
@@ -344,6 +353,7 @@ export default function PaperTradingPage() {
     } catch (e) {
       setPortfolioError(paperErrorMessage(e));
       setAnalyticsError(paperErrorMessage(e));
+      setCapitalError(paperErrorMessage(e));
     }
   }, []);
 
@@ -1207,6 +1217,13 @@ export default function PaperTradingPage() {
         positionsWithLtp={positionsWithLtp}
         loading={portfolio === null && !portfolioError}
         error={analyticsError}
+      />
+
+      {/* Phase 6.0: capital & margin foundation (server-authoritative) */}
+      <CapitalPanel
+        capital={capital}
+        loading={capital === null && !portfolioError}
+        error={capitalError}
       />
 
       {!primaryChain ? (

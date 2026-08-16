@@ -397,3 +397,74 @@ class AnalyticsOut(BaseModel):
     journal: list[JournalRowOut]
     data_quality: DataQualityOut
     filters: dict
+
+
+# ---- Phase 6.0: capital & margin foundation --------------------------------
+
+
+class CapitalValueOut(BaseModel):
+    """One capital figure with its source and availability.
+
+    Source is one of BROKER_REPORTED | ESTIMATED | CALCULATED | UNAVAILABLE.
+    Status is available | partial | unavailable. A missing value is ``None``
+    (never 0), so unavailable is never displayed as a fabricated zero.
+    ``timestamp`` marks when a BROKER_REPORTED figure was captured (null
+    when unavailable) so stale broker funds are never presented as real-time.
+    """
+
+    value: float | None = None
+    source: str
+    status: str = "unavailable"
+    timestamp: str | None = None
+
+
+class CapitalStrategyOut(BaseModel):
+    """Whole-strategy capital context for ONE open execution.
+
+    Multi-leg strategies are analysed as ONE unit (never per-leg margin
+    numbers summed together). ``estimated_capital`` is ``None`` for credit
+    strategies — premium received is not capital required.
+    """
+
+    execution_id: str
+    strategy_tag: str
+    symbol: str
+    entry_net: float  # +debit paid / −credit received
+    premium_outlay: float  # gross premium paid on long legs (0 is valid)
+    estimated_capital: float | None = None
+    estimated_capital_basis: str | None = None  # "premium" in Phase 6.0
+
+
+class RocInputsOut(BaseModel):
+    """Future Return-on-Capital INPUTS ONLY (the metric is NOT computed).
+
+    ``available`` is False until both P&L and a capital figure exist, so a
+    future phase can never divide by an unknown denominator.
+    """
+
+    pnl: float | None = None
+    capital_used: float | None = None
+    available: bool = False
+
+
+class CapitalOut(BaseModel):
+    """GET /paper/capital — server-authoritative capital summary.
+
+    Premium outlay, broker margin, estimated capital and available funds are
+    kept strictly separate and each carries its source/status. Paper capital
+    is labeled paper capital; it is never renamed as broker funds.
+    """
+
+    premium_outlay: CapitalValueOut
+    broker_margin: CapitalValueOut
+    estimated_capital: CapitalValueOut
+    estimated_capital_basis: str | None = None
+    broker_available_funds: CapitalValueOut
+    paper_starting_capital: CapitalValueOut
+    paper_available_cash: CapitalValueOut
+    capital_used: CapitalValueOut
+    remaining_capital: CapitalValueOut
+    roc_inputs: RocInputsOut
+    strategies: list[CapitalStrategyOut]
+    generated_at: str
+    status: str  # available | partial | unavailable

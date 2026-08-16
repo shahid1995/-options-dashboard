@@ -84,6 +84,12 @@ export const resetPaperPortfolio = () =>
 export const getPaperAnalytics = (params) =>
   api.get("/paper/analytics", { params }).then((r) => r.data);
 
+// ---- Phase 6.0: capital & margin foundation ----
+// Server-authoritative capital summary: premium outlay, broker margin,
+// estimated capital, paper capital — each with source/status. Read-only.
+
+export const getPaperCapital = () => api.get("/paper/capital").then((r) => r.data);
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");

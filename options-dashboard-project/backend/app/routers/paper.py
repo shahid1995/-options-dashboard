@@ -6,6 +6,7 @@ from app.routers.chains import INSTRUMENT_KEYS, transform_chain
 from app.routers.deps import get_session_id
 from app.schemas import (
     AnalyticsOut,
+    CapitalOut,
     ExecutionOut,
     ExecutionRequestIn,
     ExitOut,
@@ -27,6 +28,7 @@ from app.services.journal import (
     get_journal,
     handlePaperOrderFill,
 )
+from app.services.capital import get_capital_summary
 from app.services.market_status import get_market_status
 from app.services.performance import get_analytics
 from app.services.paper_execution import (
@@ -342,3 +344,22 @@ def journal(
     """
     user_id, _access_token = require_session(session_id)
     return get_journal(user_id, db)
+
+
+@router.get("/capital", response_model=CapitalOut)
+async def capital(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """GET /paper/capital — server-authoritative capital summary (Phase 6.0).
+
+    Read-only and always available regardless of market status. Every figure
+    carries its source (BROKER_REPORTED | ESTIMATED | CALCULATED) and
+    availability status; missing values are null, never 0. The current Upstox
+    integration has no margin/funds endpoint, so broker-reported figures stay
+    unavailable — never fabricated. Paper capital is exposed as paper values,
+    never renamed as broker funds. No Return-on-Capital metric is computed;
+    only its future inputs are returned.
+    """
+    user_id, _access_token = require_session(session_id)
+    return await get_capital_summary(user_id, db)
