@@ -29,17 +29,18 @@ def get_db():
 
 def _existing_columns(engine, table: str) -> set[str]:
     """Names of the columns currently present on ``table`` (SQLite or Postgres)."""
-    if engine.dialect.name == "sqlite":
-        rows = engine.execute(text(f"PRAGMA table_info({table})")).fetchall()
-        return {r[1] for r in rows}
-    rows = engine.execute(
-        text(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = :table"
-        ),
-        {"table": table},
-    ).fetchall()
-    return {r[0] for r in rows}
+    with engine.connect() as conn:
+        if engine.dialect.name == "sqlite":
+            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            return {r[1] for r in rows}
+        rows = conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = :table"
+            ),
+            {"table": table},
+        ).fetchall()
+        return {r[0] for r in rows}
 
 
 def ensure_column(engine, table: str, column: str, ddl: str) -> None:
@@ -53,7 +54,8 @@ def ensure_column(engine, table: str, column: str, ddl: str) -> None:
     if not _existing_columns(engine, table):
         return  # table does not exist yet; create_all will define it fully
     if column not in _existing_columns(engine, table):
-        engine.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
 def init_db():
