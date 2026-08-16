@@ -4,9 +4,9 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 5.0 — Paper Trading & Portfolio Foundation**
+**Phase 5.1 — Portfolio & Journal Analytics**
 
-Status: 🔄 **Implemented / Pending Review**
+Status: 🔵 **Next**
 
 ## Overall progress
 
@@ -22,7 +22,8 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete | Canonical Greek units, live/model comparison, per-leg exposure, contributions and Scenario-panel integration |
 | Phase 4.1 — IV Analytics | ✅ Complete | Canonical IV units, ATM/curve/skew/term-structure analytics, scenario IV normalization, IV-history foundation |
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
-| Phase 5.0 — Paper Trading & Portfolio Foundation | 🔄 Implemented | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI — pending review |
+| Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
+| Phase 5.1 — Portfolio & Journal Analytics | 🔵 Next | Not started |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
@@ -34,13 +35,11 @@ Status: 🔄 **Implemented / Pending Review**
 
 ## Latest verified implementation commit
 
-`22f09073749db169905fd2dd06c81c3e37794e0a`
+`f72b5c0fde522bf5110b125ce310d3685ffb75b4`
 
-This is the verified Phase 4.1 implementation baseline (the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
+This is the verified Phase 5.0 implementation baseline (the Phase 4.1 baseline remains `22f09073749db169905fd2dd06c81c3e37794e0a`, and the Phase 4.0 baseline remains `9ae9966ca358a716c0e53d96203103f5e717e86f`).
 
 The Phase 4.2 implementation is committed in the same commit as its status update but is NOT yet user-verified or ChatGPT-reviewed; it will be recorded here once approved.
-
-The Phase 5.0 implementation is committed in the SAME commit as this status update but is NOT yet user-verified or ChatGPT-reviewed.
 
 ## Phase 4.2 implementation
 
@@ -66,9 +65,9 @@ ChatGPT review: ⏳ pending
 
 Overall: **Implemented / Pending Review**
 
-## Phase 5.0 implementation
+## Phase 5.0 verification
 
-Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+Status: ✅ Passed / verified
 
 Implemented (paper trading only — no real-money execution, no margin engine, no signals):
 
@@ -89,16 +88,33 @@ Implemented (paper trading only — no real-money execution, no margin engine, n
 - **Frontend**: portfolio/positions/cash mirror the backend (localStorage simulator removed as a source of truth); execution and exits call the new idempotent endpoints and reload authoritative state; partial-exit quantity control in the active-positions table; legacy `/paper/fills` + leg-close endpoints retained for backward compatibility
 - **Pure frontend helpers** (`frontend/lib/portfolio.js`): idempotency keys, position shaping, mark P&L, exit-quantity validation, structured error messages, request builders
 
-Automated tests (actual):
+Verification:
 
-- Frontend: 481/481 tests passed (22 files) — 20 new portfolio tests
-- Backend: 148/148 tests passed — 44 new Phase 5.0 tests (lifecycle, idempotency, netting/weighted average, partial/full exits, reversal, realized/unrealized, portfolio, multi-leg grouping, atomic failure, market/chain gates, concurrency-style duplicates, isolation, journal linkage, reconciliation)
-- `npx next build`: passed; all routes generated; no type/lint errors
+- Frontend: 481/481 tests passed
+- Backend: 148/148 tests passed
+- `npx next build`: passed
+- User manual verification: passed
+- ChatGPT code review: approved
 
-Manual verification: ⏳ pending
-ChatGPT review: ⏳ pending
+Overall: ✅ **Complete**
 
-Overall: **Implemented / Pending Review**
+## Phase 5.1 implementation
+
+Status: 🔵 **Next — NOT implemented yet**
+
+Objective — Portfolio & Journal Analytics:
+
+- portfolio dashboard
+- realized/unrealized P&L analytics
+- position exposure and concentration
+- strategy-grouped performance
+- trade journal improvements
+- win rate
+- average winner/loser
+- profit factor
+- expectancy
+- drawdown
+- holding duration
 
 ## Phase 4.1 verification
 
@@ -242,14 +258,23 @@ Verified manually:
 - Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
 - The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Next phase objective — Phase 5.1 or Phase 6 (after review)
+## Next phase objective — Phase 5.1
 
-Phase 5.0 (server-authoritative paper trading & portfolio foundation) is implemented and pending review. The next milestone is **Phase 5.1 or Phase 6**, depending on what the review recommends:
+Phase 5.0 (server-authoritative paper trading & portfolio foundation) is ✅ complete. The next milestone is **Phase 5.1 — Portfolio & Journal Analytics**:
 
-- Phase 5.1 candidates: paper position dashboard polish, portfolio-level exposure/concentration views, enhanced journal/performance views (reusing the Phase 4.2 generic analytics layer)
-- Phase 6: capital & margin analysis (SPAN / exposure margin, return on capital)
+- portfolio dashboard
+- realized/unrealized P&L analytics
+- position exposure and concentration
+- strategy-grouped performance
+- trade journal improvements
+- win rate
+- average winner/loser
+- profit factor
+- expectancy
+- drawdown
+- holding duration
 
-The next-phase prompt has not been prepared yet; wait for it from ChatGPT.
+Phase 5.1 is NOT implemented yet. Wait for the implementation prompt from ChatGPT.
 
 ## Permanent project constraints
 
@@ -273,4 +298,4 @@ The next-phase prompt has not been prepared yet; wait for it from ChatGPT.
 
 ## Next action
 
-**User:** Manually verify Phase 5.0 (execute a strategy → backend portfolio shows positions/cash; partial & full exits → realized P&L updates; duplicate clicks don't double-trade; reload the page → state persists from the server; market closed → orders blocked). Then ChatGPT reviews the diff. Only after approval does Phase 5.1 / Phase 6 begin.
+Wait for ChatGPT to provide the Phase 5.1 implementation prompt.
