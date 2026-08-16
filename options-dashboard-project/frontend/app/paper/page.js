@@ -12,7 +12,25 @@ import {
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
-import { hasUnlimitedLoss, hasUnlimitedProfit, payoffRange, pnlAt } from "@/lib/options";
+import { pnlAt } from "@/lib/calculations/payoff";
+import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
+import { aggregateGreeks } from "@/lib/calculations/greeks";
+import {
+  makeLeg,
+  addLeg,
+  updateLeg as updateLegIn,
+  removeLeg as removeLegFrom,
+  changeLegStrike as changeLegStrikeIn,
+  resetLegPrices as refreshLegPrices,
+  applyShift as shiftLegs,
+  applyWidth as widenLegs,
+  buildHedgeLeg,
+  addHedgeLeg,
+  removeLastHedgeLeg,
+  priceForLeg,
+} from "@/lib/strategy/strategy";
+import { buildStrategyContext, buildChainContext } from "@/lib/strategy/strategyUtils";
+import { validateLeg } from "@/lib/strategy/strategyValidation";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
 import { nseCalendarStatus, priceModeLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
 import { loadJSON, saveJSON } from "@/lib/storage";
@@ -283,6 +301,13 @@ export default function PaperTradingPage() {
     return best;
   }, [spot, strikesSorted]);
 
+  // Chain context for the pure strategy-domain helpers (leg mutations and
+  // the Shift / Width / Hedge transformations).
+  const chainCtx = useMemo(
+    () => buildChainContext({ chainCache, strikes: strikesSorted, chainByStrike, spot, atmIndex, expiry }),
+    [chainCache, strikesSorted, chainByStrike, spot, atmIndex, expiry]
+  );
+
   // Session change % for the header (vs the first spot seen for this symbol).
   useEffect(() => {
     if (spot == null) return;
@@ -293,71 +318,44 @@ export default function PaperTradingPage() {
   // P&L at a given underlying price, for the current legs
   const pnlAtPrice = useCallback((price) => pnlAt(legs, price, { lotSize, multiplier }), [legs, lotSize, multiplier]);
 
-  // Payoff chart data: one point per real strike (so OI bars line up), plus P&L line
+  // Single authoritative calculation entry point: payoff curve, risk profile,
+  // breakevens and return metrics all flow from `calculateStrategy` (see
+  // lib/calculations/strategyCalculator.js).
+  const calc = useMemo(
+    () => calculateStrategy(legs, { strikes: strikesSorted, lotSize, multiplier }),
+    [legs, strikesSorted, lotSize, multiplier]
+  );
+  const { maxProfit, maxLoss, maxProfitUnlimited, maxLossUnlimited, netPerLot, netTotal, roi, rewardRisk, breakevens } = calc;
+
+  // Payoff chart data: one point per real strike (so OI bars line up), plus
+  // the P&L line. The P&L comes from the shared calculator (exact); rounding
+  // here is display-only.
   const payoffData = useMemo(() => {
     if (strikesSorted.length === 0) return [];
+    const pnlByStrike = new Map(calc.payoffCurve.map((p) => [p.strike, p.pnl]));
     return strikesSorted.map((strike) => {
       const row = chainByStrike.get(strike);
       return {
         strike,
-        pnl: legs.length ? Math.round(pnlAtPrice(strike)) : 0,
+        pnl: legs.length ? Math.round(pnlByStrike.get(strike) ?? 0) : 0,
         callOI: row?.call.oi ?? 0,
         putOI: row?.put.oi ?? 0,
       };
     });
-  }, [strikesSorted, chainByStrike, legs, pnlAtPrice]);
+  }, [strikesSorted, chainByStrike, legs, calc]);
 
   // Strategy Chart data: one line per leg plus the combined position.
   const legPayoffData = useMemo(() => {
     if (strikesSorted.length === 0 || legs.length === 0) return [];
-    return strikesSorted.map((strike) => {
-      const point = { strike };
-      let combined = 0;
-      legs.forEach((l, i) => {
-        const intrinsic = l.type === "call" ? Math.max(0, strike - l.strike) : Math.max(0, l.strike - strike);
-        const dir = l.action === "buy" ? 1 : -1;
-        const pnl = dir * (intrinsic - l.price) * l.qty * lotSize * multiplier;
+    return calc.perLegCurve.map((p) => {
+      const point = { strike: p.strike };
+      p.legPnl.forEach((pnl, i) => {
         point[`leg${i}`] = Math.round(pnl);
-        combined += pnl;
       });
-      point.combined = Math.round(combined);
+      point.combined = Math.round(p.combined);
       return point;
     });
-  }, [strikesSorted, legs, lotSize, multiplier]);
-
-  // Exact (unrounded) payoff min/max across the chain, plus structural
-  // unbounded-risk detection. "Unlimited" is assigned only when the position
-  // is actually net short (a naked short call or short put) — never for
-  // long-only positions or defined-risk spreads, and the rupee figure shown
-  // is the true value (no rounding artifacts).
-  const { maxProfit, maxLoss } = payoffRange(legs, strikesSorted, { lotSize, multiplier });
-  const maxProfitUnlimited = hasUnlimitedProfit(legs);
-  const maxLossUnlimited = hasUnlimitedLoss(legs);
-
-  const netPerLot = legs.reduce((sum, l) => {
-    const dir = l.action === "buy" ? 1 : -1;
-    return sum + dir * l.price * l.qty;
-  }, 0);
-  const netTotal = netPerLot * lotSize * multiplier;
-
-  const roiPct = legs.length && netTotal !== 0 ? (maxProfit / Math.abs(netTotal)) * 100 : null;
-  const rewardRisk = legs.length && maxLoss < 0 ? maxProfit / Math.abs(maxLoss) : null;
-
-  // Underlying price(s) where the payoff crosses zero (linear interpolation
-  // between neighbouring strikes).
-  const breakevens = useMemo(() => {
-    const out = [];
-    for (let i = 0; i < payoffData.length - 1; i++) {
-      const a = payoffData[i];
-      const b = payoffData[i + 1];
-      if ((a.pnl >= 0 && b.pnl <= 0) || (a.pnl <= 0 && b.pnl >= 0)) {
-        const denom = a.pnl - b.pnl;
-        const t = denom === 0 ? 0 : a.pnl / denom;
-        out.push(Math.round(a.strike + t * (b.strike - a.strike)));
-      }
-    }
-    return out;
-  }, [payoffData]);
+  }, [strikesSorted, legs, calc]);
 
   const targetPrice = spot ? spot * (1 + targetPct / 100) : null;
   const targetPnl = targetPrice != null ? pnlAtPrice(targetPrice) : null;
@@ -367,31 +365,9 @@ export default function PaperTradingPage() {
     : null;
   const expiryFillPct = daysToExpiry != null ? Math.min(100, Math.max(0, ((30 - daysToExpiry) / 30) * 100)) : 0;
 
-  const greeksRows = useMemo(() => {
-    return legs.map((l) => {
-      const legChain = chainCache[l.expiry];
-      const row = legChain?.chain.find((r) => r.strike === l.strike);
-      const g = row ? (l.type === "call" ? row.call : row.put) : null;
-      const dir = l.action === "buy" ? 1 : -1;
-      const mult = dir * l.qty * lotSize * multiplier;
-      return {
-        leg: l,
-        delta: g?.delta != null ? g.delta * mult : null,
-        gamma: g?.gamma != null ? g.gamma * mult : null,
-        theta: g?.theta != null ? g.theta * mult : null,
-        vega: g?.vega != null ? g.vega * mult : null,
-      };
-    });
-  }, [legs, chainCache, lotSize, multiplier]);
-
-  const greeksTotals = greeksRows.reduce(
-    (acc, r) => ({
-      delta: acc.delta + (r.delta ?? 0),
-      gamma: acc.gamma + (r.gamma ?? 0),
-      theta: acc.theta + (r.theta ?? 0),
-      vega: acc.vega + (r.vega ?? 0),
-    }),
-    { delta: 0, gamma: 0, theta: 0, vega: 0 }
+  const { rows: greeksRows, totals: greeksTotals } = useMemo(
+    () => aggregateGreeks(legs, chainCache, { lotSize, multiplier }),
+    [legs, chainCache, lotSize, multiplier]
   );
 
   // ---- Paper trading (positions) ----
@@ -578,46 +554,20 @@ export default function PaperTradingPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ---- Leg editing helpers ----
+  // ---- Leg editing helpers (pure domain logic lives in lib/strategy) ----
   const addLegFromChain = (type, strike) => {
-    const row = chainByStrike.get(strike);
-    const price = row ? (type === "call" ? row.call.ltp : row.put.ltp) : 0;
+    const price = priceForLeg(chainCtx, type, strike, expiry);
     setStrategyName(null);
-    setLegs((prev) => [
-      ...prev,
-      { id: `${type}-${strike}-${Date.now()}`, type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 },
-    ]);
+    setLegs((prev) => addLeg(prev, makeLeg({ type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 })));
   };
 
-  const updateLeg = (id, patch) => {
-    setLegs((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-  };
+  const updateLeg = (id, patch) => setLegs((prev) => updateLegIn(prev, id, patch));
 
-  const removeLeg = (id) => setLegs((prev) => prev.filter((l) => l.id !== id));
+  const removeLeg = (id) => setLegs((prev) => removeLegFrom(prev, id));
 
-  const resetLegPrices = () => {
-    setLegs((prev) =>
-      prev.map((l) => {
-        const legChain = chainCache[l.expiry];
-        const row = legChain?.chain.find((r) => r.strike === l.strike);
-        const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
-        return { ...l, price: price ?? l.price };
-      })
-    );
-  };
+  const resetLegPrices = () => setLegs((prev) => refreshLegPrices(prev, chainCtx));
 
-  const changeLegStrike = (id, direction) => {
-    const l = legs.find((x) => x.id === id);
-    if (!l) return;
-    const legChain = chainCache[l.expiry];
-    const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
-    const idx = strikes.indexOf(l.strike);
-    const newIdx = Math.min(Math.max(idx + direction, 0), strikes.length - 1);
-    const newStrike = strikes[newIdx];
-    const row = legChain?.chain.find((r) => r.strike === newStrike) ?? chainByStrike.get(newStrike);
-    const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
-    updateLeg(id, { strike: newStrike, price: price ?? l.price });
-  };
+  const changeLegStrike = (id, direction) => setLegs((prev) => changeLegStrikeIn(prev, id, direction, chainCtx));
 
   const changeLegExpiry = (id, newExpiry) => {
     updateLeg(id, { expiry: newExpiry });
@@ -627,13 +577,9 @@ export default function PaperTradingPage() {
   const loadStrategy = (strategyDef) => {
     if (!primaryChain) return;
     // Multi-expiry strategies (calendar / diagonal) need the other expiries'
-    // chains too; build a strike->row map for every expiry fetched so far.
-    const chainByStrikeForExpiry = {};
-    expiries.forEach((exp) => {
-      const ch = chainCache[exp];
-      if (ch) chainByStrikeForExpiry[exp] = new Map(ch.chain.map((r) => [r.strike, r]));
-    });
-    const ctx = { strikes: strikesSorted, atmIndex, chainByStrike, expiry, expiries, chainByStrikeForExpiry };
+    // chains too; buildStrategyContext maps every fetched expiry to its
+    // strike->row map.
+    const ctx = buildStrategyContext({ strikes: strikesSorted, atmIndex, chainByStrike, expiry, expiries, chainCache });
     setLegs(strategyDef.build(ctx));
     setStrategyName(strategyDef.name);
     setShift(0);
@@ -643,20 +589,8 @@ export default function PaperTradingPage() {
   };
 
   // ---- Strategy adjustment tools (Shift / Width / Hedge) ----
-  const moveLegByStrikes = (l, steps) => {
-    if (!steps || !l) return l;
-    const legChain = chainCache[l.expiry];
-    const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
-    if (strikes.length === 0) return l;
-    const idx = strikes.indexOf(l.strike);
-    if (idx === -1) return l;
-    const newIdx = Math.min(Math.max(idx + steps, 0), strikes.length - 1);
-    const newStrike = strikes[newIdx];
-    const row = legChain?.chain.find((r) => r.strike === newStrike) ?? chainByStrike.get(newStrike);
-    const price = row ? (l.type === "call" ? row.call.ltp : row.put.ltp) : l.price;
-    return { ...l, strike: newStrike, price: price ?? l.price };
-  };
-
+  // The transformation math lives in lib/strategy/strategy.js; these
+  // handlers only apply the results to state.
   const resetAdjustments = () => {
     setShift(0);
     setWidth(0);
@@ -664,36 +598,13 @@ export default function PaperTradingPage() {
   };
 
   const applyShift = (delta) => {
-    setLegs((prev) => prev.map((l) => moveLegByStrikes(l, delta)));
+    setLegs((prev) => shiftLegs(prev, delta, chainCtx));
     setShift((s) => s + delta);
     setStrategyName(null);
   };
 
   const applyWidth = (delta) => {
-    setLegs((prev) =>
-      prev.map((l) => {
-        const legChain = chainCache[l.expiry];
-        const strikes = legChain ? legChain.chain.map((r) => r.strike).sort((a, b) => a - b) : strikesSorted;
-        const spotRef = legChain?.underlying_spot_price ?? spot;
-        if (strikes.length === 0 || spotRef == null) return l;
-        let atmIdx = 0;
-        let bestDiff = Infinity;
-        strikes.forEach((s, i) => {
-          const d = Math.abs(s - spotRef);
-          if (d < bestDiff) {
-            bestDiff = d;
-            atmIdx = i;
-          }
-        });
-        const idx = strikes.indexOf(l.strike);
-        if (idx === -1) return l;
-        const off = idx - atmIdx;
-        // Legs above ATM ride up, legs below ride down, ATM legs drift with
-        // their side — widening pushes wings out, narrowing pulls them in.
-        const dir = off === 0 ? (l.type === "call" ? 1 : -1) : Math.sign(off);
-        return moveLegByStrikes(l, dir * delta);
-      })
-    );
+    setLegs((prev) => widenLegs(prev, delta, chainCtx));
     setWidth((w) => w + delta);
     setStrategyName(null);
   };
@@ -703,35 +614,12 @@ export default function PaperTradingPage() {
     if (nextHedge === hedge) return;
     if (delta > 0) {
       // Add a protective long OTM leg, alternating call/put sides and creeping
-      // further OTM with each level (level 1 = long call +4, 2 = long put -4,
-      // 3 = long call +5, 4 = long put -5, ...).
-      const level = nextHedge;
-      const side = level % 2 === 1 ? "call" : "put";
-      const offset = 4 + Math.floor((level - 1) / 2);
-      const sign = side === "call" ? 1 : -1;
-      const strikeIdx = Math.min(Math.max(atmIndex + sign * offset, 0), strikesSorted.length - 1);
-      const strike = strikesSorted[strikeIdx];
-      if (strike == null) return;
-      const row = chainByStrike.get(strike);
-      const price = row ? (side === "call" ? row.call.ltp : row.put.ltp) : 0;
-      const newLeg = {
-        id: `hedge-${side}-${strike}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        type: side,
-        strike,
-        action: "buy",
-        qty: 1,
-        expiry,
-        price: price ?? 0,
-        hedge: true,
-      };
-      setLegs((prev) => [...prev, newLeg]);
+      // further OTM with each level (see buildHedgeLeg in lib/strategy).
+      const leg = buildHedgeLeg(nextHedge, chainCtx);
+      if (!leg) return;
+      setLegs((prev) => addHedgeLeg(prev, nextHedge, chainCtx));
     } else {
-      setLegs((prev) => {
-        const hedgeLegs = prev.filter((l) => l.hedge);
-        if (hedgeLegs.length === 0) return prev;
-        const last = hedgeLegs[hedgeLegs.length - 1];
-        return prev.filter((l) => l.id !== last.id);
-      });
+      setLegs((prev) => removeLastHedgeLeg(prev));
     }
     setHedge(nextHedge);
     setStrategyName(null);
@@ -739,11 +627,8 @@ export default function PaperTradingPage() {
 
   // ---- Draft portfolios & saved strategies ----
   const addCustomLeg = ({ action, type, strike, qty, price }) => {
-    if (!strike || qty < 1) return;
-    setLegs((prev) => [
-      ...prev,
-      { id: `${type}-${strike}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, type, strike, action, qty, expiry, price: Number(price) || 0 },
-    ]);
+    if (!validateLeg({ type, action, strike, qty, price }).valid) return;
+    setLegs((prev) => addLeg(prev, makeLeg({ type, strike, action, qty, expiry, price })));
     setStrategyName(null);
     setShowAddLeg(false);
   };
@@ -1493,7 +1378,7 @@ export default function PaperTradingPage() {
               <SummaryBlock
                 label="Max Profit"
                 value={!legs.length ? "—" : maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(maxProfit)}`}
-                sub={roiPct != null ? `+${roiPct.toFixed(1)}% on premium` : "shown range"}
+                sub={roi != null ? `+${roi.toFixed(1)}% on premium` : "shown range"}
                 color={C.green}
               />
               <SummaryBlock
