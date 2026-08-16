@@ -4,7 +4,7 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 4 — Advanced Greeks / IV Analytics**
+**Phase 4.1 — IV Analytics**
 
 Status: 🔵 **Next phase / prompt preparation**
 
@@ -19,7 +19,9 @@ Status: 🔵 **Next phase / prompt preparation**
 | Phase 2 — Professional Payoff & Risk Engine | ✅ Complete | Chain-independent theoretical payoff, risk tails, exact same-expiry breakevens, S >= 0 handling |
 | Phase 2.1 — Multi-expiry chain handling | ✅ Complete | Required-expiry detection, auto-loading, expiry-specific pricing and execution chain gate |
 | Phase 3 — Scenario & Time Analysis | ✅ Complete | Dependency-free Black-Scholes-style model, scenario engine, scenario matrices, modelled Greeks and minimal Scenario UI |
-| Phase 4 — Advanced Greeks / IV analytics | 🔵 Next | Prompt preparation / implementation not started |
+| Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete | Canonical Greek units, live/model comparison, per-leg exposure, contributions and Scenario-panel integration |
+| Phase 4.1 — IV Analytics | 🔵 Next | Prompt preparation / implementation not started |
+| Phase 4.2 — Greek/IV Divergence & Advanced Signals | ⏳ Planned | Not started |
 | Phase 5 — Paper trading / portfolio upgrade | ⏳ Planned | Not started |
 | Phase 6 — Capital & margin analysis | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
@@ -32,109 +34,41 @@ Status: 🔵 **Next phase / prompt preparation**
 
 ## Latest verified implementation commit
 
-`dbea20a1e39a88d13390e44ba18766231d1815ea`
+`9ae9966ca358a716c0e53d96203103f5e717e86f`
 
-This is the verified Phase 2.1 implementation baseline. Phase 3 changes are reported as present in `main`; the latest exact Phase 3 commit SHA should be recorded after GitHub commit review if not yet identified in the current session.
+This is the verified Phase 4.0 implementation baseline.
 
-## Phase 0.5 verification
+## Phase 4.0 verification
 
-Status: ✅ Passed
+Status: ✅ Passed / verified by user
 
-Verified manually:
+Implemented:
 
-- Buy Call: PASS
-- Buy Put: PASS
-- Bull Call Spread: PASS
-- Naked Short Call: PASS
-- Short Straddle: PASS
-- Market Closed Protection: PASS
+- Canonical Greek unit contract:
+  - Delta: exposure change per 1 underlying point
+  - Gamma: exposure change in Delta per 1 underlying point
+  - Theta: ₹ exposure change per calendar day
+  - Vega: ₹ exposure change per 1 volatility point
+- Live broker/chain Greeks kept separate from model Greeks
+- Model Theta converted from per-year to per-day
+- Model Vega converted from per 1.00 volatility fraction to per 1 vol point
+- Explicit ZERO vs UNAVAILABLE handling
+- Signed model-minus-live differences
+- Per-leg Greek analytics and strategy totals
+- Greek contribution/concentration view
+- Own-expiry live/model Greek handling for multi-expiry strategies
+- Scenario-panel live-vs-model Greek comparison using the existing scenario result without duplicate pricing calculations
+- No changes to paper execution or market-hours safety
 
-## Phase 1 verification
+User-reported test/build verification:
 
-Status: ✅ Passed
-
-Verified manually:
-
-- Strategy Builder / Buy Call: PASS
-- Bull Call Spread: PASS
-- Duplicate Leg: PASS
-- Reverse Leg: PASS
-- Change Expiry: PASS
-- Calendar/Diagonal: PASS
-- Review Before Trade: PASS
-- Market Closed Protection: PASS
-
-## Phase 1.1 verification
-
-Status: ✅ Passed
-
-Verified behavior:
-
-### Long Call
-
-- Max Profit: Unlimited
-- Max Loss: Premium Paid
-- Reward / Risk: Unlimited
-- Premium ROI: Unlimited
-
-### Bull Call Spread — 24,350 / 24,550 example
-
-- BUY 24,350 CE @ ₹125.25
-- SELL 24,550 CE @ ₹35.60
-- Lot size: 65
-- Net Debit: ₹5,827.25
-- Max Loss: −₹5,827.25
-- Max Profit: +₹7,172.75
-- Reward / Risk: ≈ 1.23
-- Premium ROI: ≈ 123.1%
-
-### Bull Call Spread — 24,350 / 24,450 example
-
-- BUY 24,350 CE @ ₹125.25
-- SELL 24,450 CE @ ₹71.40
-- Lot size: 65
-- Net Debit: ₹3,500.25
-- Max Loss: −₹3,500.25
-- Max Profit: +₹2,999.75
-- Reward / Risk: ≈ 0.86
-- Premium ROI: ≈ 85.7%
-
-### Market closed
-
-- New paper orders blocked.
-- UI indicates market closed.
-- Final execution-time check remains server-side.
-
-## Phase 2 verification
-
-Status: ✅ Passed
-
-Verified manually:
-
-- Long Call: PASS
-- Long Put: PASS
-- Bull Call Spread: PASS
-- Short Put: PASS
-- Mixed-expiry warning: PASS
-
-Phase 2 automated tests included theoretical payoff, tail behavior, breakevens, ratio/asymmetric quantities, S=0 boundaries and visible-chain independence.
-
-## Phase 2.1 verification
-
-Status: ✅ Passed
-
-Verified behavior:
-
-- Required expiry detection: PASS
-- Secondary expiry auto-load: PASS
-- Every required expiry polled/freshened: PASS
-- Each leg priced from its own expiry chain: PASS
-- Missing required chain blocks execution: PASS
-- Market CLOSED still blocks even when chains are available: PASS
+- Frontend: 355 tests passed / 0 failed across 18 files
+- Backend: 99 tests passed / 0 failed
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
 
 ## Phase 3 verification
 
-Status: ✅ Passed / reported verified by user
+Status: ✅ Passed
 
 Implemented:
 
@@ -162,6 +96,31 @@ User-reported verification:
 - JSX parse check: PASS
 - Invalid scenario spot returns null totals instead of misleading ₹0
 
+## Phase 2.1 verification
+
+Status: ✅ Passed
+
+Verified behavior:
+
+- Required expiry detection: PASS
+- Secondary expiry auto-load: PASS
+- Every required expiry polled/freshened: PASS
+- Each leg priced from its own expiry chain: PASS
+- Missing required chain blocks execution: PASS
+- Market CLOSED still blocks even when chains are available: PASS
+
+## Phase 2 verification
+
+Status: ✅ Passed
+
+Verified manually:
+
+- Long Call: PASS
+- Long Put: PASS
+- Bull Call Spread: PASS
+- Short Put: PASS
+- Mixed-expiry warning: PASS
+
 ## Current architecture status
 
 ### Working foundations
@@ -172,7 +131,7 @@ User-reported verification:
 - Chain-independent expiry payoff/risk ✅
 - Scenario/time pricing engine ✅
 - Live-chain Greeks ✅
-- Modelled scenario Greeks ✅
+- Canonical live/model Greek analytics ✅
 - Central strategy calculator ✅
 - Strategy templates ✅
 - Paper trading ✅
@@ -183,27 +142,28 @@ User-reported verification:
 
 ### Current architecture concerns
 
-- `frontend/app/paper/page.js` is still a large orchestration component and should not become the home for future domain logic.
-- Live-chain Greeks and scenario-model Greeks must remain clearly distinguished.
+- `frontend/app/paper/page.js` remains a large orchestration component; future domain logic should stay outside it.
+- Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
+- Phase 3/4 model IV consumes chain IV as provided; feed-percent vs model-decimal reconciliation is a Phase 4.1 responsibility.
 - Full capital/margin is not yet modeled.
 - Backend/database should become increasingly authoritative for persistent trading state.
-- Multi-expiry scenario valuation is leg-by-leg modelled and should remain clearly marked as an approximation for expiry payoff behaviour.
+- Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
 
-## Current Phase 4 objective
+## Current Phase 4.1 objective
 
-Build the advanced Greeks and volatility analytics layer on top of both live-chain data and the Phase 3 scenario model.
+Build IV analytics on top of the existing expiry-specific chain data and canonical Greek foundation.
 
-Planned Phase 4 goals:
+Planned goals:
 
-- Unified strategy-level Greek dashboard
-- Live vs modelled Greek comparison
-- IV rank / percentile style analytics where sufficient historical data exists
-- IV skew / term structure views from user-authorized market data
-- Vega / gamma / theta concentration
-- Delta dominance and strategy Greek divergence
-- Greek scenario curves
-- Volatility shock analysis
-- Cleaner Greek interpretation for the future terminal/dashboard
+- Explicit IV unit normalization between live feed and model decimal representation
+- ATM IV and per-leg IV views
+- IV term structure by expiry
+- IV skew by strike/moneyness
+- IV percentile/rank only where enough historical observations exist
+- IV change tracking when reliable prior observations are available
+- Volatility regime views
+- Volatility-shock inputs for the existing Scenario engine
+- Clear separation between live IV and model/scenario IV
 
 ## Permanent project constraints
 
@@ -227,4 +187,4 @@ Planned Phase 4 goals:
 
 ## Next action
 
-**User:** Wait for the Phase 4 prompt from ChatGPT and do not ask FreeBuff to start Phase 4 until the current Phase 3 implementation has been inspected and approved.
+**User:** Wait for the Phase 4.1 prompt from ChatGPT. Do not ask FreeBuff to implement Phase 4.1 until the prompt is provided.
