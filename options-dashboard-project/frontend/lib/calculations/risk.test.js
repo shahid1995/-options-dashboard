@@ -6,6 +6,7 @@ import {
   netDebitCredit,
   roiPct,
   rewardRisk,
+  premiumOutlay,
 } from "./risk";
 
 const leg = (type, action, strike, price, qty = 1) => ({ type, action, strike, price, qty });
@@ -82,5 +83,20 @@ describe("roiPct / rewardRisk", () => {
   it("is null when the position cannot lose", () => {
     expect(rewardRisk(100, 0)).toBeNull();
     expect(rewardRisk(100, 50)).toBeNull();
+  });
+});
+
+describe("premiumOutlay — capital / premium requirement", () => {
+  it("sums the premium paid on long legs only", () => {
+    expect(premiumOutlay([leg("call", "buy", 25000, 200), leg("put", "sell", 25000, 150)])).toBe(200);
+    expect(premiumOutlay([leg("call", "buy", 25000, 200), leg("put", "buy", 25000, 150)])).toBe(350);
+  });
+
+  it("is zero for a position with only short legs", () => {
+    expect(premiumOutlay([leg("call", "sell", 25000, 200), leg("put", "sell", 25000, 150)])).toBe(0);
+  });
+
+  it("scales by quantity × lot size × multiplier", () => {
+    expect(premiumOutlay([leg("call", "buy", 25000, 200, 2)], { lotSize: 65, multiplier: 3 })).toBe(200 * 2 * 65 * 3);
   });
 });

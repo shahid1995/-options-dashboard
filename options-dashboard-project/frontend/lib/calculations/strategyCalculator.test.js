@@ -131,5 +131,76 @@ describe("calculateStrategy — curves and return metrics", () => {
     expect(c.breakevens).toEqual([]);
     expect(c.rewardRisk).toBeNull();
     expect(c.roi).toBeNull();
+    expect(c.premiumOutlay).toBe(0);
+  });
+});
+
+describe("calculateStrategy — required strategy regressions", () => {
+  it("Short Straddle → unlimited loss, defined profit at the short strike", () => {
+    const c = calculateStrategy([leg("call", "sell", 25000, 200), leg("put", "sell", 25000, 150)], one);
+    expect(c.maxLossUnlimited).toBe(true);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(350); // credit received with both OTM
+    expect(c.netCredit).toBe(350);
+    expect(c.netDebit).toBe(0);
+  });
+
+  it("Long Straddle → max loss = total debit, unlimited profit", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200), leg("put", "buy", 25000, 150)], one);
+    expect(c.maxLoss).toBe(-350);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.netDebit).toBe(350);
+  });
+
+  it("Iron Condor → defined max loss and defined max profit", () => {
+    const c = calculateStrategy(
+      [leg("put", "buy", 24800, 40), leg("put", "sell", 24900, 80), leg("call", "sell", 25100, 70), leg("call", "buy", 25200, 35)],
+      one
+    );
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(75); // full credit received in the inner range
+    expect(c.maxLoss).toBe(-25); // wing width minus credit
+    expect(c.netCredit).toBe(75);
+  });
+
+  it("Ratio Call Spread (1:2) → net credit, capped profit, unlimited loss beyond the short strikes", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200), leg("call", "sell", 25100, 150, 2)], one);
+    expect(c.maxLossUnlimited).toBe(true); // net short 1 call (2 sold vs 1 bought)
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(200); // peaks at the short strike, capped as the position turns over
+    expect(c.netCredit).toBe(100);
+    expect(c.netDebit).toBe(0);
+  });
+
+  it("multi-leg quantity: strap (2 call + 1 put) sums debit and stays defined-risk on loss", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200, 2), leg("put", "buy", 25000, 150)], one);
+    expect(c.maxLoss).toBe(-550); // 2×200 + 150
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.netDebit).toBe(550);
+  });
+
+  it("surfaces the premium outlay (capital / premium requirement)", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200), leg("call", "sell", 25100, 150)], one);
+    expect(c.premiumOutlay).toBe(200); // only the long leg
+  });
+});
+
+describe("calculateStrategy — lot-size scaling", () => {
+  it("1 lot vs 2 lots scale max loss, max profit and net flow linearly", () => {
+    const oneLot = calculateStrategy([leg("call", "buy", 25000, 200)], one);
+    const twoLots = calculateStrategy([leg("call", "buy", 25000, 200, 2)], one);
+    expect(twoLots.maxLoss).toBe(oneLot.maxLoss * 2);
+    expect(twoLots.netDebit).toBe(oneLot.netDebit * 2);
+    expect(twoLots.premiumOutlay).toBe(oneLot.premiumOutlay * 2);
+  });
+
+  it("applies lot size × multiplier to contracts (65 × 2 = 130 per lot)", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200)], { strikes, lotSize: 65, multiplier: 2 });
+    expect(c.netTotal).toBe(200 * 65 * 2);
+    expect(c.maxLoss).toBe(-200 * 65 * 2);
+    expect(c.premiumOutlay).toBe(200 * 65 * 2);
   });
 });

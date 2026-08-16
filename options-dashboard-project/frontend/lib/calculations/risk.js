@@ -33,6 +33,14 @@ export function netDebitCredit(legs, { lotSize = 1, multiplier = 1 } = {}) {
   };
 }
 
+// Total premium paid on long (buy) legs: the cash required to establish the
+// position (margin for short legs is not modeled in the simulator, so this is
+// the honest "capital / premium requirement" figure for debit strategies and
+// the visible outlay for credit strategies).
+export function premiumOutlay(legs, { lotSize = 1, multiplier = 1 } = {}) {
+  return legs.reduce((sum, l) => (l.action === "buy" ? sum + l.price * l.qty * lotSize * multiplier : sum), 0);
+}
+
 // ROI on the net premium outlay. Undefined (null) when there is no outlay.
 export function roiPct(maxProfit, netTotal) {
   return netTotal !== 0 ? (maxProfit / Math.abs(netTotal)) * 100 : null;

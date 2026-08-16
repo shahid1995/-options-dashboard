@@ -21,6 +21,9 @@ import {
   updateLeg as updateLegIn,
   removeLeg as removeLegFrom,
   changeLegStrike as changeLegStrikeIn,
+  changeLegExpiry as changeLegExpiryIn,
+  duplicateLegIn,
+  reverseLegIn,
   resetLegPrices as refreshLegPrices,
   applyShift as shiftLegs,
   applyWidth as widenLegs,
@@ -30,7 +33,8 @@ import {
   priceForLeg,
 } from "@/lib/strategy/strategy";
 import { buildStrategyContext, buildChainContext } from "@/lib/strategy/strategyUtils";
-import { validateLeg } from "@/lib/strategy/strategyValidation";
+import { validateLeg, validateStrategy, validateExecution } from "@/lib/strategy/strategyValidation";
+import { newStrategyId, deriveStrategy, strategySourceLabel } from "@/lib/strategy/strategyIdentity";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
 import { nseCalendarStatus, priceModeLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
 import { loadJSON, saveJSON } from "@/lib/storage";
@@ -82,6 +86,13 @@ export default function PaperTradingPage() {
 
   const [legs, setLegs] = useState([]);
   const [strategyName, setStrategyName] = useState(null);
+  // ---- Strategy identity (Phase 1): stable id/source/createdAt alongside the
+  // name, so templates, custom builds, drafts and saved strategies stay
+  // distinguishable and edits never silently rename a strategy. ----
+  const [strategyId, setStrategyId] = useState(() => newStrategyId());
+  const [strategyCreatedAt, setStrategyCreatedAt] = useState(() => new Date().toISOString());
+  const [strategySource, setStrategySource] = useState("custom");
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [multiplier, setMultiplier] = useState(1);
   const [lotSize, setLotSize] = useState(LOT_SIZES.NIFTY);
   const [category, setCategory] = useState("Bullish");
@@ -308,6 +319,33 @@ export default function PaperTradingPage() {
     [chainCache, strikesSorted, chainByStrike, spot, atmIndex, expiry]
   );
 
+  // Any structural edit to a loaded template / saved strategy converts it to a
+  // modified strategy — the name is kept, only the source changes, so the user
+  // is never surprised by a renamed strategy after a small tweak.
+  const markStrategyEdited = useCallback(() => {
+    setStrategySource((s) => (s === "template" || s === "saved" ? "modified" : s));
+  }, []);
+
+  // When a chain for an expiry that legs reference first loads (expiry change,
+  // calendar/diagonal template), refresh those legs' premiums only — never
+  // reprice legs against the wrong expiry via the primary-chain fallback.
+  const loadedChainKeysRef = useRef(null);
+  useEffect(() => {
+    const keys = Object.keys(chainCache);
+    const fresh = loadedChainKeysRef.current == null ? [] : keys.filter((k) => !loadedChainKeysRef.current.has(k));
+    loadedChainKeysRef.current = new Set(keys);
+    if (fresh.length === 0 || legs.length === 0) return;
+    if (!legs.some((l) => l.expiry && fresh.includes(l.expiry))) return;
+    setLegs((prev) =>
+      prev.map((l) => {
+        if (!l.expiry || !fresh.includes(l.expiry)) return l;
+        const price = priceForLeg(chainCtx, l.type, l.strike, l.expiry);
+        return price == null ? l : { ...l, price };
+      })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chainCache, chainCtx, legs.length]);
+
   // Session change % for the header (vs the first spot seen for this symbol).
   useEffect(() => {
     if (spot == null) return;
@@ -326,6 +364,42 @@ export default function PaperTradingPage() {
     [legs, strikesSorted, lotSize, multiplier]
   );
   const { maxProfit, maxLoss, maxProfitUnlimited, maxLossUnlimited, netPerLot, netTotal, roi, rewardRisk, breakevens } = calc;
+
+  // Live strategy identity: the pure domain model derived from builder state.
+  const strategy = useMemo(
+    () =>
+      deriveStrategy({
+        id: strategyId,
+        name: strategyName,
+        underlying: symbol,
+        primaryExpiry: expiry,
+        legs,
+        source: strategySource,
+        createdAt: strategyCreatedAt,
+      }),
+    [strategyId, strategyName, symbol, expiry, legs, strategySource, strategyCreatedAt]
+  );
+
+  // Structural validation, shown inline under the legs table; and the
+  // pre-execution validation (structure + market status + chain availability)
+  // that drives the review panel.
+  const validation = useMemo(() => validateStrategy(legs), [legs]);
+  const chainStrikesByExpiry = useMemo(() => {
+    const out = {};
+    Object.entries(chainCache).forEach(([exp, ch]) => {
+      if (ch?.chain) out[exp] = ch.chain.map((r) => r.strike).sort((a, b) => a - b);
+    });
+    return out;
+  }, [chainCache]);
+  const executionValidation = useMemo(
+    () => validateExecution(legs, { marketStatus, chains: chainStrikesByExpiry, expiries }),
+    [legs, marketStatus, chainStrikesByExpiry, expiries]
+  );
+
+  // The review flow never survives an emptied builder.
+  useEffect(() => {
+    if (legs.length === 0) setReviewOpen(false);
+  }, [legs]);
 
   // Payoff chart data: one point per real strike (so OI bars line up), plus
   // the P&L line. The P&L comes from the shared calculator (exact); rounding
@@ -408,7 +482,7 @@ export default function PaperTradingPage() {
           lotSize,
           entryPremium: l.price,
           entryTime: new Date().toISOString(),
-          strategyName: strategyName ?? "Custom",
+          strategyName: strategy.name,
         };
       });
       const newPositionIds = new Set(newPositions.map((p) => p.id));
@@ -416,6 +490,10 @@ export default function PaperTradingPage() {
       setPaperPositions((prev) => [...prev, ...newPositions]);
       setLegs([]);
       setStrategyName(null);
+      setStrategyId(newStrategyId());
+      setStrategyCreatedAt(new Date().toISOString());
+      setStrategySource("custom");
+      setReviewOpen(false);
       setShift(0);
       setWidth(0);
       setHedge(0);
@@ -425,7 +503,7 @@ export default function PaperTradingPage() {
       // local simulator stays the source of truth if the backend is unreachable.
       const order = {
         symbol,
-        strategy_tag: strategyName ?? "Custom",
+        strategy_tag: strategy.name,
         starting_capital: paperStartingCapital,
         legs: legs.map((l) => ({
           symbol,
@@ -462,6 +540,25 @@ export default function PaperTradingPage() {
       orderInFlightRef.current = false;
       setOrderInFlight(false);
     }
+  };
+
+  // ---- Review-before-execution (Phase 1) ----
+  // "Trade All" now opens a review panel first; nothing is executed until the
+  // user confirms. The final protection stays server-side: `executeTradeAll`
+  // re-checks the market at the exact moment of execution, and the backend
+  // gate can still reject (with rollback) if the market closes in between.
+  const openReview = () => {
+    if (legs.length === 0 || orderInFlightRef.current) return;
+    if (!validation.valid) return; // issues are already shown under the legs table
+    setShowAddLeg(false);
+    setReviewOpen(true);
+  };
+
+  const cancelReview = () => setReviewOpen(false);
+
+  const confirmExecute = async () => {
+    if (orderInFlightRef.current) return;
+    await executeTradeAll();
   };
 
   const closePosition = async (id) => {
@@ -557,20 +654,43 @@ export default function PaperTradingPage() {
   // ---- Leg editing helpers (pure domain logic lives in lib/strategy) ----
   const addLegFromChain = (type, strike) => {
     const price = priceForLeg(chainCtx, type, strike, expiry);
-    setStrategyName(null);
+    markStrategyEdited();
     setLegs((prev) => addLeg(prev, makeLeg({ type, strike, action: "buy", qty: 1, expiry, price: price ?? 0 })));
   };
 
-  const updateLeg = (id, patch) => setLegs((prev) => updateLegIn(prev, id, patch));
+  const updateLeg = (id, patch) => {
+    markStrategyEdited();
+    setLegs((prev) => updateLegIn(prev, id, patch));
+  };
 
-  const removeLeg = (id) => setLegs((prev) => removeLegFrom(prev, id));
+  const removeLeg = (id) => {
+    markStrategyEdited();
+    setLegs((prev) => removeLegFrom(prev, id));
+  };
+
+  const duplicateLeg = (id) => {
+    markStrategyEdited();
+    setLegs((prev) => duplicateLegIn(prev, id));
+  };
+
+  const reverseLeg = (id) => {
+    markStrategyEdited();
+    setLegs((prev) => reverseLegIn(prev, id));
+  };
 
   const resetLegPrices = () => setLegs((prev) => refreshLegPrices(prev, chainCtx));
 
-  const changeLegStrike = (id, direction) => setLegs((prev) => changeLegStrikeIn(prev, id, direction, chainCtx));
+  const changeLegStrike = (id, direction) => {
+    markStrategyEdited();
+    setLegs((prev) => changeLegStrikeIn(prev, id, direction, chainCtx));
+  };
 
+  // Expiry change: preserve every other leg property, refresh the premium only
+  // when the target expiry's chain is loaded (the fresh-chain effect re-prices
+  // it automatically the moment that chain arrives).
   const changeLegExpiry = (id, newExpiry) => {
-    updateLeg(id, { expiry: newExpiry });
+    markStrategyEdited();
+    setLegs((prev) => changeLegExpiryIn(prev, id, newExpiry, chainCtx));
     if (!chainCache[newExpiry]) loadChain(newExpiry);
   };
 
@@ -582,6 +702,10 @@ export default function PaperTradingPage() {
     const ctx = buildStrategyContext({ strikes: strikesSorted, atmIndex, chainByStrike, expiry, expiries, chainCache });
     setLegs(strategyDef.build(ctx));
     setStrategyName(strategyDef.name);
+    setStrategyId(newStrategyId());
+    setStrategyCreatedAt(new Date().toISOString());
+    setStrategySource("template");
+    setReviewOpen(false);
     setShift(0);
     setWidth(0);
     setHedge(0);
@@ -600,13 +724,13 @@ export default function PaperTradingPage() {
   const applyShift = (delta) => {
     setLegs((prev) => shiftLegs(prev, delta, chainCtx));
     setShift((s) => s + delta);
-    setStrategyName(null);
+    markStrategyEdited();
   };
 
   const applyWidth = (delta) => {
     setLegs((prev) => widenLegs(prev, delta, chainCtx));
     setWidth((w) => w + delta);
-    setStrategyName(null);
+    markStrategyEdited();
   };
 
   const applyHedge = (delta) => {
@@ -622,14 +746,14 @@ export default function PaperTradingPage() {
       setLegs((prev) => removeLastHedgeLeg(prev));
     }
     setHedge(nextHedge);
-    setStrategyName(null);
+    markStrategyEdited();
   };
 
   // ---- Draft portfolios & saved strategies ----
   const addCustomLeg = ({ action, type, strike, qty, price }) => {
-    if (!validateLeg({ type, action, strike, qty, price }).valid) return;
+    if (!validateLeg({ type, action, strike, qty, price, expiry }).valid) return;
+    markStrategyEdited();
     setLegs((prev) => addLeg(prev, makeLeg({ type, strike, action, qty, expiry, price })));
-    setStrategyName(null);
     setShowAddLeg(false);
   };
 
@@ -638,8 +762,19 @@ export default function PaperTradingPage() {
     const suggested = strategyName ?? `Draft ${drafts.length + 1}`;
     const name = window.prompt("Name this draft portfolio:", suggested);
     if (name === null) return;
+    const now = new Date().toISOString();
     setDrafts((prev) => [
-      { id: `draft-${Date.now()}`, name: name.trim() || suggested, symbol, expiry, legs: legs.map((l) => ({ ...l })), createdAt: new Date().toISOString() },
+      {
+        id: `draft-${Date.now()}`,
+        name: name.trim() || suggested,
+        symbol,
+        expiry,
+        legs: legs.map((l) => ({ ...l })),
+        source: strategySource,
+        strategyId,
+        createdAt: now,
+        updatedAt: now,
+      },
       ...prev,
     ]);
   };
@@ -648,7 +783,11 @@ export default function PaperTradingPage() {
 
   const loadDraft = (d) => {
     const sameSymbol = (d.symbol ?? "NIFTY") === symbol;
-    setStrategyName(null);
+    setStrategyName(d.name ?? null);
+    setStrategySource("draft");
+    setStrategyId(newStrategyId());
+    setStrategyCreatedAt(new Date().toISOString());
+    setReviewOpen(false);
     resetAdjustments();
     setShowAddLeg(false);
     if (sameSymbol) {
@@ -1080,13 +1219,29 @@ export default function PaperTradingPage() {
                             />
                           </td>
                           <td style={{ padding: 4 }}>
-                            <button
-                              onClick={() => removeLeg(l.id)}
-                              title="Remove leg"
-                              style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}
-                            >
-                              🗑️
-                            </button>
+                            <div style={{ display: "flex", alignItems: "center", gap: 2, justifyContent: "flex-end" }}>
+                              <button
+                                onClick={() => duplicateLeg(l.id)}
+                                title="Duplicate leg"
+                                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}
+                              >
+                                ⧉
+                              </button>
+                              <button
+                                onClick={() => reverseLeg(l.id)}
+                                title={`Reverse leg (${l.action === "buy" ? "BUY" : "SELL"} → ${l.action === "buy" ? "SELL" : "BUY"})`}
+                                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}
+                              >
+                                ⇄
+                              </button>
+                              <button
+                                onClick={() => removeLeg(l.id)}
+                                title="Remove leg"
+                                style={{ background: "none", border: "none", color: C.faint, cursor: "pointer", fontSize: 12 }}
+                              >
+                                🗑️
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))
@@ -1094,6 +1249,25 @@ export default function PaperTradingPage() {
                   </tbody>
                 </table>
               </div>
+
+              {legs.length > 0 && !validation.valid && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    background: "rgba(225,82,82,0.08)",
+                    border: "1px solid rgba(225,82,82,0.35)",
+                    borderRadius: 8,
+                    padding: "8px 10px",
+                  }}
+                >
+                  <div style={{ fontSize: 10, fontWeight: 700, color: C.red, letterSpacing: 0.8, marginBottom: 4 }}>STRATEGY NEEDS ATTENTION</div>
+                  {validation.issues.map((msg, i) => (
+                    <div key={i} style={{ fontSize: 11, color: C.red, lineHeight: 1.55 }}>
+                      {msg}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {legs.length > 0 && (
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 10, flexWrap: "wrap" }}>
@@ -1150,9 +1324,17 @@ export default function PaperTradingPage() {
                   Add to Drafts
                 </button>
                 <button
-                  onClick={executeTradeAll}
-                  disabled={orderInFlight}
-                  title={orderInFlight ? "Processing order…" : marketNotOpen ? MARKET_CLOSED_MSG : "Execute all legs at current market prices"}
+                  onClick={openReview}
+                  disabled={orderInFlight || reviewOpen}
+                  title={
+                    orderInFlight
+                      ? "Processing order…"
+                      : reviewOpen
+                        ? "Review is open — confirm or cancel in the review panel below"
+                        : marketNotOpen
+                          ? MARKET_CLOSED_MSG
+                          : "Review the strategy before executing all legs as a paper trade"
+                  }
                   style={{
                     fontSize: 11.5,
                     fontWeight: 800,
@@ -1161,13 +1343,28 @@ export default function PaperTradingPage() {
                     border: "none",
                     borderRadius: 8,
                     padding: "8px 6px",
-                    cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer",
-                    opacity: orderInFlight || marketNotOpen ? 0.5 : 1,
+                    cursor: orderInFlight || reviewOpen ? "default" : marketNotOpen ? "not-allowed" : "pointer",
+                    opacity: orderInFlight || reviewOpen || marketNotOpen ? 0.5 : 1,
                   }}
                 >
-                  {orderInFlight ? "Placing…" : "Trade All"}
+                  {orderInFlight ? "Placing…" : reviewOpen ? "In Review" : "Review & Trade"}
                 </button>
               </div>
+
+              {reviewOpen && legs.length > 0 && (
+                <ReviewPanel
+                  strategy={strategy}
+                  calc={calc}
+                  lotSize={lotSize}
+                  multiplier={multiplier}
+                  structural={validation}
+                  execIssues={executionValidation.issues}
+                  marketStatus={marketStatus}
+                  orderInFlight={orderInFlight}
+                  onCancel={cancelReview}
+                  onExecute={confirmExecute}
+                />
+              )}
 
               {showAddLeg && (
                 <AddLegForm onAdd={addCustomLeg} chainByStrike={chainByStrike} strikesSorted={strikesSorted} atmIndex={atmIndex} />
@@ -1371,24 +1568,106 @@ export default function PaperTradingPage() {
             </div>
           </aside>
 
-          {/* ================= ZONE B · MAIN PERFORMANCE WORKSPACE (60%) ================= */}
           <section style={columnScroll}>
+            {/* Strategy identity strip */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                flexWrap: "wrap",
+                background: C.surface,
+                border: `1px solid ${C.border}`,
+                borderRadius: 10,
+                padding: "10px 14px",
+              }}
+            >
+              <span style={{ fontSize: 9.5, letterSpacing: 1, color: C.faint, fontWeight: 700 }}>STRATEGY</span>
+              {legs.length > 0 ? (
+                <>
+                  <input
+                    value={strategyName ?? ""}
+                    onChange={(e) => {
+                      setStrategyName(e.target.value.trim() || null);
+                      markStrategyEdited();
+                    }}
+                    placeholder="Strategy name"
+                    title="Strategy name"
+                    style={{
+                      background: C.surface2,
+                      color: C.text,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 6,
+                      padding: "4px 8px",
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      width: 170,
+                      maxWidth: "100%",
+                    }}
+                  />
+                  <span
+                    style={{
+                      padding: "2px 9px",
+                      borderRadius: 999,
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: 0.6,
+                      color: strategySource === "template" ? C.gold : strategySource === "modified" ? C.text : C.muted,
+                      background: strategySource === "template" ? "rgba(201,161,90,0.12)" : strategySource === "modified" ? "rgba(231,233,238,0.08)" : "rgba(136,146,166,0.1)",
+                      border: `1px solid ${strategySource === "template" ? "rgba(201,161,90,0.35)" : C.border}`,
+                    }}
+                  >
+                    {strategySourceLabel(strategySource)}
+                  </span>
+                  <span
+                    style={{
+                      padding: "2px 9px",
+                      borderRadius: 999,
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: 0.6,
+                      color: reviewOpen ? C.gold : C.faint,
+                      background: reviewOpen ? "rgba(201,161,90,0.1)" : "rgba(136,146,166,0.08)",
+                      border: `1px solid ${reviewOpen ? "rgba(201,161,90,0.35)" : C.border}`,
+                    }}
+                  >
+                    {reviewOpen ? "UNDER REVIEW" : "DRAFT"}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.muted }}>
+                    {symbol} · {fmtExpiry(expiry)} · {legs.length} leg{legs.length === 1 ? "" : "s"}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.muted }}>
+                    Capital / Premium Requirement:{" "}
+                    <span style={{ color: C.text, fontWeight: 700 }}>₹{fmtIN(calc.premiumOutlay)}</span>
+                  </span>
+                </>
+              ) : (
+                <span style={{ fontSize: 11.5, color: C.faint }}>No strategy yet — build legs to see the summary.</span>
+              )}
+            </div>
+
             {/* Header row: risk / reward summary blocks */}
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(6, 1fr)", gap: 10 }}>
+              <SummaryBlock
+                label={netTotal > 0 ? "Net Debit" : netTotal < 0 ? "Net Credit" : "Net Premium"}
+                value={!legs.length ? "—" : `₹${fmtIN(Math.abs(netTotal))}`}
+                sub={!legs.length ? "" : netTotal > 0 ? "debit paid" : netTotal < 0 ? "credit received" : "zero premium flow"}
+                color={!legs.length ? C.text : netTotal > 0 ? C.gold : netTotal < 0 ? C.green : C.text}
+              />
               <SummaryBlock
                 label="Max Profit"
                 value={!legs.length ? "—" : maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(maxProfit)}`}
-                sub={roi != null ? `+${roi.toFixed(1)}% on premium` : "shown range"}
+                sub="at expiry"
                 color={C.green}
               />
               <SummaryBlock
                 label="Max Loss"
                 value={!legs.length ? "—" : maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(maxLoss))}`}
-                sub={netTotal < 0 ? "credit received" : netTotal > 0 ? "debit paid" : "shown range"}
+                sub="at expiry"
                 color={C.red}
               />
               <SummaryBlock
-                label="Breakeven"
+                label={breakevens.length > 1 ? "Breakevens" : "Breakeven"}
                 value={!legs.length ? "—" : breakevens.length ? breakevens.map((b) => fmtIN(b)).join(" · ") : "—"}
                 sub="P&L = 0 at expiry"
                 color={C.gold}
@@ -1398,6 +1677,12 @@ export default function PaperTradingPage() {
                 value={!legs.length ? "—" : rewardRisk != null ? rewardRisk.toFixed(2) : "—"}
                 sub="max profit ÷ max loss"
                 color={rewardRisk != null && rewardRisk >= 1 ? C.green : C.text}
+              />
+              <SummaryBlock
+                label="ROI"
+                value={!legs.length ? "—" : roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}%` : "—"}
+                sub="on premium outlay"
+                color={roi != null && roi >= 0 ? C.green : roi != null ? C.red : C.text}
               />
             </div>
 
@@ -1921,6 +2206,147 @@ export default function PaperTradingPage() {
 }
 
 /* ---------- Small presentational helpers ---------- */
+
+/* ---------- Review-before-execution panel (Phase 1) ---------- */
+
+function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssues, marketStatus, orderInFlight, onCancel, onExecute }) {
+  const marketOpen = marketStatus?.status === "open";
+  const marketClosed = marketStatus?.status === "closed";
+  const canExecute = structural.valid && !orderInFlight;
+  const badge = (label, color, bg, bd) => ({
+    padding: "2px 9px",
+    borderRadius: 999,
+    fontSize: 9.5,
+    fontWeight: 700,
+    letterSpacing: 0.6,
+    color,
+    background: bg,
+    border: `1px solid ${bd}`,
+    whiteSpace: "nowrap",
+  });
+  return (
+    <div style={{ marginTop: 12, border: `1px solid ${C.gold}`, borderRadius: 10, background: "rgba(201,161,90,0.06)", padding: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <div style={{ fontSize: fluid(12, 13.5), fontWeight: 800, letterSpacing: 0.8, color: C.gold }}>REVIEW PAPER TRADE</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <span style={badge(strategySourceLabel(strategy.source), C.gold, "rgba(201,161,90,0.1)", "rgba(201,161,90,0.35)")}>
+            {strategySourceLabel(strategy.source)}
+          </span>
+          <span style={badge("PAPER TRADING", C.gold, "rgba(201,161,90,0.1)", "rgba(201,161,90,0.35)")}>PAPER TRADING</span>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, marginBottom: 8 }}>{strategy.name}</div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
+        {strategy.legs.map((l) => (
+          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}>
+            <span>
+              <span style={{ fontWeight: 700, color: l.action === "buy" ? C.green : C.red }}>
+                {l.hedge ? "HEDGE · " : ""}
+                {l.action.toUpperCase()}
+              </span>{" "}
+              {fmtIN(l.strike)} {l.type === "call" ? "CE" : "PE"} ×{l.qty * multiplier}{" "}
+              <span style={{ color: C.faint }}>({l.qty * multiplier * lotSize} contracts)</span>
+            </span>
+            <span style={{ color: C.muted }}>@ ₹{fmtIN(l.price, 2)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px 12px", marginBottom: 10 }}>
+        <ReviewMetric
+          label={calc.netTotal > 0 ? "Net Debit" : calc.netTotal < 0 ? "Net Credit" : "Net Premium"}
+          value={`₹${fmtIN(Math.abs(calc.netTotal))}`}
+          color={calc.netTotal > 0 ? C.gold : calc.netTotal < 0 ? C.green : C.text}
+        />
+        <ReviewMetric label="Max Loss" value={calc.maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(calc.maxLoss))}`} color={C.red} />
+        <ReviewMetric label="Max Profit" value={calc.maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(calc.maxProfit)}`} color={C.green} />
+        <ReviewMetric
+          label={calc.breakevens.length > 1 ? "Breakevens" : "Breakeven"}
+          value={calc.breakevens.length ? calc.breakevens.map((b) => fmtIN(b)).join(" · ") : "—"}
+          color={C.gold}
+        />
+        <ReviewMetric label="Reward / Risk" value={calc.rewardRisk != null ? calc.rewardRisk.toFixed(2) : "—"} color={C.text} />
+        <ReviewMetric
+          label="ROI"
+          value={calc.roi != null ? `${calc.roi >= 0 ? "+" : ""}${calc.roi.toFixed(1)}%` : "—"}
+          color={calc.roi != null && calc.roi >= 0 ? C.green : calc.roi != null ? C.red : C.text}
+        />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+        <span
+          style={
+            marketOpen
+              ? badge("🟢 MARKET OPEN — Orders Enabled", C.green, "rgba(76,175,125,0.12)", "rgba(76,175,125,0.35)")
+              : marketClosed
+                ? badge("🔴 MARKET CLOSED — Orders Disabled", C.red, "rgba(225,82,82,0.12)", "rgba(225,82,82,0.35)")
+                : badge("🟡 UNABLE TO VERIFY — Orders Disabled", C.gold, "rgba(224,163,58,0.12)", "rgba(224,163,58,0.45)")
+          }
+        >
+          {marketStatus ? MARKET_STATUS_LABELS[marketStatus.status] : "⏳ Checking market…"}
+        </span>
+        <span style={{ fontSize: 10.5, color: C.faint }}>final market check happens at execution time</span>
+      </div>
+
+      {!structural.valid && (
+        <div style={{ marginBottom: 8 }}>
+          {structural.issues.map((msg, i) => (
+            <div key={i} style={{ fontSize: 11, color: C.red, lineHeight: 1.5 }}>
+              {msg}
+            </div>
+          ))}
+        </div>
+      )}
+      {structural.valid && execIssues.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {execIssues.map((msg, i) => (
+            <div key={i} style={{ fontSize: 11, color: C.gold, lineHeight: 1.5 }}>
+              {msg}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button
+          onClick={onCancel}
+          disabled={orderInFlight}
+          style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 16px", cursor: orderInFlight ? "default" : "pointer", opacity: orderInFlight ? 0.5 : 1 }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={onExecute}
+          disabled={!canExecute}
+          title={
+            !structural.valid
+              ? "Fix the strategy issues above before executing"
+              : orderInFlight
+                ? "Processing order…"
+                : marketOpen
+                  ? "Execute as a paper trade (market re-checked at execution time)"
+                  : "Execution is blocked while the market is closed / unverified — the final check happens at execution time"
+          }
+          style={{ fontSize: 11.5, fontWeight: 800, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 8, padding: "8px 16px", cursor: canExecute ? "pointer" : "default", opacity: canExecute && marketOpen ? 1 : 0.6 }}
+        >
+          {orderInFlight ? "Placing…" : "Execute Paper Trade"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewMetric({ label, value, color }) {
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div style={{ fontSize: 9, letterSpacing: 0.8, color: C.faint }}>{label.toUpperCase()}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: color || C.text, marginTop: 1, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    </div>
+  );
+}
+
 
 function SummaryBlock({ label, value, sub, color }) {
   return (

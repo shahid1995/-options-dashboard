@@ -6,6 +6,11 @@ import {
   removeLeg,
   moveLegByStrikes,
   changeLegStrike,
+  changeLegExpiry,
+  duplicateLeg,
+  duplicateLegIn,
+  reverseLeg,
+  reverseLegIn,
   resetLegPrices,
   strikesForLeg,
   rowForLeg,
@@ -203,5 +208,74 @@ describe("hedge legs", () => {
     expect(back).toHaveLength(2);
     expect(back[1].strike).toBe(25200); // level 1 hedge remains
     expect(removeLastHedgeLeg(base)).toBe(base); // no hedge legs → unchanged
+  });
+});
+
+describe("duplicate / reverse", () => {
+  it("duplicateLeg copies every field with a brand-new id", () => {
+    const original = leg({ id: "a", type: "put", action: "sell", strike: 24900, qty: 2, price: 150, hedge: true });
+    const copy = duplicateLeg(original);
+    expect(copy).toMatchObject({ type: "put", action: "sell", strike: 24900, qty: 2, price: 150, hedge: true });
+    expect(copy.id).not.toBe(original.id);
+  });
+
+  it("duplicateLegIn inserts the copy right after the original", () => {
+    const legs = [leg({ id: "a" }), leg({ id: "b" })];
+    const next = duplicateLegIn(legs, "a");
+    expect(next.map((l) => l.id)).toEqual(["a", expect.any(String), "b"]);
+    expect(next[1]).toMatchObject({ type: "call", action: "buy", strike: 25000, qty: 1, expiry: "2026-08-28", price: 200 });
+    expect(next[0].id).toBe("a");
+    expect(legs).toHaveLength(2); // input untouched
+  });
+
+  it("duplicateLegIn is a no-op for an unknown id", () => {
+    const legs = [leg({ id: "a" })];
+    expect(duplicateLegIn(legs, "nope")).toBe(legs);
+  });
+
+  it("reverseLeg flips buy → sell and preserves everything else", () => {
+    const l = leg({ id: "a", action: "buy" });
+    const flipped = reverseLeg(l);
+    expect(flipped.action).toBe("sell");
+    expect(flipped.id).toBe("a");
+    expect(flipped.strike).toBe(25000);
+    expect(reverseLeg(flipped).action).toBe("buy");
+  });
+
+  it("reverseLegIn reverses only the matching leg", () => {
+    const legs = [leg({ id: "a", action: "buy" }), leg({ id: "b", action: "sell" })];
+    const next = reverseLegIn(legs, "a");
+    expect(next[0].action).toBe("sell");
+    expect(next[1].action).toBe("sell");
+    expect(legs[0].action).toBe("buy"); // input untouched
+  });
+
+  it("reverseLegIn is a no-op for an unknown id", () => {
+    const legs = [leg({ id: "a" })];
+    expect(reverseLegIn(legs, "nope")).toBe(legs);
+  });
+});
+
+describe("expiry changes", () => {
+  it("moves a leg to a loaded expiry and re-prices it from that chain", () => {
+    const ctx = makeCtx();
+    const next = changeLegExpiry([leg({ id: "a", expiry: "2026-08-28", price: 200 })], "a", "2026-08-28", ctx);
+    expect(next[0].expiry).toBe("2026-08-28");
+    expect(next[0].price).toBe(200); // same chain, same strike → same price
+  });
+
+  it("keeps the premium when the target expiry's chain is not loaded yet", () => {
+    const ctx = makeCtx(); // only 2026-08-28 is loaded
+    const next = changeLegExpiry([leg({ id: "a", price: 123 })], "a", "2026-09-04", ctx);
+    expect(next[0].expiry).toBe("2026-09-04");
+    expect(next[0].price).toBe(123); // never priced from the primary-chain fallback
+    expect(next[0]).toMatchObject({ type: "call", strike: 25000, qty: 1, action: "buy" }); // other props preserved
+  });
+
+  it("is a no-op for the same expiry or an unknown leg", () => {
+    const ctx = makeCtx();
+    const legs = [leg({ id: "a" })];
+    expect(changeLegExpiry(legs, "a", "2026-08-28", ctx)).toBe(legs);
+    expect(changeLegExpiry(legs, "nope", "2026-09-04", ctx)).toBe(legs);
   });
 });

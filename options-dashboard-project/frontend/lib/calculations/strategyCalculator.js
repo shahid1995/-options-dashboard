@@ -11,7 +11,7 @@
 //   multiplier - additional position multiplier (default 1)
 
 import { payoffRange, payoffCurve, perLegPayoff, breakevensFromCurve } from "./payoff";
-import { hasUnlimitedLoss, hasUnlimitedProfit, netDebitCredit, roiPct, rewardRisk } from "./risk";
+import { hasUnlimitedLoss, hasUnlimitedProfit, netDebitCredit, roiPct, rewardRisk, premiumOutlay } from "./risk";
 
 export function calculateStrategy(legs, { strikes = [], lotSize = 1, multiplier = 1 } = {}) {
   const hasLegs = Array.isArray(legs) && legs.length > 0;
@@ -25,6 +25,10 @@ export function calculateStrategy(legs, { strikes = [], lotSize = 1, multiplier 
     netTotal,
     netDebit: netTotal > 0 ? netTotal : 0,
     netCredit: netTotal < 0 ? -netTotal : 0,
+
+    // Cash required to establish the position: total premium paid on long
+    // legs (margin for short legs is not modeled).
+    premiumOutlay: premiumOutlay(legs, { lotSize, multiplier }),
 
     // Exact rupee extrema across the sampled strikes (not rounded).
     maxProfit,

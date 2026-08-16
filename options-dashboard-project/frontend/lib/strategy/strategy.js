@@ -23,7 +23,7 @@
 export function makeLeg({ type, strike, action = "buy", qty = 1, expiry = null, price = 0, hedge = false, id } = {}) {
   const numericPrice = Number.isFinite(Number(price)) ? Number(price) : 0;
   return {
-    id: id ?? `${type}-${strike}-${expiry ?? "x"}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: id ?? newLegId({ type, strike, expiry }),
     type,
     strike,
     action,
@@ -32,6 +32,12 @@ export function makeLeg({ type, strike, action = "buy", qty = 1, expiry = null, 
     price: numericPrice,
     hedge,
   };
+}
+
+// A fresh, collision-resistant leg id (kept here so duplicating a leg produces
+// a genuinely new identity rather than reusing the original's).
+export function newLegId({ type, strike, expiry } = {}) {
+  return `${type ?? "leg"}-${strike ?? "x"}-${expiry ?? "x"}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 // ---- Leg mutations (return new leg arrays) ----
@@ -69,6 +75,47 @@ export function changeLegStrike(legs, id, direction, ctx) {
   if (!l) return legs;
   const moved = moveLegByStrikes(l, direction, ctx);
   return legs.map((x) => (x.id === id ? moved : x));
+}
+
+// Move one leg to a different expiry, preserving every other property. The
+// premium is refreshed only when the target expiry's chain is actually loaded
+// (never from the primary chain fallback — that would price the leg against
+// the wrong expiry); otherwise the current premium is kept until the chain
+// arrives (the builder refreshes it automatically once it loads).
+export function changeLegExpiry(legs, id, newExpiry, ctx) {
+  const l = legs.find((x) => x.id === id);
+  if (!l || !newExpiry || newExpiry === l.expiry) return legs;
+  const chainLoaded = Boolean(ctx.chainsByExpiry?.[newExpiry]);
+  const price = chainLoaded ? priceForLeg(ctx, l.type, l.strike, newExpiry) : null;
+  return legs.map((x) => (x.id === id ? { ...x, expiry: newExpiry, ...(price != null ? { price } : {}) } : x));
+}
+
+// ---- Duplicate / reverse ----
+
+// A copy of a leg with a brand-new id (deep-ish copy: nested metadata objects
+// are shared, matching how legs are otherwise immutable records).
+export function duplicateLeg(leg) {
+  return { ...leg, id: newLegId(leg) };
+}
+
+// Duplicate the matching leg, inserting the copy immediately after the
+// original so related legs stay adjacent in the builder.
+export function duplicateLegIn(legs, id) {
+  const idx = legs.findIndex((x) => x.id === id);
+  if (idx === -1) return legs;
+  return [...legs.slice(0, idx + 1), duplicateLeg(legs[idx]), ...legs.slice(idx + 1)];
+}
+
+// Flip a leg's side: BUY → SELL, SELL → BUY. Pure — returns a new leg.
+export function reverseLeg(leg) {
+  return { ...leg, action: leg.action === "buy" ? "sell" : "buy" };
+}
+
+// Reverse the matching leg in a list, leaving the others untouched.
+export function reverseLegIn(legs, id) {
+  const l = legs.find((x) => x.id === id);
+  if (!l) return legs;
+  return legs.map((x) => (x.id === id ? reverseLeg(x) : x));
 }
 
 // Refresh every leg's price from its expiry's chain; legs whose chain has no
