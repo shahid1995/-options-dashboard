@@ -18,6 +18,8 @@ export function calculateStrategy(legs, { strikes = [], lotSize = 1, multiplier 
   const { maxProfit, maxLoss } = payoffRange(legs, strikes, { lotSize, multiplier });
   const { netPerLot, netTotal } = netDebitCredit(legs, { lotSize, multiplier });
   const curve = payoffCurve(legs, strikes, { lotSize, multiplier });
+  const maxProfitUnlimited = hasUnlimitedProfit(legs);
+  const maxLossUnlimited = hasUnlimitedLoss(legs);
 
   return {
     // Net premium: positive = debit paid, negative = credit received.
@@ -36,8 +38,8 @@ export function calculateStrategy(legs, { strikes = [], lotSize = 1, multiplier 
 
     // Structural unbounded-risk/profit classification. "Unlimited" is only
     // ever true for genuinely naked net-short / net-long sides.
-    maxProfitUnlimited: hasUnlimitedProfit(legs),
-    maxLossUnlimited: hasUnlimitedLoss(legs),
+    maxProfitUnlimited,
+    maxLossUnlimited,
 
     // Underlying prices where P&L crosses zero (rounded to the rupee).
     breakevens: hasLegs ? breakevensFromCurve(curve) : [],
@@ -46,8 +48,15 @@ export function calculateStrategy(legs, { strikes = [], lotSize = 1, multiplier 
     payoffCurve: curve,
     perLegCurve: perLegPayoff(legs, strikes, { lotSize, multiplier }),
 
-    // Return metrics (null when undefined for the position).
-    rewardRisk: rewardRisk(maxProfit, maxLoss),
-    roi: roiPct(maxProfit, netTotal),
+    // Return metrics. A finite ratio is reported only when both sides are
+    // defined and the metric is meaningful; the structural unlimited
+    // classification always takes precedence over the finite sampled payoff,
+    // so a Long Call never shows a fake 21.75 reward/risk or 2175% ROI.
+    // UI displays: rewardRiskUnlimited → "Unlimited" (profit side) or "N/A"
+    // (loss side); roiUnlimited → "Unlimited"; null without a flag → "N/A".
+    rewardRisk: rewardRisk(maxProfit, maxLoss, { maxProfitUnlimited, maxLossUnlimited }),
+    rewardRiskUnlimited: maxProfitUnlimited || maxLossUnlimited,
+    roi: roiPct(maxProfit, netTotal, { maxProfitUnlimited }),
+    roiUnlimited: maxProfitUnlimited,
   };
 }

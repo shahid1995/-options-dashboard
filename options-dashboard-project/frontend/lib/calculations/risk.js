@@ -41,13 +41,23 @@ export function premiumOutlay(legs, { lotSize = 1, multiplier = 1 } = {}) {
   return legs.reduce((sum, l) => (l.action === "buy" ? sum + l.price * l.qty * lotSize * multiplier : sum), 0);
 }
 
-// ROI on the net premium outlay. Undefined (null) when there is no outlay.
-export function roiPct(maxProfit, netTotal) {
-  return netTotal !== 0 ? (maxProfit / Math.abs(netTotal)) * 100 : null;
+// Premium ROI: max profit as a percentage of the premium OUTLAY (net debit).
+// Undefined (null) when the profit side is structurally unlimited (a finite %
+// over a finite sampled max profit would be misleading), or when there is no
+// premium outlay at all (credit / zero-flow strategies — dividing by zero
+// would fabricate a ratio). Callers surface the classification via
+// `roiUnlimited` rather than embedding "Unlimited" in the math.
+export function roiPct(maxProfit, netTotal, { maxProfitUnlimited = false } = {}) {
+  if (maxProfitUnlimited) return null;
+  if (netTotal <= 0) return null;
+  return (maxProfit / netTotal) * 100;
 }
 
-// Max profit expressed as a multiple of the max loss. Undefined when the
-// position cannot lose (maxLoss >= 0).
-export function rewardRisk(maxProfit, maxLoss) {
+// Max profit expressed as a multiple of the max loss. Undefined (null) when
+// the position cannot lose (maxLoss >= 0) or when either side is structurally
+// unlimited — a finite number there would misrepresent an open-ended position
+// (∞ profit or 0/∞ loss). The caller decides the label via the unlimited flags.
+export function rewardRisk(maxProfit, maxLoss, { maxProfitUnlimited = false, maxLossUnlimited = false } = {}) {
+  if (maxProfitUnlimited || maxLossUnlimited) return null;
   return maxLoss < 0 ? maxProfit / Math.abs(maxLoss) : null;
 }

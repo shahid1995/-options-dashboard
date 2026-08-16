@@ -61,23 +61,30 @@ describe("netDebitCredit", () => {
 });
 
 describe("roiPct / rewardRisk", () => {
-  it("computes ROI on the premium outlay", () => {
+  it("computes premium ROI on the premium outlay (net debit)", () => {
     expect(roiPct(100, 100)).toBe(100);
     expect(roiPct(100, 500)).toBe(20);
   });
 
-  it("computes ROI against the absolute premium flow (credit positions included)", () => {
-    expect(roiPct(100, -300)).toBeCloseTo(100 / 3);
-    expect(roiPct(100, -100)).toBe(100);
+  it("is null when profit is structurally unlimited — a finite % would mislead", () => {
+    expect(roiPct(9999, 200, { maxProfitUnlimited: true })).toBeNull();
   });
 
-  it("is null when there is no premium flow", () => {
+  it("is null when there is no premium outlay (credit / zero-flow strategies)", () => {
     expect(roiPct(100, 0)).toBeNull();
+    expect(roiPct(100, -300)).toBeNull();
+    expect(roiPct(100, -100)).toBeNull();
   });
 
   it("computes reward/risk as max profit over max loss", () => {
     expect(rewardRisk(100, -100)).toBe(1);
     expect(rewardRisk(200, -50)).toBe(4);
+  });
+
+  it("is null when either side is structurally unlimited", () => {
+    expect(rewardRisk(9999, -100, { maxProfitUnlimited: true })).toBeNull();
+    expect(rewardRisk(100, -9999, { maxLossUnlimited: true })).toBeNull();
+    expect(rewardRisk(100, -100, { maxProfitUnlimited: true, maxLossUnlimited: true })).toBeNull();
   });
 
   it("is null when the position cannot lose", () => {

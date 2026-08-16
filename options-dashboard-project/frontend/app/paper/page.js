@@ -363,7 +363,7 @@ export default function PaperTradingPage() {
     () => calculateStrategy(legs, { strikes: strikesSorted, lotSize, multiplier }),
     [legs, strikesSorted, lotSize, multiplier]
   );
-  const { maxProfit, maxLoss, maxProfitUnlimited, maxLossUnlimited, netPerLot, netTotal, roi, rewardRisk, breakevens } = calc;
+  const { maxProfit, maxLoss, maxProfitUnlimited, maxLossUnlimited, netPerLot, netTotal, roi, roiUnlimited, rewardRisk, rewardRiskUnlimited, breakevens } = calc;
 
   // Live strategy identity: the pure domain model derived from builder state.
   const strategy = useMemo(
@@ -1674,15 +1674,27 @@ export default function PaperTradingPage() {
               />
               <SummaryBlock
                 label="Reward / Risk"
-                value={!legs.length ? "—" : rewardRisk != null ? rewardRisk.toFixed(2) : "—"}
+                value={
+                  !legs.length
+                    ? "—"
+                    : rewardRiskUnlimited
+                      ? maxProfitUnlimited
+                        ? "Unlimited"
+                        : "N/A"
+                      : rewardRisk != null
+                        ? rewardRisk.toFixed(2)
+                        : "—"
+                }
                 sub="max profit ÷ max loss"
-                color={rewardRisk != null && rewardRisk >= 1 ? C.green : C.text}
+                color={rewardRiskUnlimited ? C.gold : rewardRisk != null && rewardRisk >= 1 ? C.green : C.text}
               />
               <SummaryBlock
-                label="ROI"
-                value={!legs.length ? "—" : roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}%` : "—"}
-                sub="on premium outlay"
-                color={roi != null && roi >= 0 ? C.green : roi != null ? C.red : C.text}
+                label="Premium ROI"
+                value={
+                  !legs.length ? "—" : roiUnlimited ? "Unlimited" : roi != null ? `${roi >= 0 ? "+" : ""}${roi.toFixed(1)}%` : "N/A"
+                }
+                sub="return on premium outlay"
+                color={roiUnlimited ? C.gold : roi != null && roi >= 0 ? C.green : roi != null ? C.red : C.text}
               />
             </div>
 
@@ -2267,11 +2279,15 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
           value={calc.breakevens.length ? calc.breakevens.map((b) => fmtIN(b)).join(" · ") : "—"}
           color={C.gold}
         />
-        <ReviewMetric label="Reward / Risk" value={calc.rewardRisk != null ? calc.rewardRisk.toFixed(2) : "—"} color={C.text} />
         <ReviewMetric
-          label="ROI"
-          value={calc.roi != null ? `${calc.roi >= 0 ? "+" : ""}${calc.roi.toFixed(1)}%` : "—"}
-          color={calc.roi != null && calc.roi >= 0 ? C.green : calc.roi != null ? C.red : C.text}
+          label="Reward / Risk"
+          value={calc.rewardRiskUnlimited ? (calc.maxProfitUnlimited ? "Unlimited" : "N/A") : calc.rewardRisk != null ? calc.rewardRisk.toFixed(2) : "—"}
+          color={calc.rewardRiskUnlimited ? C.gold : C.text}
+        />
+        <ReviewMetric
+          label="Premium ROI"
+          value={calc.roiUnlimited ? "Unlimited" : calc.roi != null ? `${calc.roi >= 0 ? "+" : ""}${calc.roi.toFixed(1)}%` : "N/A"}
+          color={calc.roiUnlimited ? C.gold : calc.roi != null && calc.roi >= 0 ? C.green : calc.roi != null ? C.red : C.text}
         />
       </div>
 

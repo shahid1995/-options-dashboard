@@ -130,8 +130,77 @@ describe("calculateStrategy — curves and return metrics", () => {
     expect(c.maxLossUnlimited).toBe(false);
     expect(c.breakevens).toEqual([]);
     expect(c.rewardRisk).toBeNull();
+    expect(c.rewardRiskUnlimited).toBe(false);
     expect(c.roi).toBeNull();
+    expect(c.roiUnlimited).toBe(false);
     expect(c.premiumOutlay).toBe(0);
+  });
+});
+
+describe("calculateStrategy — unlimited reward/risk & premium ROI", () => {
+  it("Long Call → reward/risk and premium ROI are unlimited, never finite sampled values", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200)], one);
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.rewardRisk).toBeNull();
+    expect(c.rewardRiskUnlimited).toBe(true);
+    expect(c.roi).toBeNull();
+    expect(c.roiUnlimited).toBe(true);
+  });
+
+  it("Long Put → same unlimited treatment", () => {
+    const c = calculateStrategy([leg("put", "buy", 25000, 150)], one);
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.rewardRisk).toBeNull();
+    expect(c.rewardRiskUnlimited).toBe(true);
+    expect(c.roi).toBeNull();
+    expect(c.roiUnlimited).toBe(true);
+  });
+
+  it("Bull Call Spread → finite reward/risk ≈ 1.231 and premium ROI ≈ 123.1%", () => {
+    // BUY 24350 CE @125.25, SELL 24550 CE @35.60, lot size 65.
+    // Net debit (125.25 − 35.60) × 65 = 5,827.25; max profit 200 × 65 − 5,827.25 = 7,172.75.
+    const strikes = [24200, 24300, 24350, 24400, 24500, 24550, 24600];
+    const c = calculateStrategy([leg("call", "buy", 24350, 125.25), leg("call", "sell", 24550, 35.6)], { strikes, lotSize: 65 });
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.netDebit).toBeCloseTo(5827.25, 2);
+    expect(c.maxLoss).toBeCloseTo(-5827.25, 2);
+    expect(c.maxProfit).toBeCloseTo(7172.75, 2);
+    expect(c.rewardRisk).toBeCloseTo(1.231, 3);
+    expect(c.rewardRiskUnlimited).toBe(false);
+    expect(c.roi).toBeCloseTo(123.1, 1);
+    expect(c.roiUnlimited).toBe(false);
+  });
+
+  it("Bear Put Spread → finite calculated reward/risk and premium ROI", () => {
+    // Buy 25000 PE @200, sell 24800 PE @50 → debit 150, width 200 → max profit 50.
+    const c = calculateStrategy([leg("put", "buy", 25000, 200), leg("put", "sell", 24800, 50)], one);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(50);
+    expect(c.maxLoss).toBe(-150);
+    expect(c.rewardRisk).toBeCloseTo(1 / 3, 5);
+    expect(c.rewardRiskUnlimited).toBe(false);
+    expect(c.roi).toBeCloseTo(100 / 3, 5);
+    expect(c.roiUnlimited).toBe(false);
+  });
+
+  it("Naked Short Call → reward/risk is never a misleading finite ratio; premium ROI is N/A", () => {
+    const c = calculateStrategy([leg("call", "sell", 25000, 200)], one);
+    expect(c.maxLossUnlimited).toBe(true);
+    expect(c.rewardRisk).toBeNull();
+    expect(c.rewardRiskUnlimited).toBe(true);
+    expect(c.roi).toBeNull();
+    expect(c.roiUnlimited).toBe(false); // profit defined, but there is no premium outlay
+  });
+
+  it("Naked Short Put → same principle", () => {
+    const c = calculateStrategy([leg("put", "sell", 25000, 150)], one);
+    expect(c.maxLossUnlimited).toBe(true);
+    expect(c.rewardRisk).toBeNull();
+    expect(c.rewardRiskUnlimited).toBe(true);
+    expect(c.roi).toBeNull();
+    expect(c.roiUnlimited).toBe(false);
   });
 });
 
