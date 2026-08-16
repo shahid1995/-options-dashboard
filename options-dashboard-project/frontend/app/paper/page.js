@@ -15,6 +15,8 @@ import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies
 import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
 import { aggregateGreeks } from "@/lib/calculations/greeks";
+import { calculateScenario, calculateScenarioMatrix } from "@/lib/calculations/scenario";
+import ScenarioPanel from "./ScenarioPanel";
 import {
   makeLeg,
   addLeg,
@@ -485,6 +487,51 @@ export default function PaperTradingPage() {
     () => aggregateGreeks(legs, chainCache, { lotSize, multiplier }),
     [legs, chainCache, lotSize, multiplier]
   );
+
+  // ---- Scenario Analysis (Phase 3) ----
+  // Analytical only: prices the strategy under hypothetical spot / IV / time /
+  // rate / dividend inputs with the Black-Scholes model. It never touches
+  // paper execution, positions, cash or the journal (Phase 3).
+  const [scenSpotPct, setScenSpotPct] = useState(0); // decimal: +0.01 = +1%
+  const [scenIvShift, setScenIvShift] = useState(0); // volatility points: 0.02 = +2 vol
+  const [scenTimeDays, setScenTimeDays] = useState(0); // whole days forward
+  const [scenRate, setScenRate] = useState(0); // percent, configurable (default 0)
+  const [scenDiv, setScenDiv] = useState(0); // percent, configurable (default 0)
+  const [scenGridAxis, setScenGridAxis] = useState("spotIv"); // spotIv | spotTime | ivTime
+
+  const scenarioContext = useMemo(
+    () => ({
+      spot,
+      valuationDate: new Date().toISOString().slice(0, 10),
+      interestRate: (scenRate || 0) / 100,
+      dividendYield: (scenDiv || 0) / 100,
+      chainCache,
+      lotSize,
+      multiplier,
+    }),
+    [spot, scenRate, scenDiv, chainCache, lotSize, multiplier]
+  );
+  const scenarioState = useMemo(
+    () => ({ spotPct: scenSpotPct, ivShift: scenIvShift, timeShiftDays: scenTimeDays }),
+    [scenSpotPct, scenIvShift, scenTimeDays]
+  );
+  const scenarioResult = useMemo(
+    () => (legs.length ? calculateScenario(legs, scenarioContext, scenarioState) : null),
+    [legs, scenarioContext, scenarioState]
+  );
+  const scenarioMatrix = useMemo(
+    () => (legs.length ? calculateScenarioMatrix(legs, scenarioContext, { axis: scenGridAxis }) : null),
+    [legs, scenarioContext, scenGridAxis]
+  );
+
+  const resetScenario = () => {
+    setScenSpotPct(0);
+    setScenIvShift(0);
+    setScenTimeDays(0);
+    setScenRate(0);
+    setScenDiv(0);
+    setScenGridAxis("spotIv");
+  };
 
   // ---- Paper trading (positions) ----
   const dirOf = (action) => (action === "buy" ? 1 : -1);
@@ -1779,6 +1826,7 @@ export default function PaperTradingPage() {
                   ["table", "P&L Table"],
                   ["greeks", "Greeks"],
                   ["strategyChart", "Strategy Chart"],
+                  ["scenario", "Scenario"],
                 ].map(([key, label]) => (
                   <button key={key} onClick={() => setPayoffTab(key)} style={tabBtn(payoffTab === key)}>
                     {label}
@@ -1788,7 +1836,7 @@ export default function PaperTradingPage() {
 
               {legs.length === 0 ? (
                 <div style={{ fontSize: 12, color: C.faint, padding: "40px 0", textAlign: "center" }}>
-                  Add legs to see the payoff graph, P&amp;L table, Greeks and strategy chart here.
+                  Add legs to see the payoff graph, P&amp;L table, Greeks, strategy chart and scenario analysis here.
                 </div>
               ) : payoffTab === "graph" ? (
                 <>
@@ -1936,6 +1984,25 @@ export default function PaperTradingPage() {
                     Position-level Greeks = each leg's Greek × direction × lots × lot size × multiplier, summed.
                   </div>
                 </div>
+              ) : payoffTab === "scenario" ? (
+                <ScenarioPanel
+                  result={scenarioResult}
+                  matrix={scenarioMatrix}
+                  axis={scenGridAxis}
+                  onAxisChange={setScenGridAxis}
+                  spotPct={scenSpotPct}
+                  onSpotPct={setScenSpotPct}
+                  ivShift={scenIvShift}
+                  onIvShift={setScenIvShift}
+                  timeDays={scenTimeDays}
+                  onTimeDays={setScenTimeDays}
+                  rate={scenRate}
+                  onRate={setScenRate}
+                  div={scenDiv}
+                  onDiv={setScenDiv}
+                  onReset={resetScenario}
+                  isMobile={isMobile}
+                />
               ) : (
                 /* Strategy Chart: one payoff line per leg + combined */
                 <div>
