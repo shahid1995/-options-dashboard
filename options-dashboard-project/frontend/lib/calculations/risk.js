@@ -9,16 +9,22 @@ export function sideNetQty(legs, type) {
   return legs.filter((l) => l.type === type).reduce((sum, l) => sum + dirOf(l.action) * l.qty, 0);
 }
 
-// A position has theoretically unlimited loss ONLY when it is net short on a
-// side — i.e. it contains a naked (uncovered) short call or short put.
-// Long-only positions and fully-hedged spreads are never marked unlimited.
+// A position has theoretically unlimited loss ONLY when it is net short
+// CALLS — a naked short call's loss grows without bound as the underlying
+// rises. A short put's loss is bounded by the underlying's lower bound
+// (S = 0), so under the Phase 2 price-domain rule it is classified as defined
+// risk (max loss = strike − premium at S = 0). The theoretical payoff engine
+// in payoff.js derives the same classification from tail slopes; this net-side
+// helper backs the multi-expiry fallback.
 export function hasUnlimitedLoss(legs) {
-  return sideNetQty(legs, "call") < 0 || sideNetQty(legs, "put") < 0;
+  return sideNetQty(legs, "call") < 0;
 }
 
-// Mirror image on the profit side: a net long position has open-ended profit.
+// Open-ended profit exists only for net long CALLS (the upper tail is
+// unbounded). A long put's profit is capped at S = 0 (strike − premium), so it
+// is never classified unlimited here.
 export function hasUnlimitedProfit(legs) {
-  return sideNetQty(legs, "call") > 0 || sideNetQty(legs, "put") > 0;
+  return sideNetQty(legs, "call") > 0;
 }
 
 // Net premium paid (positive) or received (negative), per lot and in total

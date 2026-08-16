@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { calculateStrategy } from "./strategyCalculator";
 
-const leg = (type, action, strike, price, qty = 1) => ({ type, action, strike, price, qty });
+const leg = (type, action, strike, price, qty = 1, expiry = "2026-08-28") => ({ type, action, strike, price, qty, expiry });
 
 // Strikes sampled for the payoff range (ATM 25000, width 200).
 const strikes = [24800, 24900, 25000, 25100, 25200];
@@ -39,8 +39,12 @@ describe("calculateStrategy — required max-loss cases", () => {
     expect(c.netDebit).toBe(0);
   });
 
-  it("Sell 1 PE naked → max loss = Unlimited", () => {
-    expect(calculateStrategy([leg("put", "sell", 25000, 150)], one).maxLossUnlimited).toBe(true);
+  it("Sell 1 PE naked → max loss is bounded by S = 0 (strike − premium), not Unlimited", () => {
+    const c = calculateStrategy([leg("put", "sell", 25000, 150)], one);
+    expect(c.maxLossUnlimited).toBe(false); // the underlying cannot go below 0
+    expect(c.maxLoss).toBe(150 - 25000);
+    expect(c.maxProfit).toBe(150); // premium received
+    expect(c.maxProfitUnlimited).toBe(false);
   });
 
   it("Bull Call Spread → defined max loss = net debit, defined max profit", () => {
@@ -75,9 +79,7 @@ describe("calculateStrategy — required max-loss cases", () => {
 });
 
 describe("calculateStrategy — quantities and lot sizes", () => {
-  it("scales net debit, max loss and max profit by qty × lot size", () => {
-    // Extend above 25100 so the net-long ratio position's max profit shows up
-    // (2 long calls vs 1 short call gains +1 per point above 25100).
+  it("scales net debit and max loss by qty × lot size; open-ended profit comes from the tail", () => {
     const wide = [...strikes, 25300];
     const c = calculateStrategy(
       [leg("call", "buy", 25000, 200, 2), leg("call", "sell", 25100, 100, 1)],
@@ -87,10 +89,13 @@ describe("calculateStrategy — quantities and lot sizes", () => {
     expect(c.netPerLot).toBe(300);
     expect(c.netTotal).toBe(300 * 65 * 2);
     expect(c.netDebit).toBe(300 * 65 * 2);
-    // max profit at 25300: 2×(300−200) − (200−100) = +100 per set
-    expect(c.maxProfit).toBe(100 * 65 * 2);
+    // Net long 1 call above 25100 → the upper tail is open-ended profit.
+    expect(c.maxProfitUnlimited).toBe(true);
+    // Finite reference over {0} ∪ breakpoints (25000, 25100): −100 per set at 25100.
+    expect(c.maxProfit).toBe(-100 * 65 * 2);
     // max loss at/below 25000: 2×(−200) + 100 = −300 per set
     expect(c.maxLoss).toBe(-300 * 65 * 2);
+    expect(c.maxLossUnlimited).toBe(false);
   });
 
   it("breakeven of the ratio'd spread lands at the upper sampled strike", () => {
@@ -147,13 +152,15 @@ describe("calculateStrategy — unlimited reward/risk & premium ROI", () => {
     expect(c.roiUnlimited).toBe(true);
   });
 
-  it("Long Put → same unlimited treatment", () => {
+  it("Long Put → max profit is the exact finite value at S = 0 (strike − premium)", () => {
     const c = calculateStrategy([leg("put", "buy", 25000, 150)], one);
-    expect(c.maxProfitUnlimited).toBe(true);
-    expect(c.rewardRisk).toBeNull();
-    expect(c.rewardRiskUnlimited).toBe(true);
-    expect(c.roi).toBeNull();
-    expect(c.roiUnlimited).toBe(true);
+    expect(c.maxProfitUnlimited).toBe(false); // bounded below by S = 0
+    expect(c.maxProfit).toBe(25000 - 150);
+    expect(c.maxLoss).toBe(-150); // premium paid
+    expect(c.rewardRisk).toBeCloseTo((25000 - 150) / 150, 5);
+    expect(c.rewardRiskUnlimited).toBe(false);
+    expect(c.roi).toBeCloseTo(((25000 - 150) / 150) * 100, 5);
+    expect(c.roiUnlimited).toBe(false);
   });
 
   it("Bull Call Spread → finite reward/risk ≈ 1.231 and premium ROI ≈ 123.1%", () => {
@@ -194,12 +201,14 @@ describe("calculateStrategy — unlimited reward/risk & premium ROI", () => {
     expect(c.roiUnlimited).toBe(false); // profit defined, but there is no premium outlay
   });
 
-  it("Naked Short Put → same principle", () => {
+  it("Naked Short Put → loss is bounded at S = 0; reward/risk is finite; premium ROI is N/A", () => {
     const c = calculateStrategy([leg("put", "sell", 25000, 150)], one);
-    expect(c.maxLossUnlimited).toBe(true);
-    expect(c.rewardRisk).toBeNull();
-    expect(c.rewardRiskUnlimited).toBe(true);
-    expect(c.roi).toBeNull();
+    expect(c.maxLossUnlimited).toBe(false); // bounded by the S = 0 floor
+    expect(c.maxLoss).toBe(150 - 25000);
+    expect(c.maxProfit).toBe(150); // premium received
+    expect(c.rewardRisk).toBeCloseTo(150 / (25000 - 150), 5);
+    expect(c.rewardRiskUnlimited).toBe(false);
+    expect(c.roi).toBeNull(); // no premium outlay (credit strategy)
     expect(c.roiUnlimited).toBe(false);
   });
 });
@@ -273,3 +282,125 @@ describe("calculateStrategy — lot-size scaling", () => {
     expect(c.premiumOutlay).toBe(200 * 65 * 2);
   });
 });
+describe("calculateStrategy — chain-independent theoretical engine", () => {
+  it("Bull Call Spread max profit is based on the strategy strikes, not the visible chain", () => {
+    // Strategy strikes 24350 / 24550; the visible chain stops at 24450.
+    const narrowChain = [24300, 24350, 24400, 24450];
+    const c = calculateStrategy([leg("call", "buy", 24350, 125.25), leg("call", "sell", 24550, 35.6)], { strikes: narrowChain, lotSize: 65 });
+    expect(c.payoffMode).toBe("same-expiry");
+    expect(c.maxProfit).toBeCloseTo(7172.75, 2); // NOT capped at the 24450 chain end
+    expect(c.maxLoss).toBeCloseTo(-5827.25, 2);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.theoreticalBreakpoints).toEqual([24350, 24550]);
+    expect(c.theoreticalMinPrice).toBe(0);
+    expect(c.theoreticalMaxPrice).toBeNull(); // unbounded above
+    expect(c.breakevens).toHaveLength(1);
+    expect(c.breakevens[0]).toBeCloseTo(24350 + (125.25 - 35.6), 2); // 24439.65
+    expect(c.calculationWarnings).toEqual([]);
+  });
+
+  it("Long Call stays Unlimited even when the visible chain ends near the strike", () => {
+    const c = calculateStrategy([leg("call", "buy", 24350, 125.25)], { strikes: [24300, 24350, 24400], lotSize: 65 });
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.maxLoss).toBeCloseTo(-125.25 * 65, 2);
+    expect(c.theoreticalBreakpoints).toEqual([24350]);
+  });
+
+  it("Long Put max profit is exact at S = 0 regardless of the chain floor", () => {
+    const c = calculateStrategy([leg("put", "buy", 24350, 125.25)], { strikes: [24400, 24450, 24500], lotSize: 65 });
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxProfit).toBeCloseTo((24350 - 125.25) * 65, 2);
+    expect(c.maxLoss).toBeCloseTo(-125.25 * 65, 2);
+  });
+
+  it("Bull Put Spread → defined risk from the strategy structure", () => {
+    // Sell 25000 PE @150, buy 24800 PE @50 → credit 100, width 200.
+    const c = calculateStrategy([leg("put", "sell", 25000, 150), leg("put", "buy", 24800, 50)], one);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(100);
+    expect(c.maxLoss).toBe(-100);
+    expect(c.netCredit).toBe(100);
+  });
+
+  it("Bear Call Spread → defined risk", () => {
+    // Sell 25000 CE @200, buy 25200 CE @80 → credit 120, width 200 → max loss 80.
+    const c = calculateStrategy([leg("call", "sell", 25000, 200), leg("call", "buy", 25200, 80)], one);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(120);
+    expect(c.maxLoss).toBe(-80);
+    expect(c.netCredit).toBe(120);
+  });
+
+  it("Call ratio 1:2 (buy 1, sell 2) → open-ended loss from the upper tail", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200), leg("call", "sell", 25100, 150, 2)], one);
+    expect(c.maxLossUnlimited).toBe(true); // net short 1 call → right tail slopes down
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxProfit).toBe(200);
+  });
+
+  it("Call ratio 2:1 (buy 2, sell 1) → open-ended profit from the upper tail", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200, 2), leg("call", "sell", 25100, 100)], one);
+    expect(c.maxProfitUnlimited).toBe(true); // net long 1 call → right tail slopes up
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.maxLoss).toBe(-300); // 2×(−200) + (−100) at/below 25000 per set
+  });
+
+  it("Mixed quantity 2:3 (buy 2, sell 3) → net short call, open-ended loss", () => {
+    const c = calculateStrategy([leg("call", "buy", 25000, 200, 2), leg("call", "sell", 25100, 100, 3)], one);
+    expect(c.maxLossUnlimited).toBe(true);
+    expect(c.maxProfitUnlimited).toBe(false);
+  });
+
+  it("Put ratio 1:2 → large but finite loss bounded by S = 0", () => {
+    // Buy 1 put 25000 @150, sell 2 puts 24800 @125 → net short 1 put.
+    const c = calculateStrategy([leg("put", "buy", 25000, 150), leg("put", "sell", 24800, 125, 2)], one);
+    expect(c.maxLossUnlimited).toBe(false); // puts are bounded below by S = 0
+    expect(c.maxLoss).toBe((25000 - 150) - 2 * (24800 - 125)); // exact value at S = 0
+    expect(c.maxProfit).toBe(300); // at 24800: (200−150) + 2×125
+    expect(c.maxProfitUnlimited).toBe(false);
+  });
+
+  it("Box spread → flat payoff emerges from the legs (max profit = max loss, never Unlimited)", () => {
+    // Long box: buy 25000 CE, sell 25100 CE, sell 25000 PE, buy 25100 PE with
+    // net debit = intrinsic width (100) → constant zero P&L.
+    const c = calculateStrategy(
+      [leg("call", "buy", 25000, 100), leg("call", "sell", 25100, 50), leg("put", "sell", 25000, 50), leg("put", "buy", 25100, 100)],
+      one
+    );
+    expect(c.maxProfit).toBe(0);
+    expect(c.maxLoss).toBe(0);
+    expect(c.maxProfitUnlimited).toBe(false);
+    expect(c.maxLossUnlimited).toBe(false);
+    expect(c.breakevens).toEqual([]); // flat zero payoff has no distinct breakeven
+  });
+
+  it("Boundary checks: exact values at S = 0, at strikes, between and above strikes", () => {
+    // Long call 25000 @200, short put 24800 @50 (bullish synthetic-like combo).
+    const c = calculateStrategy([leg("call", "buy", 25000, 200), leg("put", "sell", 24800, 50)], one);
+    // at S = 0: call −200 + put premium +50 − short-put intrinsic 24800 → −24950;
+    // between 24800 and 25000 the payoff is flat at −150; above 25000 the call
+    // carries the position (unlimited profit). The true worst case is S = 0.
+    expect(c.maxProfitUnlimited).toBe(true);
+    expect(c.maxLoss).toBe(-24950);
+    expect(c.maxLossUnlimited).toBe(false);
+  });
+});
+
+describe("calculateStrategy — multi-expiry fallback", () => {
+  it("calendar spread → sampled approximation with an explicit warning, never presented as exact", () => {
+    const c = calculateStrategy(
+      [leg("call", "buy", 25000, 200, 1, "2026-08-28"), leg("call", "sell", 25000, 150, 1, "2026-09-04")],
+      { strikes, lotSize: 1 }
+    );
+    expect(c.payoffMode).toBe("multi-expiry");
+    expect(c.calculationWarnings.length).toBeGreaterThan(0);
+    expect(c.calculationWarnings[0]).toMatch(/mixed-expiry/);
+    expect(c.theoreticalBreakpoints).toEqual([]);
+    expect(c.maxProfitUnlimited).toBe(false); // net call exposure is zero
+    expect(c.maxLossUnlimited).toBe(false);
+  });
+});
+

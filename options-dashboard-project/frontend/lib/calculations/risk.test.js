@@ -27,18 +27,25 @@ describe("unlimited classification", () => {
     expect(hasUnlimitedLoss([leg("call", "buy", 25000, 200), leg("put", "buy", 25000, 150)])).toBe(false);
   });
 
-  it("naked short options are unlimited-loss", () => {
+  it("naked short calls are unlimited-loss", () => {
     expect(hasUnlimitedLoss([leg("call", "sell", 25000, 200)])).toBe(true);
-    expect(hasUnlimitedLoss([leg("put", "sell", 25000, 150)])).toBe(true);
+  });
+
+  it("short puts are NOT unlimited-loss — bounded by the underlying's S = 0 floor", () => {
+    expect(hasUnlimitedLoss([leg("put", "sell", 25000, 150)])).toBe(false);
   });
 
   it("hedged spreads are not unlimited-loss", () => {
     expect(hasUnlimitedLoss([leg("call", "sell", 25000, 200), leg("call", "buy", 25100, 100)])).toBe(false);
   });
 
-  it("net long positions have unlimited profit, net short do not", () => {
+  it("net long calls have open-ended profit; net short calls do not", () => {
     expect(hasUnlimitedProfit([leg("call", "buy", 25000, 200)])).toBe(true);
     expect(hasUnlimitedProfit([leg("call", "sell", 25000, 200)])).toBe(false);
+  });
+
+  it("long puts are NOT unlimited-profit — capped at S = 0 (strike − premium)", () => {
+    expect(hasUnlimitedProfit([leg("put", "buy", 25000, 150)])).toBe(false);
   });
 });
 

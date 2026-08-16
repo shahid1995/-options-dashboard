@@ -12,7 +12,7 @@ import {
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
-import { pnlAt } from "@/lib/calculations/payoff";
+import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
 import { aggregateGreeks } from "@/lib/calculations/greeks";
 import {
@@ -401,22 +401,29 @@ export default function PaperTradingPage() {
     if (legs.length === 0) setReviewOpen(false);
   }, [legs]);
 
-  // Payoff chart data: one point per real strike (so OI bars line up), plus
-  // the P&L line. The P&L comes from the shared calculator (exact); rounding
-  // here is display-only.
+  // Display price grid for the payoff chart: strategy strikes + visible
+  // chain + spot + padded tails (never below 0). Visualization only — the
+  // theoretical risk numbers come from the calc engine, not from this grid.
+  const displayStrikes = useMemo(
+    () => payoffGrid({ strikes: strikesSorted, breakpoints: calc.theoreticalBreakpoints, spot }),
+    [strikesSorted, calc, spot]
+  );
+
+  // Payoff chart data: one point per display-grid price (OI bars only appear
+  // at real chain strikes). The P&L is exact at any price via the shared
+  // payoff math; rounding here is display-only.
   const payoffData = useMemo(() => {
-    if (strikesSorted.length === 0) return [];
-    const pnlByStrike = new Map(calc.payoffCurve.map((p) => [p.strike, p.pnl]));
-    return strikesSorted.map((strike) => {
+    if (displayStrikes.length === 0) return [];
+    return displayStrikes.map((strike) => {
       const row = chainByStrike.get(strike);
       return {
         strike,
-        pnl: legs.length ? Math.round(pnlByStrike.get(strike) ?? 0) : 0,
+        pnl: legs.length ? Math.round(pnlAt(legs, strike, { lotSize, multiplier })) : 0,
         callOI: row?.call.oi ?? 0,
         putOI: row?.put.oi ?? 0,
       };
     });
-  }, [strikesSorted, chainByStrike, legs, calc]);
+  }, [displayStrikes, chainByStrike, legs, lotSize, multiplier]);
 
   // Strategy Chart data: one line per leg plus the combined position.
   const legPayoffData = useMemo(() => {
@@ -1645,6 +1652,22 @@ export default function PaperTradingPage() {
                 <span style={{ fontSize: 11.5, color: C.faint }}>No strategy yet — build legs to see the summary.</span>
               )}
             </div>
+
+            {calc.calculationWarnings.length > 0 && (
+              <div
+                style={{
+                  background: "rgba(224,163,58,0.08)",
+                  border: "1px solid rgba(224,163,58,0.35)",
+                  borderRadius: 8,
+                  padding: "8px 12px",
+                  fontSize: 11,
+                  color: C.gold,
+                  lineHeight: 1.5,
+                }}
+              >
+                {calc.calculationWarnings.join(" ")}
+              </div>
+            )}
 
             {/* Header row: risk / reward summary blocks */}
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(6, 1fr)", gap: 10 }}>

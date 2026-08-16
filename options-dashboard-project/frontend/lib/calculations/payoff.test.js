@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { pnlAt, payoffRange, payoffCurve, perLegPayoff, breakevensFromCurve } from "./payoff";
+import {
+  pnlAt,
+  payoffRange,
+  payoffCurve,
+  perLegPayoff,
+  breakevensFromCurve,
+  payoffMode,
+  theoreticalBreakpoints,
+  theoreticalPayoffAnalysis,
+  theoreticalBreakevens,
+  payoffGrid,
+} from "./payoff";
 
 // Minimal leg factory: { type, action, strike, price, qty, expiry }.
 const leg = (type, action, strike, price, qty = 1, expiry = "2026-08-28") => ({ type, action, strike, price, qty, expiry });
@@ -89,5 +100,155 @@ describe("breakevensFromCurve", () => {
   it("returns an empty array for a curve with no crossings", () => {
     const curve = [{ strike: 100, pnl: -50 }, { strike: 200, pnl: -50 }];
     expect(breakevensFromCurve(curve)).toEqual([]);
+  });
+});
+
+describe("payoffMode", () => {
+  it("is same-expiry when all legs share one expiry", () => {
+    expect(payoffMode([leg("call", "buy", 25000, 200), leg("put", "sell", 24900, 50)])).toBe("same-expiry");
+  });
+
+  it("is multi-expiry when expiries differ", () => {
+    expect(
+      payoffMode([leg("call", "buy", 25000, 200, 1, "2026-08-28"), leg("call", "sell", 25000, 150, 1, "2026-09-04")])
+    ).toBe("multi-expiry");
+  });
+
+  it("is same-expiry for an empty leg set", () => {
+    expect(payoffMode([])).toBe("same-expiry");
+  });
+});
+
+describe("theoreticalBreakpoints", () => {
+  it("returns the unique strategy strikes in ascending order", () => {
+    expect(theoreticalBreakpoints([leg("call", "buy", 25100, 100), leg("put", "buy", 25000, 150), leg("call", "sell", 25100, 50)])).toEqual([
+      25000,
+      25100,
+    ]);
+  });
+
+  it("ignores legs without a finite strike and returns [] for empty input", () => {
+    expect(theoreticalBreakpoints([{ type: "call", action: "buy", price: 100 }])).toEqual([]);
+    expect(theoreticalBreakpoints([])).toEqual([]);
+  });
+});
+
+describe("theoreticalPayoffAnalysis — chain-independent extrema and tail slopes", () => {
+  it("long call → finite extrema over {0} ∪ strikes, open-ended profit up the right tail", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200)]);
+    expect(a.breakpoints).toEqual([25000]);
+    expect(a.minPrice).toBe(0);
+    expect(a.maxPrice).toBeNull(); // unbounded above
+    expect(a.atZero).toBe(-200);
+    expect(a.leftSlope).toBe(0);
+    expect(a.rightSlope).toBe(1);
+    expect(a.rightUnboundedUp).toBe(true);
+    expect(a.rightUnboundedDown).toBe(false);
+    expect(a.maxFinite).toBe(-200);
+    expect(a.minFinite).toBe(-200);
+  });
+
+  it("bull call spread → flat tails, exact max profit/loss at the strike kinks", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200), leg("call", "sell", 25100, 150)]);
+    expect(a.breakpoints).toEqual([25000, 25100]);
+    expect(a.atZero).toBe(-50);
+    expect(a.atStrikes).toEqual([
+      { price: 25000, pnl: -50 },
+      { price: 25100, pnl: 50 },
+    ]);
+    expect(a.leftSlope).toBe(0);
+    expect(a.rightSlope).toBe(0);
+    expect(a.rightUnboundedUp).toBe(false);
+    expect(a.rightUnboundedDown).toBe(false);
+    expect(a.maxFinite).toBe(50);
+    expect(a.minFinite).toBe(-50);
+  });
+
+  it("naked short call → open-ended loss down the right tail", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "sell", 25000, 200)]);
+    expect(a.rightSlope).toBe(-1);
+    expect(a.rightUnboundedDown).toBe(true);
+    expect(a.rightUnboundedUp).toBe(false);
+    expect(a.maxFinite).toBe(200); // credit received at/below the strike
+  });
+
+  it("long put → exact max profit at S = 0, bounded, no unbounded tails", () => {
+    const a = theoreticalPayoffAnalysis([leg("put", "buy", 25000, 150)]);
+    expect(a.atZero).toBe(25000 - 150);
+    expect(a.leftSlope).toBe(-1); // puts gain as S falls toward 0
+    expect(a.rightSlope).toBe(0);
+    expect(a.rightUnboundedUp).toBe(false);
+    expect(a.rightUnboundedDown).toBe(false);
+    expect(a.maxFinite).toBe(25000 - 150);
+    expect(a.minFinite).toBe(-150);
+  });
+
+  it("naked short put → worst case is at S = 0 (strike − premium), never Unlimited", () => {
+    const a = theoreticalPayoffAnalysis([leg("put", "sell", 25000, 150)]);
+    expect(a.atZero).toBe(150 - 25000);
+    expect(a.leftSlope).toBe(1);
+    expect(a.rightSlope).toBe(0);
+    expect(a.rightUnboundedDown).toBe(false);
+    expect(a.minFinite).toBe(150 - 25000);
+    expect(a.maxFinite).toBe(150);
+  });
+
+  it("scales slopes and P&L by qty × lot size × multiplier", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200, 2)], { lotSize: 65, multiplier: 3 });
+    expect(a.rightSlope).toBe(2 * 65 * 3);
+    expect(a.atZero).toBe(-200 * 2 * 65 * 3);
+  });
+});
+
+describe("theoreticalBreakevens — exact, chain-independent", () => {
+  it("long call → single breakeven above the strike", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200)]);
+    expect(theoreticalBreakevens(a)).toEqual([25200]);
+  });
+
+  it("bull call spread → single breakeven between the strikes", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200), leg("call", "sell", 25100, 150)]);
+    expect(theoreticalBreakevens(a)).toEqual([25050]);
+  });
+
+  it("long straddle → both breakevens symmetric around the ATM strike", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "buy", 25000, 200), leg("put", "buy", 25000, 150)]);
+    expect(theoreticalBreakevens(a)).toEqual([24650, 25350]);
+  });
+
+  it("naked short call → breakeven above the strike where the loss turns unlimited", () => {
+    const a = theoreticalPayoffAnalysis([leg("call", "sell", 25000, 200)]);
+    expect(theoreticalBreakevens(a)).toEqual([25200]);
+  });
+
+  it("box spread (flat zero payoff) → no distinct breakevens", () => {
+    const a = theoreticalPayoffAnalysis([
+      leg("call", "buy", 25000, 100),
+      leg("call", "sell", 25100, 50),
+      leg("put", "sell", 25000, 50),
+      leg("put", "buy", 25100, 100),
+    ]);
+    expect(theoreticalBreakevens(a)).toEqual([]);
+  });
+});
+
+describe("payoffGrid — display grid, never below 0, includes every anchor", () => {
+  it("covers chain strikes, strategy breakpoints and spot, sorted and unique", () => {
+    const grid = payoffGrid({ strikes: [24500, 25000], breakpoints: [25000, 25200], spot: 24700 });
+    expect(grid[0]).toBeGreaterThanOrEqual(0);
+    expect(grid).toEqual([...grid].sort((a, b) => a - b));
+    expect(new Set(grid).size).toBe(grid.length);
+    [24500, 24700, 25000, 25200].forEach((s) => expect(grid).toContain(s));
+  });
+
+  it("pads beyond the anchor range on both sides and never goes below 0", () => {
+    const grid = payoffGrid({ strikes: [100, 200], spot: 150 });
+    expect(grid[0]).toBeLessThan(100);
+    expect(grid[grid.length - 1]).toBeGreaterThan(200);
+    expect(grid[0]).toBeGreaterThanOrEqual(0);
+  });
+
+  it("returns an empty grid when there are no anchors", () => {
+    expect(payoffGrid({ strikes: [], breakpoints: [], spot: null })).toEqual([]);
   });
 });

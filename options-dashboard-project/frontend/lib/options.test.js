@@ -32,8 +32,14 @@ describe("max-loss classification", () => {
     expect(hasUnlimitedProfit([leg("call", "sell", 25000, 200)])).toBe(false);
   });
 
-  it("Sell 1 PE naked → max loss = Unlimited", () => {
-    expect(hasUnlimitedLoss([leg("put", "sell", 25000, 150)])).toBe(true);
+  it("Sell 1 PE naked → loss is bounded by S = 0, never Unlimited", () => {
+    // Phase 2 price-domain rule: the underlying cannot be negative, so a short
+    // put's worst case is finite (strike − premium) at S = 0.
+    expect(hasUnlimitedLoss([leg("put", "sell", 25000, 150)])).toBe(false);
+    expect(hasUnlimitedProfit([leg("put", "sell", 25000, 150)])).toBe(false);
+    // Display-layer sample over the visible strikes (worst visible = −50 at 24800);
+    // the theoretical bound lives at S = 0, outside this chain.
+    expect(payoffRange([leg("put", "sell", 25000, 150)], strikes).maxLoss).toBe(-50);
   });
 
   it("Bull Call Spread (long 25000 CE, short 25100 CE) → max loss = net debit 100", () => {
