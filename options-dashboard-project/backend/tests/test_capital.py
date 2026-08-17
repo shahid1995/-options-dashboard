@@ -26,6 +26,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.services import token_store
+from app.services.upstox import UpstoxError
 from app.services.capital import (
     BASIS_PREMIUM,
     SOURCE_BROKER_REPORTED,
@@ -83,6 +84,24 @@ def chain_mock():
         return chain_payload(expiry, DEFAULT_CHAIN.get(expiry, {}))
 
     with patch("app.services.upstox.get_option_chain", new=AsyncMock(side_effect=fake)):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def broker_api_unavailable():
+    """Phase 6.1: the router now wires the real UpstoxMarginProvider whenever a
+    session token exists. By default both broker APIs are UNAVAILABLE so these
+    capital tests stay deterministic and never touch the network; the Phase 6.1
+    tests in test_broker_margin.py patch them with canned responses.
+    """
+
+    async def _raise(*args, **kwargs):
+        raise UpstoxError(502, "mock: broker API unavailable")
+
+    with (
+        patch("app.services.upstox.get_funds_and_margin", new=AsyncMock(side_effect=_raise)),
+        patch("app.services.upstox.get_margin_details", new=AsyncMock(side_effect=_raise)),
+    ):
         yield
 
 

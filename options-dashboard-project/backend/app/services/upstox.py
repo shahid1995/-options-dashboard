@@ -7,6 +7,8 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.upstox.com/v2"
+# Upstox API version 3 host (used by the read-only Fund & Margin endpoint).
+V3_BASE_URL = "https://api.upstox.com/v3"
 
 
 class UpstoxError(Exception):
@@ -31,10 +33,10 @@ def _error_message(resp: httpx.Response) -> str:
     return str(body)[:300]
 
 
-async def _request(method: str, path: str, **kwargs) -> dict:
+async def _request(method: str, path: str, base_url: str = BASE_URL, **kwargs) -> dict:
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.request(method, f"{BASE_URL}{path}", **kwargs)
+            resp = await client.request(method, f"{base_url}{path}", **kwargs)
     except httpx.RequestError as e:
         logger.error("Could not reach Upstox at %s: %s", path, e)
         raise UpstoxError(502, f"Could not reach Upstox: {e}") from e
@@ -124,4 +126,50 @@ async def get_market_status(access_token: str) -> dict:
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",
         },
+    )
+
+
+async def get_funds_and_margin(access_token: str) -> dict:
+    """Read-only account funds & margin (Phase 6.1).
+
+    ``GET /v3/user/get-funds-and-margin`` with ``Api-Version: 3.0`` returns
+    the V3 breakdown: ``available_to_trade`` (cash + pledge) and
+    ``unavailable_to_trade`` (unsettled profit / unavailable pledge). Raises
+    :class:`UpstoxError` on failure — note the documented daily maintenance
+    window (12:00 AM – 5:30 AM IST) returns HTTP 423 Locked, which callers
+    must surface as an UNAVAILABLE broker status, never as a crash or a 0.
+    """
+    return await _request(
+        "GET",
+        "/user/get-funds-and-margin",
+        base_url=V3_BASE_URL,
+        headers={
+            "Accept": "application/json",
+            "Api-Version": "3.0",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+async def get_margin_details(access_token: str, instruments: list[dict]) -> dict:
+    """Read-only broker margin for a basket of instruments (Phase 6.1).
+
+    ``POST /v2/charges/margin`` accepts up to 20 instruments and returns the
+    broker-computed margin for the WHOLE request (``data.required_margin``,
+    ``data.final_margin``) plus per-instrument rows in ``data.margins``. The
+    broker receives the complete multi-leg strategy set so its margin engine
+    applies spread/combination logic — the platform never sums per-leg
+    margins itself. Each instrument needs ``instrument_key``, ``quantity``
+    (broker contract units), ``transaction_type`` (BUY/SELL) and
+    ``product`` (I | D | CO | MTF). Raises :class:`UpstoxError` on failure.
+    """
+    return await _request(
+        "POST",
+        "/charges/margin",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json={"instruments": instruments},
     )

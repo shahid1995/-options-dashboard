@@ -2,9 +2,11 @@
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
 import {
+  brokerDataCaption,
   capitalDisplay,
   capitalRows,
   capitalStrategyRows,
+  firstBrokerError,
   rocInputsAvailable,
 } from "@/lib/capital";
 
@@ -76,6 +78,8 @@ export default function CapitalPanel({ capital, loading, error }) {
   const rows = useMemo(() => capitalRows(d), [d]);
   const strategyRows = useMemo(() => capitalStrategyRows(d.strategies), [d]);
   const rocReady = rocInputsAvailable(d.rocInputs);
+  const brokerError = useMemo(() => firstBrokerError(d), [d]);
+  const brokerCaption = useMemo(() => brokerDataCaption(d), [d]);
 
   if (loading && !capital) {
     return (
@@ -99,6 +103,14 @@ export default function CapitalPanel({ capital, loading, error }) {
           />
         </div>
         {error && <div style={{ fontSize: 10.5, color: C.gold }}>⚠️ {error}</div>}
+        {brokerError && !error && (
+          <div
+            title={brokerError.code}
+            style={{ fontSize: 10.5, color: C.gold, fontWeight: 700 }}
+          >
+            ⚠️ {brokerError.label}
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 14 }}>
@@ -111,9 +123,14 @@ export default function CapitalPanel({ capital, loading, error }) {
           </div>
           <div style={{ fontSize: 9.5, color: C.faint, lineHeight: 1.5 }}>
             Premium outlay ≠ capital required. Broker margin and broker funds come only from a connected broker
-            (currently unavailable — never estimated as broker figures). Paper values are paper-account values.
-            Return on Capital is a future metric; Phase 6.0 only prepares its inputs.
+            (unavailable states are never replaced by estimated capital or paper cash). Paper values are
+            paper-account values. Return on Capital is a future metric; only its inputs are prepared.
           </div>
+          {brokerCaption && (
+            <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, letterSpacing: 0.3 }}>
+              🕒 {brokerCaption}
+            </div>
+          )}
         </div>
 
         <div style={{ minWidth: 0 }}>
@@ -148,9 +165,26 @@ export default function CapitalPanel({ capital, loading, error }) {
                         {s.estimatedCapital == null ? "—" : money(s.estimatedCapital)}
                       </div>
                     </div>
+                    <div>
+                      <div style={{ fontSize: 8.5, color: C.faint, letterSpacing: 0.4 }}>BROKER MARGIN</div>
+                      <div
+                        style={{ fontSize: 11, fontWeight: 700, color: s.brokerMargin == null ? C.faint : C.text }}
+                        title={
+                          s.brokerMargin == null
+                            ? `${s.brokerMarginError ?? "unavailable"} — broker-reported only, never estimated`
+                            : `Broker-reported whole-strategy margin · ${s.brokerMarginTimestamp ?? ""}`
+                        }
+                      >
+                        {s.brokerMargin == null ? "—" : money(s.brokerMargin)}
+                      </div>
+                    </div>
                   </div>
                   <div style={{ fontSize: 8.5, color: C.faint, marginTop: 4 }}>
                     {s.estimatedCapitalBasis ? `${s.estimatedCapitalBasis.toUpperCase()} · ESTIMATED` : "NO CAPITAL ESTIMATE · PREMIUM ≠ MARGIN"}
+                    {s.brokerMargin != null && <span style={{ color: C.muted }}> · BROKER MARGIN · BROKER REPORTED</span>}
+                    {s.brokerMargin == null && s.brokerMarginError && (
+                      <span style={{ color: C.gold }}> · {s.brokerMarginError}</span>
+                    )}
                   </div>
                 </div>
               ))}

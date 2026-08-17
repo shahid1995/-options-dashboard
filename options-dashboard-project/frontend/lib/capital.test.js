@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   CAPITAL_SOURCE_LABELS,
+  brokerDataCaption,
+  brokerErrorLabel,
   capitalDisplay,
   capitalRows,
   capitalStrategyRows,
   capitalValue,
   estimatedBasisLabel,
+  firstBrokerError,
   hasCapitalValue,
   rocInputsAvailable,
   sourceLabel,
@@ -163,5 +166,138 @@ describe("capital display helpers (Phase 6.0)", () => {
     expect(d.brokerAvailableFunds.value).toBeNull();
     expect(d.paperAvailableCash.value).toBe(494172.75);
     expect(d.paperAvailableCash.source).toBe("CALCULATED");
+  });
+});
+
+describe("capital broker display (Phase 6.1)", () => {
+  it("maps successful broker data with funds breakdown and timestamps", () => {
+    const d = capitalDisplay({
+      broker_margin: { value: 37503, source: "BROKER_REPORTED", status: "available", timestamp: "2026-08-16T10:00:00+00:00" },
+      broker_available_funds: { value: 40034, source: "BROKER_REPORTED", status: "available", timestamp: "2026-08-16T10:00:00+00:00" },
+      broker_cash_available: { value: 39900, source: "BROKER_REPORTED", status: "available", timestamp: "2026-08-16T10:00:00+00:00" },
+      broker_margin_used: { value: 134, source: "BROKER_REPORTED", status: "available", timestamp: "2026-08-16T10:00:00+00:00" },
+      broker_pledge_available: { value: 134, source: "BROKER_REPORTED", status: "available", timestamp: "2026-08-16T10:00:00+00:00" },
+      broker_funds_detail: { span_exposure: 100, generated_at: "2026-08-16T10:00:00+00:00", expires_at: "2026-08-16T10:01:00+00:00" },
+      broker_margin_detail: { aggregate_required_margin: 37503, aggregate_status: "available" },
+      broker_generated_at: "2026-08-16T10:00:00+00:00",
+      expires_at: "2026-08-16T10:05:00+00:00",
+      strategies: [
+        {
+          execution_id: "exec-1", strategy_tag: "Bull Call Spread", symbol: "NIFTY",
+          entry_net: 5827.25, premium_outlay: 8141.25,
+          estimated_capital: 5827.25, estimated_capital_basis: "premium",
+          broker_margin: 37503, broker_margin_status: "available",
+          broker_margin_error: null, broker_margin_timestamp: "2026-08-16T10:00:00+00:00",
+        },
+      ],
+      status: "available",
+    });
+
+    expect(d.brokerMargin.value).toBe(37503);
+    expect(d.brokerAvailableFunds.value).toBe(40034);
+    expect(d.brokerMarginUsed.value).toBe(134);
+    expect(d.brokerCashAvailable.value).toBe(39900);
+    expect(d.brokerPledgeAvailable.value).toBe(134);
+    expect(d.brokerFundsDetail.span_exposure).toBe(100);
+    expect(d.brokerMarginDetail.aggregate_required_margin).toBe(37503);
+    expect(d.brokerMargin.value).toBe(37503);
+    const rows = capitalRows(d);
+    const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
+    expect(byKey.brokerMarginUsed.label).toBe("Broker Margin Used");
+    expect(byKey.brokerCashAvailable.label).toBe("Broker Cash Available");
+    const sr = capitalStrategyRows(d.strategies);
+    expect(sr[0].brokerMargin).toBe(37503);
+    expect(sr[0].brokerMarginStatus).toBe("available");
+    expect(firstBrokerError(d)).toBeNull();
+    expect(brokerDataCaption(d)).toContain("Broker data as of");
+  });
+
+  it("unavailable broker stays null with structured codes", () => {
+    const d = capitalDisplay({
+      broker_margin: { value: null, source: "BROKER_REPORTED", status: "unavailable" },
+      broker_available_funds: { value: null, source: "BROKER_REPORTED", status: "unavailable" },
+      broker_errors: { funds: "BROKER_FUNDS_UNAVAILABLE", margin: ["BROKER_MARGIN_UNAVAILABLE"] },
+      strategies: [
+        {
+          execution_id: "exec-1", strategy_tag: "Short Put", symbol: "NIFTY",
+          entry_net: -5850, premium_outlay: 0,
+          estimated_capital: null, estimated_capital_basis: null,
+          broker_margin: null, broker_margin_status: "unavailable",
+          broker_margin_error: "BROKER_MARGIN_UNAVAILABLE", broker_margin_timestamp: null,
+        },
+      ],
+    });
+    expect(d.brokerMargin.value).toBeNull();
+    expect(d.brokerAvailableFunds.value).toBeNull();
+    const err = firstBrokerError(d);
+    expect(err.code).toBe("BROKER_FUNDS_UNAVAILABLE");
+    expect(err.label).toBe("Broker funds unavailable");
+    const sr = capitalStrategyRows(d.strategies);
+    expect(sr[0].brokerMargin).toBeNull();
+    expect(sr[0].brokerMarginError).toBe("BROKER_MARGIN_UNAVAILABLE");
+    expect(brokerDataCaption(d)).toBeNull(); // no captured timestamp to show
+  });
+
+  it("maintenance window surfaces as BROKER_MAINTENANCE", () => {
+    expect(brokerErrorLabel("BROKER_MAINTENANCE")).toBe(
+      "Upstox Funds maintenance window (12:00 AM – 5:30 AM IST)"
+    );
+    const d = capitalDisplay({
+      broker_available_funds: { value: null, source: "BROKER_REPORTED", status: "unavailable" },
+      broker_errors: { funds: "BROKER_MAINTENANCE", margin: [] },
+      broker_funds_detail: { error: "BROKER_MAINTENANCE", message: "maintenance window" },
+    });
+    const err = firstBrokerError(d);
+    expect(err.code).toBe("BROKER_MAINTENANCE");
+    expect(err.label).toContain("maintenance window");
+  });
+
+  it("loading payload (null) renders as unavailable, never fabricated", () => {
+    const d = capitalDisplay(null);
+    expect(d.brokerMargin.value).toBeNull();
+    expect(d.brokerAvailableFunds.value).toBeNull();
+    expect(d.brokerMarginUsed.value).toBeNull();
+    expect(d.brokerErrors).toEqual({});
+    expect(d.status).toBe("unavailable");
+    expect(firstBrokerError(d)).toBeNull();
+  });
+
+  it("authenticated broker absent → figures unavailable (no paper cash leak)", () => {
+    // Backend without broker data: broker figures null while paper values exist.
+    const d = capitalDisplay({
+      paper_available_cash: { value: 492000, source: "CALCULATED", status: "available" },
+      broker_available_funds: { value: null, source: "BROKER_REPORTED", status: "unavailable" },
+    });
+    expect(d.brokerAvailableFunds.value).toBeNull();
+    expect(d.brokerAvailableFunds.source).toBe("BROKER_REPORTED");
+    expect(d.paperAvailableCash.value).toBe(492000);
+    expect(d.paperAvailableCash.source).toBe("CALCULATED");
+  });
+
+  it("per-strategy broker errors are surfaced (e.g. missing instrument key)", () => {
+    const d = capitalDisplay({
+      strategies: [
+        {
+          execution_id: "exec-1", strategy_tag: "Bull Call Spread", symbol: "NIFTY",
+          entry_net: 5827.25, premium_outlay: 8141.25,
+          estimated_capital: 5827.25, estimated_capital_basis: "premium",
+          broker_margin: null, broker_margin_status: "unavailable",
+          broker_margin_error: "MISSING_INSTRUMENT_KEY", broker_margin_timestamp: null,
+        },
+      ],
+    });
+    const err = firstBrokerError(d);
+    expect(err.code).toBe("MISSING_INSTRUMENT_KEY");
+    expect(err.label).toBe("Instrument key unavailable");
+    const sr = capitalStrategyRows(d.strategies);
+    expect(sr[0].brokerMargin).toBeNull();
+    expect(sr[0].brokerMarginError).toBe("MISSING_INSTRUMENT_KEY");
+  });
+
+  it("broker caption tolerates missing timestamps", () => {
+    expect(brokerDataCaption(capitalDisplay({}))).toBeNull();
+    expect(
+      brokerDataCaption(capitalDisplay({ broker_generated_at: "2026-08-16T10:00:00+00:00" }))
+    ).toContain("Broker data as of");
   });
 });

@@ -4,7 +4,7 @@ _Last updated: 2026-08-16_
 
 ## Current phase
 
-**Phase 6.0 — Capital & Margin Foundation**
+**Phase 6.1 — Broker Margin Integration (Upstox)**
 
 Status: 🔄 **Implemented / Pending Review**
 
@@ -24,8 +24,9 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
 | Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
 | Phase 5.1 — Portfolio & Journal Analytics | ✅ Complete | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal |
-| Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — pending review |
-| Phase 6.1 — Broker Margin Integration | 🔵 Next | Not started |
+| Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — implemented & committed, pending final market-hours verification |
+| Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
+| Phase 6.2 — Analytical Margin Model | 🔵 Next | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -38,11 +39,13 @@ Status: 🔄 **Implemented / Pending Review**
 
 `3d032f2` — Phase 5.1: portfolio and journal analytics (verified).
 
+Phase 6.0 was committed via the Changes panel: implementation `01d008e` + status update `45b459e` (pending final market-hours verification).
+
 Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1 `22f09073749db169905fd2dd06c81c3e37794e0a`, Phase 4.0 `9ae9966ca358a716c0e53d96203103f5e717e86f`.
 
 The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
 
-The Phase 6.0 implementation is NOT committed yet: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
+The Phase 6.1 implementation is NOT committed yet: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
 
 ## Phase 4.2 implementation
 
@@ -151,6 +154,38 @@ Automated tests (actual):
 
 - Frontend: 512/512 tests passed (23 files) — 10 new (capital display helpers + API contract)
 - Backend: 215/215 tests passed — 20 new (Phase 6.0 §23 matrix: source classification, available vs unavailable, premium vs capital separation, defined-debit estimate, credit unavailable, broker margin unavailable + available via provider, paper cash vs broker funds, user isolation, multi-leg whole-strategy context, null vs zero, no NaN/Infinity, source labels preserved, no ROI aliasing, no Return-on-Capital computation)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
+
+## Phase 6.1 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (READ-ONLY broker integration ONLY — no SPAN calculation, no homemade margin calculator, no Return on Capital, no real-money order placement, no deployment):
+
+- **Upstox provider behind the Phase 6.0 abstraction** (`backend/app/services/broker_margin.py`): `UpstoxMarginProvider(MarginProvider)` uses the existing authenticated broker session server-side (tokens never reach the frontend) with two read-only endpoints:
+  - `GET /v3/user/get-funds-and-margin` (`Api-Version: 3.0`) — account funds: available-to-trade, cash available, margin used, SPAN+exposure, premium present, pledge available (broker terminology preserved; the V3 `margin_used.span_exposure` field is labeled as the broker's combined SPAN+exposure value, never renamed "margin required")
+  - `POST /v2/charges/margin` — whole-strategy broker margin: the COMPLETE multi-leg leg set (up to 20 instruments) is sent in ONE request so Upstox applies spread logic; the broker-reported `required_margin` is preserved as the authoritative figure (per-instrument rows kept raw in `broker_margin_detail`); the platform never sums per-leg margins or re-derives SPAN+exposure
+- **Instrument-key resolution (§14)**: keys come from the existing option-chain API (`call_options` / `put_options` `instrument_key`, one chain fetch per expiry) — never constructed manually from strike text; a missing key → `MISSING_INSTRUMENT_KEY` with NO broker request submitted
+- **Lots → contracts (§13)**: every leg converts `lots × lot_size` (1 lot NIFTY = 65 contracts) before the margin call; dedicated conversion tests
+- **Product type (§12)**: documented single constant `BROKER_PRODUCT_DEFAULT = "D"` (delivery) — the paper engine simulates held positions; no silent broker-specific values
+- **Source/status contract (§7/§23)**: every broker figure stays `BROKER_REPORTED` with available | partial | unavailable; missing is `null` (never 0); broker margin NEVER falls back to ESTIMATED capital and broker funds NEVER fall back to paper cash; broker available funds and strategy broker margin stay separate concepts
+- **Timestamps (§8)**: each broker figure carries its capture `timestamp`; the snapshot exposes `broker_generated_at` + `expires_at` so stale broker data is never presented as real-time
+- **Maintenance window (§9)**: the documented Funds maintenance window (12:00 AM – 5:30 AM IST, HTTP 423) maps to `BROKER_MAINTENANCE` → UNAVAILABLE status with a structured message — not a crash, not 0, not paper cash
+- **Structured broker errors (§24)**: BROKER_AUTH_REQUIRED, BROKER_TOKEN_EXPIRED, BROKER_RATE_LIMITED, BROKER_FUNDS_UNAVAILABLE, BROKER_MARGIN_UNAVAILABLE, MISSING_INSTRUMENT_KEY, MARGIN_REQUEST_TOO_LARGE, BROKER_BAD_RESPONSE, BROKER_MAINTENANCE — no raw provider stack traces
+- **Caching (§25/§26/§28)**: funds cached 60 s; strategy margin cached by `user + deterministic strategy fingerprint` (symbol/expiry/strike/option type/action/contract qty/product, leg order normalized) for 300 s; expired entries refresh; users are isolated — never a global margin cache; margin APIs are never called from the 1-second chain tick loop
+- **API**: `GET /paper/capital` now wires the Upstox provider whenever an authenticated session exists and returns the extended contract: `broker_margin` (aggregate whole-strategy), `broker_available_funds` / `broker_cash_available` / `broker_margin_used` / `broker_pledge_available`, `broker_funds_detail`, `broker_margin_detail` (per-strategy rows), `broker_errors`, `broker_generated_at`, `expires_at`, and per-strategy `broker_margin` / `broker_margin_status` / `broker_margin_error` on each strategy
+- **UI** (`frontend/app/paper/CapitalPanel.js` + `frontend/lib/capital.js`): Broker Margin / Broker Available Funds / Broker Cash Available / Broker Margin Used / Broker Pledge Available rows with source badges, "Broker data as of … · expires …" caption, structured error chips (incl. the Funds maintenance window), per-strategy Broker Margin with error codes — pure display helpers only
+- No changes to scenario calculations, paper execution semantics, market-hours protection, chain handling, Greek/IV analytics or the Phase 5.0 cash ledger; no Return-on-Capital / Return-on-Margin metrics computed (their inputs — broker margin, realized/unrealized P&L — are preserved for Phase 6.2+)
+
+Automated tests (actual):
+
+- Frontend: 519/519 tests passed (23 files) — 7 new (Phase 6.1 broker display states: success, unavailable, maintenance, loading, authenticated-broker-absent, per-strategy errors, captions)
+- Backend: 258/258 tests passed — 43 new (Phase 6.1 §31 matrix: funds success/mappings/timestamp/missing-field/API error/423 maintenance/token error/rate limit; single-leg, bull-call-spread, multi-leg margin as ONE request; instrument-key inputs; lots→contracts; quantity conversion; product mapping; missing key; >20 instruments; margin response mapping; BROKER_REPORTED available/unavailable; no ESTIMATED/paper-cash fallback; null vs zero; fingerprint cache reuse/miss/expiry; user cache isolation; router integration with canned broker responses)
 - `npx next build`: passed; all 6 routes generated; no type/lint errors
 
 Manual verification: ⏳ pending
@@ -289,6 +324,7 @@ Verified manually:
 - Journal/database foundation ✅
 - Portfolio & journal analytics (summary, performance, equity curve, drawdown, strategy groups) ✅
 - Capital & margin foundation (source-classified capital, broker margin abstraction, estimated capital, capital summary) ✅
+- Upstox broker margin integration (read-only funds + whole-strategy margin, structured errors, fingerprint caching, timestamps) ✅
 - Frontend unit tests ✅
 
 ### Current architecture concerns
@@ -296,15 +332,15 @@ Verified manually:
 - `frontend/app/paper/page.js` remains a large orchestration component; future domain logic should stay outside it.
 - Live Greek conventions are currently based on the documented Upstox/Indian-market convention and should be revalidated if the data feed changes.
 - Historical IV collection is deliberately not started (Phase 4.1 created the data model/interfaces only); IV Rank/Percentile AND Phase 4.2 z-scores/percentiles/anomaly scores stay unavailable until a reliable sample exists.
-- Broker margin and broker available funds are BROKER_REPORTED-only: the current Upstox integration exposes no margin/funds endpoint, so both stay unavailable (never estimated). Estimated capital in Phase 6.0 covers only the premium basis for defined-debit strategies; credit/naked strategies report unavailable until a valid analytical model exists (Phase 6.1+). Return on Capital is not computed yet — only its inputs are prepared.
+- Broker margin and broker funds now come from the real Upstox read-only APIs (Phase 6.1) and are only as good as the authenticated broker session: auth expiry, the daily Funds maintenance window (12:00 AM – 5:30 AM IST) and missing instrument keys degrade figures to UNAVAILABLE with structured codes — never estimated, never paper cash. Estimated capital still covers only the premium basis for defined-debit strategies; credit/naked strategies report unavailable until a valid analytical model exists (Phase 6.2+). Return on Capital / Return on Margin are not computed yet — only their inputs are prepared.
 - Phase 5.0 made the backend authoritative for orders/positions/cash/realized P&L; unrealized P&L remains a mark-to-market display fed by the frontend chain cache (the platform's market-data path).
 - Multi-expiry scenario valuation is leg-by-leg modelled and remains approximate for expiry payoff behaviour.
 - Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
 - The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Next phase objective — Phase 6.1
+## Next phase objective — Phase 6.2
 
-Phase 6.0 (capital & margin foundation) is implemented and pending review. The next milestone is **Phase 6.1 — Broker Margin Integration** (connect a real broker margin/funds provider behind the `MarginProvider` interface; the current Upstox integration has no such endpoint yet). Do not implement Phase 6.1 until Phase 6.0 is verified and approved.
+Phase 6.1 (Upstox broker margin integration) is implemented and pending review. The next milestone is **Phase 6.2 — Analytical Margin Model** (model-derived estimated margin for strategies where premium-basis and broker-reported figures are not appropriate, e.g. credit/naked structures — kept strictly separate from BROKER_REPORTED figures). Do not implement Phase 6.2 until Phase 6.1 is verified and approved.
 
 ## Permanent project constraints
 
@@ -328,4 +364,4 @@ Phase 6.0 (capital & margin foundation) is implemented and pending review. The n
 
 ## Next action
 
-**User:** Manually verify Phase 6.0 (capital panel renders with source/status labels: Paper Starting Capital, Paper Available Cash, Premium Outlay, Broker Margin = Unavailable, Estimated Capital = Premium Basis on a long call / bull call spread, and NO estimate on a short put; execute and fully exit a strategy and confirm capital figures update). Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.1 (Broker Margin Integration) begin. The project owner creates the Phase 6.0 commit/push from the Changes panel — FreeBuff does not commit or push this phase.
+**User:** Manually verify Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges and the "as of" caption during market hours; funds maintenance window shows UNAVAILABLE with the maintenance message; a strategy with 21+ legs or a missing instrument key shows the structured error; duplicate loads reuse the cached broker snapshot). Also complete the pending Phase 6.0 market-hours verification. Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.2 (Analytical Margin Model) begin. The project owner creates the Phase 6.1 commit/push from the Changes panel — FreeBuff does not commit or push this phase.

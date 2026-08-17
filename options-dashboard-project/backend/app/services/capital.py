@@ -232,7 +232,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def get_capital_summary(user_id: str, db: Session, provider: MarginProvider | None = None) -> dict:
+async def get_capital_summary(
+    user_id: str, db: Session, provider: MarginProvider | None = None, access_token: str | None = None
+) -> dict:
     """Server-authoritative capital summary for ONE authenticated user.
 
     Derived entirely from the user's own Phase 5.0 records (paper account,
@@ -241,10 +243,22 @@ async def get_capital_summary(user_id: str, db: Session, provider: MarginProvide
     available regardless of market status. User isolation: every query is
     scoped by ``user_id`` — user B can never see user A's capital.
 
+    Phase 6.1: when an authenticated Upstox access token is available (and no
+    explicit provider was injected) the real ``UpstoxMarginProvider`` is
+    used — read-only funds + whole-strategy margin from the broker, never
+    fabricated. Broker failures degrade to UNAVAILABLE broker figures with
+    structured codes; they never fall back to estimated capital or paper cash.
+
     Only OPEN strategies engage capital: a strategy whose positions are all
     closed no longer contributes premium outlay or estimated capital.
     """
-    provider = provider or UnavailableMarginProvider()
+    if provider is None:
+        if access_token:
+            from app.services.broker_margin import UpstoxMarginProvider
+
+            provider = UpstoxMarginProvider(access_token=access_token)
+        else:
+            provider = UnavailableMarginProvider()
 
     account = db.scalar(select(PaperAccount).where(PaperAccount.user_id == user_id))
     starting = account.starting_capital if account else DEFAULT_STARTING_CAPITAL
@@ -310,25 +324,76 @@ async def get_capital_summary(user_id: str, db: Session, provider: MarginProvide
     estimated = aggregate_estimates(estimates)
     capital_used_value = estimated["value"] if is_valid_number(estimated["value"]) else None
 
-    # Broker snapshot (async boundary for a future real provider; today it is
-    # the unavailable provider — never a fabricated margin number).
+    # Broker snapshot (Phase 6.1: real Upstox provider when authenticated;
+    # otherwise the unavailable provider — never a fabricated margin number).
+    # The provider context carries the whole-strategy ENTRY ORDER SET (the
+    # leg context it needs to build broker margin requests); the API response
+    # strategies below stay clean (no raw orders exposed).
+    provider_strategies = []
+    for s in strategies:
+        ex_orders = [o for o in all_orders if o.execution_id == s["execution_id"]]
+        provider_strategies.append(
+            {
+                **s,
+                "orders": [
+                    {
+                        "symbol": o.symbol,
+                        "expiry": o.expiry,
+                        "strike": o.strike,
+                        "option_type": o.option_type,
+                        "action": o.action,
+                        "quantity": o.filled_quantity,
+                        "lot_size": o.lot_size,
+                        "status": o.status,
+                    }
+                    for o in ex_orders
+                ],
+            }
+        )
     snapshot = await provider.get_capital_snapshot(
         {
             "user_id": user_id,
             "broker": "upstox",
-            "strategies": strategies,
+            "strategies": provider_strategies,
             "account": {
                 "paper_starting_capital": starting,
                 "paper_available_cash": available_cash,
             },
         }
     )
-    broker_margin = capital_value(snapshot.get("broker_margin"), snapshot.get("source", SOURCE_BROKER_REPORTED))
-    broker_margin["timestamp"] = snapshot.get("timestamp")
-    broker_available_funds = capital_value(
-        snapshot.get("broker_available_funds"), snapshot.get("source", SOURCE_BROKER_REPORTED)
-    )
-    broker_available_funds["timestamp"] = snapshot.get("timestamp")
+    broker_source = snapshot.get("source", SOURCE_BROKER_REPORTED)
+    broker_margin = capital_value(snapshot.get("broker_margin"), broker_source)
+    broker_margin["timestamp"] = snapshot.get("broker_margin_timestamp") or snapshot.get("timestamp")
+    if snapshot.get("broker_margin_status"):
+        broker_margin["status"] = snapshot["broker_margin_status"]
+    broker_available_funds = capital_value(snapshot.get("broker_available_funds"), broker_source)
+    broker_available_funds["timestamp"] = snapshot.get("broker_funds_timestamp") or snapshot.get("timestamp")
+    broker_cash_available = capital_value(snapshot.get("broker_cash_available"), broker_source)
+    broker_cash_available["timestamp"] = snapshot.get("broker_funds_timestamp") or snapshot.get("timestamp")
+    broker_margin_used = capital_value(snapshot.get("broker_margin_used"), broker_source)
+    broker_margin_used["timestamp"] = snapshot.get("broker_funds_timestamp") or snapshot.get("timestamp")
+    broker_pledge_available = capital_value(snapshot.get("broker_pledge_available"), broker_source)
+    broker_pledge_available["timestamp"] = snapshot.get("broker_funds_timestamp") or snapshot.get("timestamp")
+
+    # Per-strategy broker margin (whole-strategy, broker-reported).
+    per_strategy_margin = {
+        row["execution_id"]: row
+        for row in (snapshot.get("broker_margin_detail") or {}).get("per_strategy", [])
+    }
+    for s in strategies:
+        row = per_strategy_margin.get(s["execution_id"])
+        if row is not None:
+            s["broker_margin"] = row.get("required_margin")
+            s["broker_margin_status"] = row.get("status", STATUS_UNAVAILABLE)
+            s["broker_margin_error"] = row.get("error")
+            s["broker_margin_timestamp"] = row.get("timestamp")
+            s["broker_margin_detail"] = row
+        else:
+            s["broker_margin"] = None
+            s["broker_margin_status"] = STATUS_UNAVAILABLE
+            s["broker_margin_error"] = None
+            s["broker_margin_timestamp"] = None
+            s["broker_margin_detail"] = None
 
     # Overall capital status reflects the capital-REQUIREMENT figures only
     # (broker margin + estimated capital), per §12.
@@ -348,6 +413,14 @@ async def get_capital_summary(user_id: str, db: Session, provider: MarginProvide
         # otherwise there is no basis to label.
         "estimated_capital_basis": BASIS_PREMIUM if estimated["status"] != STATUS_UNAVAILABLE else None,
         "broker_available_funds": broker_available_funds,
+        "broker_cash_available": broker_cash_available,
+        "broker_margin_used": broker_margin_used,
+        "broker_pledge_available": broker_pledge_available,
+        "broker_funds_detail": snapshot.get("broker_funds_detail") or {},
+        "broker_margin_detail": snapshot.get("broker_margin_detail") or {},
+        "broker_errors": snapshot.get("errors") or {},
+        "broker_generated_at": snapshot.get("generated_at"),
+        "expires_at": snapshot.get("expires_at"),
         "paper_starting_capital": capital_value(starting, SOURCE_CALCULATED),
         "paper_available_cash": capital_value(available_cash, SOURCE_CALCULATED),
         "capital_used": capital_value(capital_used_value, SOURCE_ESTIMATED),

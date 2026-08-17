@@ -351,15 +351,17 @@ async def capital(
     session_id: str | None = Depends(get_session_id),
     db: Session = Depends(get_db),
 ):
-    """GET /paper/capital — server-authoritative capital summary (Phase 6.0).
+    """GET /paper/capital — server-authoritative capital summary (Phase 6.0/6.1).
 
     Read-only and always available regardless of market status. Every figure
     carries its source (BROKER_REPORTED | ESTIMATED | CALCULATED) and
-    availability status; missing values are null, never 0. The current Upstox
-    integration has no margin/funds endpoint, so broker-reported figures stay
-    unavailable — never fabricated. Paper capital is exposed as paper values,
-    never renamed as broker funds. No Return-on-Capital metric is computed;
-    only its future inputs are returned.
+    availability status; missing values are null, never 0. Phase 6.1: with an
+    authenticated Upstox session the broker's read-only funds + whole-strategy
+    margin APIs back the broker figures; on any broker failure (including the
+    daily funds maintenance window) they stay UNAVAILABLE with a structured
+    code — never estimated, never paper cash, never 0. Paper capital is
+    exposed as paper values, never renamed as broker funds. No Return-on-
+    Capital metric is computed; only its future inputs are returned.
     """
-    user_id, _access_token = require_session(session_id)
-    return await get_capital_summary(user_id, db)
+    user_id, access_token = require_session(session_id)
+    return await get_capital_summary(user_id, db, access_token=access_token)

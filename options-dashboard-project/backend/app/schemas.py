@@ -399,7 +399,7 @@ class AnalyticsOut(BaseModel):
     filters: dict
 
 
-# ---- Phase 6.0: capital & margin foundation --------------------------------
+# ---- Phase 6.0/6.1: capital & margin foundation + broker integration -------
 
 
 class CapitalValueOut(BaseModel):
@@ -424,6 +424,12 @@ class CapitalStrategyOut(BaseModel):
     Multi-leg strategies are analysed as ONE unit (never per-leg margin
     numbers summed together). ``estimated_capital`` is ``None`` for credit
     strategies — premium received is not capital required.
+
+    Phase 6.1 adds the whole-strategy BROKER margin (``broker_margin``) when
+    the authenticated broker margin API succeeds; it stays ``None`` with a
+    structured ``broker_margin_error`` (e.g. MISSING_INSTRUMENT_KEY,
+    MARGIN_REQUEST_TOO_LARGE) otherwise. Broker margin is never replaced by
+    the estimated capital figure.
     """
 
     execution_id: str
@@ -433,18 +439,96 @@ class CapitalStrategyOut(BaseModel):
     premium_outlay: float  # gross premium paid on long legs (0 is valid)
     estimated_capital: float | None = None
     estimated_capital_basis: str | None = None  # "premium" in Phase 6.0
+    # ---- Phase 6.1: broker-reported whole-strategy margin ----
+    broker_margin: float | None = None
+    broker_margin_status: str = "unavailable"  # available | partial | unavailable
+    broker_margin_error: str | None = None  # structured code, e.g. MISSING_INSTRUMENT_KEY
+    broker_margin_timestamp: str | None = None
+    broker_margin_detail: dict | None = None  # raw broker rows preserved
 
 
 class RocInputsOut(BaseModel):
     """Future Return-on-Capital INPUTS ONLY (the metric is NOT computed).
 
     ``available`` is False until both P&L and a capital figure exist, so a
-    future phase can never divide by an unknown denominator.
+    future phase can never divide by an unknown denominator. Phase 6.1
+    preserves broker margin separately (``broker_margin``) for a future
+    Return-on-Margin / Capital Efficiency metric.
     """
 
     pnl: float | None = None
     capital_used: float | None = None
     available: bool = False
+
+
+class BrokerFundsDetailOut(BaseModel):
+    """Mapped V3 funds breakdown (broker terminology preserved).
+
+    ``raw`` keeps the complete broker payload so no broker field is lost;
+    ``generated_at`` / ``expires_at`` mark when the snapshot was captured and
+    when it must be refreshed — stale broker funds are never real-time.
+    """
+
+    available_to_trade: float | None = None
+    cash_available_to_trade: float | None = None
+    margin_used: float | None = None
+    span_exposure: float | None = None
+    cash_margin_var_elm: float | None = None
+    premium_present: float | None = None
+    delivery_margin: float | None = None
+    pledge_available_to_trade: float | None = None
+    margin_from_pledge: float | None = None
+    pledge_margin_used: float | None = None
+    unsettled_profit: float | None = None
+    raw: dict | None = None
+    error: str | None = None  # structured code (e.g. BROKER_MAINTENANCE)
+    message: str | None = None
+    generated_at: str | None = None
+    expires_at: str | None = None
+
+
+class BrokerMarginRowOut(BaseModel):
+    """One per-instrument row from the broker margin response (kept raw)."""
+
+    instrument_key: str | None = None
+    span_margin: float | None = None
+    exposure_margin: float | None = None
+    equity_margin: float | None = None
+    net_buy_premium: float | None = None
+    additional_margin: float | None = None
+    total_margin: float | None = None
+    tender_margin: float | None = None
+
+
+class BrokerMarginStrategyOut(BaseModel):
+    """Whole-strategy broker margin for ONE open execution.
+
+    ``required_margin`` is the broker-reported figure for the COMPLETE
+    multi-leg request (never a platform sum of per-leg margins). ``error``
+    carries a structured code when the broker result is unavailable.
+    """
+
+    execution_id: str | None = None
+    strategy_tag: str | None = None
+    status: str = "unavailable"
+    error: str | None = None
+    message: str | None = None
+    required_margin: float | None = None
+    final_margin: float | None = None
+    instrument_count: int = 0
+    timestamp: str | None = None
+    expires_at: str | None = None
+    rows: list[BrokerMarginRowOut] = Field(default_factory=list)
+
+
+class BrokerMarginDetailOut(BaseModel):
+    """Aggregate broker margin across the user's open strategies."""
+
+    per_strategy: list[BrokerMarginStrategyOut] = Field(default_factory=list)
+    aggregate_required_margin: float | None = None
+    aggregate_status: str = "unavailable"
+    generated_at: str | None = None
+    expires_at: str | None = None
 
 
 class CapitalOut(BaseModel):
@@ -453,6 +537,13 @@ class CapitalOut(BaseModel):
     Premium outlay, broker margin, estimated capital and available funds are
     kept strictly separate and each carries its source/status. Paper capital
     is labeled paper capital; it is never renamed as broker funds.
+
+    Phase 6.1: ``broker_margin`` is the aggregate whole-strategy margin
+    reported by the broker; ``broker_available_funds`` / ``broker_margin_used``
+    / ``broker_cash_available`` / ``broker_pledge_available`` are account
+    funds figures (BROKER_REPORTED, never replaced by paper cash).
+    ``broker_funds_detail`` and ``broker_margin_detail`` preserve the raw
+    broker payloads with capture/expiry timestamps.
     """
 
     premium_outlay: CapitalValueOut
@@ -460,6 +551,14 @@ class CapitalOut(BaseModel):
     estimated_capital: CapitalValueOut
     estimated_capital_basis: str | None = None
     broker_available_funds: CapitalValueOut
+    broker_cash_available: CapitalValueOut
+    broker_margin_used: CapitalValueOut
+    broker_pledge_available: CapitalValueOut
+    broker_funds_detail: BrokerFundsDetailOut
+    broker_margin_detail: BrokerMarginDetailOut
+    broker_errors: dict = Field(default_factory=dict)
+    broker_generated_at: str | None = None
+    expires_at: str | None = None
     paper_starting_capital: CapitalValueOut
     paper_available_cash: CapitalValueOut
     capital_used: CapitalValueOut
