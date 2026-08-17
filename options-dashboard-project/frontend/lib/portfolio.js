@@ -66,6 +66,7 @@ const ERROR_DEFAULTS = {
   MARKET_CLOSED: "Market is closed. Paper order was not executed.",
   MARKET_UNKNOWN: "Unable to verify market status. Order was not executed.",
   CHAIN_DATA_MISSING: "Required market data is not available. Paper order was not executed.",
+  BULK_EXIT_CHAIN_DATA_MISSING: "Required market data is not available. No position was closed.",
   INVALID_QUANTITY: "Invalid quantity.",
   POSITION_NOT_FOUND: "Position not found.",
   INSUFFICIENT_POSITION: "Not enough quantity available to exit.",
@@ -130,4 +131,67 @@ export function buildExecutionRequest({ symbol, strategy, legs, lotSize, multipl
 // Build the idempotent position-exit request (quantity in lots).
 export function buildExitRequest(qty) {
   return { client_order_id: makeClientOrderId("exit"), quantity: qty };
+}
+
+// Build the idempotent BULK exit request (EXIT STRATEGY / EXIT ALL). One key
+// covers the WHOLE operation: a retry/double-submit replays the original
+// result instead of closing anything twice.
+export function buildBulkExitRequest(prefix = "exit-all") {
+  return { client_order_id: makeClientOrderId(prefix) };
+}
+
+// Group the open positions (frontend shape from toFrontendPosition) by
+// strategy execution so the UI can offer one EXIT STRATEGY per group.
+// Standalone positions (no execution id) form their own group without a
+// strategy button. Approximate current value = |qty| × lot × LTP (mark-based,
+// informational only — the backend decides the final fill prices).
+export function openStrategyGroups(positionsWithLtp) {
+  const map = new Map();
+  for (const p of positionsWithLtp ?? []) {
+    const key = p.executionId ?? "standalone";
+    let g = map.get(key);
+    if (!g) {
+      g = {
+        executionId: key === "standalone" ? null : p.executionId,
+        strategyName: key === "standalone" ? "Standalone" : p.strategyName ?? "Custom",
+        positions: [],
+        value: 0,
+        hasMarks: true,
+        unrealized: 0,
+      };
+      map.set(key, g);
+    }
+    g.positions.push(p);
+    if (p.currentLtp == null) {
+      g.hasMarks = false;
+    } else {
+      g.value += Math.abs(p.currentLtp) * (p.lotSize ?? 0) * p.qty;
+      g.unrealized += p.unrealizedPnl ?? 0;
+    }
+  }
+  return Array.from(map.values()).map((g) => ({
+    ...g,
+    value: g.hasMarks ? Math.round(g.value * 100) / 100 : null,
+    unrealized: g.hasMarks ? Math.round(g.unrealized * 100) / 100 : null,
+    isStrategy: g.executionId != null,
+  }));
+}
+
+// Shape a backend BulkExitOut into the display object the result banner uses.
+export function bulkExitDisplay(result) {
+  const r = result ?? {};
+  const failed = (r.positions ?? []).filter((p) => p.status !== "EXITED");
+  return {
+    scope: r.scope ?? "ACCOUNT",
+    status: r.status ?? "FAILED",
+    requestedCount: r.requested_count ?? 0,
+    exitedCount: r.exited_count ?? 0,
+    failedCount: r.failed_count ?? failed.length,
+    totalRealizedPnl: r.total_realized_pnl ?? 0,
+    cashChange: r.cash_change ?? 0,
+    positions: r.positions ?? [],
+    groups: r.groups ?? [],
+    errors: r.errors ?? [],
+    duplicated: r.duplicated ?? false,
+  };
 }

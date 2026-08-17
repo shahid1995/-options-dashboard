@@ -13,6 +13,8 @@ import {
   getPaperCapital,
   submitPaperExecution,
   exitPaperPosition,
+  exitPaperStrategy,
+  exitAllPaperPositions,
   resetPaperPortfolio as apiResetPaperPortfolio,
 } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
@@ -27,6 +29,7 @@ import IVAnalyticsPanel from "./IVAnalyticsPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PortfolioAnalyticsPanel from "./PortfolioAnalyticsPanel";
 import CapitalPanel from "./CapitalPanel";
+import { BulkExitModal, BulkExitResultBanner } from "./BulkExit";
 import {
   makeLeg,
   addLeg,
@@ -49,8 +52,11 @@ import { validateLeg, validateStrategy, validateExecution } from "@/lib/strategy
 import { newStrategyId, deriveStrategy, strategySourceLabel } from "@/lib/strategy/strategyIdentity";
 import { historyToCsv, strategyStats, recordEquityPoint, isWithinMarketHours, sanitizeEquityHistory } from "@/lib/paperUtils";
 import {
+  buildBulkExitRequest,
   buildExecutionRequest,
   buildExitRequest,
+  bulkExitDisplay,
+  openStrategyGroups,
   paperErrorMessage,
   portfolioDisplay,
   toFrontendPosition,
@@ -155,6 +161,13 @@ export default function PaperTradingPage() {
   const [journalPage, setJournalPage] = useState(0);
   // Per-position exit quantity (lots) for partial exits; defaults to full.
   const [exitQtyMap, setExitQtyMap] = useState({});
+  // Phase 5.2: bulk exit (EXIT STRATEGY / EXIT ALL) — modal + result mirror.
+  // The backend owns the operation; these are display state only.
+  const [bulkExitModal, setBulkExitModal] = useState(null); // { kind: "STRATEGY" | "ACCOUNT", target }
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState(null);
+  const [bulkResult, setBulkResult] = useState(null);
+  const bulkInFlightRef = useRef(false);
 
   // ---- Market-hours execution gate ----
   const [marketStatus, setMarketStatus] = useState(null); // { status, source, message, checkedAt, tradeDate }
@@ -753,6 +766,68 @@ export default function PaperTradingPage() {
     }
   };
 
+  // ---- Phase 5.2: bulk exit (EXIT STRATEGY / EXIT ALL) ----
+  // The backend owns the operation (validates everything up front, one
+  // transaction, idempotent per key). The UI only opens a confirmation
+  // dialog, shows the EXITING… state, and mirrors the server result.
+  const openExitStrategy = (group) => {
+    if (bulkInFlightRef.current || orderInFlightRef.current) return;
+    setBulkResult(null);
+    setBulkError(null);
+    setBulkExitModal({ kind: "STRATEGY", target: group });
+  };
+
+  const openExitAll = () => {
+    if (bulkInFlightRef.current || orderInFlightRef.current) return;
+    if (positionsWithLtp.length === 0) return; // empty state: no API call
+    setBulkResult(null);
+    setBulkError(null);
+    setBulkExitModal({ kind: "ACCOUNT", target: null });
+  };
+
+  const cancelBulkExit = () => {
+    if (bulkBusy) return; // never cancel mid-execution
+    setBulkExitModal(null);
+    setBulkError(null);
+  };
+
+  const confirmBulkExit = async () => {
+    if (!bulkExitModal || bulkInFlightRef.current || orderInFlightRef.current) return;
+    bulkInFlightRef.current = true;
+    setBulkBusy(true);
+    setBulkError(null);
+    try {
+      const gateMsg = await assertMarketOpen(); // re-checked at execution time
+      if (gateMsg) {
+        setBulkError(gateMsg);
+        return;
+      }
+      const kind = bulkExitModal.kind;
+      const request = buildBulkExitRequest(kind === "STRATEGY" ? "exit-strat" : "exit-all");
+      try {
+        const result =
+          kind === "STRATEGY"
+            ? await exitPaperStrategy(bulkExitModal.target.executionId, request)
+            : await exitAllPaperPositions(request);
+        setBulkResult(bulkExitDisplay(result));
+      } catch (e) {
+        if (isAuthError(e)) {
+          setSessionExpired(true);
+          return;
+        }
+        setBulkError(paperErrorMessage(e));
+        return;
+      }
+      setBulkExitModal(null);
+      // Refresh the authoritative state: portfolio, positions, analytics,
+      // capital, journal — all from the existing server endpoints.
+      await Promise.all([loadPortfolio(), loadJournal()]);
+    } finally {
+      bulkInFlightRef.current = false;
+      setBulkBusy(false);
+    }
+  };
+
   const resetPaperPortfolio = async () => {
     if (!window.confirm("Reset your paper portfolio? This clears all open positions and trade history.")) return;
     try {
@@ -781,6 +856,9 @@ export default function PaperTradingPage() {
     const ltp = getCurrentLtp(p);
     return { ...p, currentLtp: ltp, unrealizedPnl: markUnrealizedPnl(p, ltp) };
   });
+  // Phase 5.2: open positions grouped by strategy execution — one EXIT
+  // STRATEGY per group (standalone positions form a group without a button).
+  const openGroups = useMemo(() => openStrategyGroups(positionsWithLtp), [positionsWithLtp]);
   const totalUnrealized = positionsWithLtp.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const equity = paperCash + positionsWithLtp.reduce((sum, p) => (p.currentLtp == null ? sum : sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty), 0);
   const totalPnl = equity - paperStartingCapital;
@@ -1224,6 +1302,17 @@ export default function PaperTradingPage() {
         capital={capital}
         loading={capital === null && !portfolioError}
         error={capitalError}
+      />
+
+      {/* Phase 5.2: bulk-exit confirmation modal (fixed overlay) */}
+      <BulkExitModal
+        kind={bulkExitModal?.kind ?? null}
+        target={bulkExitModal?.target ?? null}
+        accountStats={{ openPositions: positionsWithLtp.length, openStrategies: openGroups.filter((g) => g.isStrategy).length }}
+        busy={bulkBusy}
+        error={bulkError}
+        onCancel={cancelBulkExit}
+        onConfirm={confirmBulkExit}
       />
 
       {!primaryChain ? (
@@ -2185,12 +2274,69 @@ export default function PaperTradingPage() {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 10.5, color: C.faint }}>
-                  {priceLive
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 10.5, color: C.faint }}>
+                    {priceLive
                     ? "mark-to-market at live prices · simplified simulator (no margin/brokerage/taxes)"
                     : "mark-to-market at last available (closing) prices · market closed · simplified simulator"}
+                  </div>
+                  <button
+                    onClick={openExitAll}
+                    disabled={positionsWithLtp.length === 0 || orderInFlight || bulkBusy}
+                    title={positionsWithLtp.length === 0 ? "No open positions" : marketNotOpen ? MARKET_CLOSED_MSG : "Close ALL open paper positions at the current market price"}
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 800,
+                      letterSpacing: 0.4,
+                      color: positionsWithLtp.length === 0 ? C.faint : C.red,
+                      background: positionsWithLtp.length === 0 ? "none" : "rgba(225,82,82,0.08)",
+                      border: `1px solid ${positionsWithLtp.length === 0 ? C.border : C.red}`,
+                      borderRadius: 6,
+                      padding: "5px 12px",
+                      cursor: positionsWithLtp.length === 0 || orderInFlight || bulkBusy ? "default" : marketNotOpen ? "not-allowed" : "pointer",
+                      opacity: positionsWithLtp.length === 0 || orderInFlight || bulkBusy || marketNotOpen ? 0.5 : 1,
+                      marginTop: 4,
+                    }}
+                  >
+                    {bulkBusy ? "EXITING…" : positionsWithLtp.length === 0 ? "EXIT ALL · No open positions" : "EXIT ALL"}
+                  </button>
                 </div>
               </div>
+
+              {/* Phase 5.2: bulk-exit result banner (mirrors the server result) */}
+              <BulkExitResultBanner result={bulkResult} onDismiss={() => setBulkResult(null)} />
+
+              {/* Strategy-grouped strip: one EXIT STRATEGY per open strategy */}
+              {openGroups.some((g) => g.isStrategy) && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  {openGroups.map((g) => (
+                    <div
+                      key={g.executionId ?? "standalone"}
+                      style={{ display: "flex", alignItems: "center", gap: 8, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px 5px 10px" }}
+                    >
+                      <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.4 }}>
+                        <span style={{ fontWeight: 800, color: C.text }}>{g.strategyName}</span>
+                        {" · "}{g.positions.length} pos{g.positions.length > 1 ? "s" : ""}
+                        {" · ≈₹"}{g.value == null ? "—" : fmtIN(g.value)}
+                        {" · "}
+                        <span style={{ color: g.unrealized == null ? C.muted : g.unrealized >= 0 ? C.green : C.red }}>
+                          {g.unrealized == null ? "P&L —" : `${g.unrealized >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(g.unrealized))}`}
+                        </span>
+                      </div>
+                      {g.isStrategy && (
+                        <button
+                          onClick={() => openExitStrategy(g)}
+                          disabled={orderInFlight || bulkBusy}
+                          title={marketNotOpen ? MARKET_CLOSED_MSG : "Exit every open position of this strategy at the current market price"}
+                          style={{ fontSize: 10.5, fontWeight: 700, color: C.gold, background: "none", border: `1px solid rgba(201,161,90,0.5)`, borderRadius: 6, padding: "3px 9px", cursor: orderInFlight || bulkBusy ? "default" : marketNotOpen ? "not-allowed" : "pointer", opacity: orderInFlight || bulkBusy || marketNotOpen ? 0.5 : 1 }}
+                        >
+                          EXIT STRATEGY
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               {portfolioError && (
                 <div style={{ fontSize: 11.5, color: C.gold, marginBottom: 8, lineHeight: 1.5 }}>
                   ⚠️ Could not load the server portfolio: {portfolioError} — positions and cash below are not authoritative.

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -223,6 +223,41 @@ class PaperTransaction(Base):
     type: Mapped[str] = mapped_column(String(20))  # ENTRY_DEBIT | ENTRY_CREDIT | EXIT_DEBIT | EXIT_CREDIT
     amount: Mapped[float] = mapped_column(Float)  # signed rupees applied to cash
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class BulkExitRecord(Base):
+    """Idempotency record for ONE bulk exit operation (Phase 5.2).
+
+    Bulk exits (EXIT STRATEGY / EXIT ALL) are atomic operations that can
+    close many positions at once. The same ``client_order_id`` is never
+    executed twice: the FIRST result is stored here (positions, groups,
+    totals) and every replay returns the ORIGINAL result with
+    ``duplicated=True`` — no second exit orders, no double cash-ledger
+    entries, no duplicate journal records.
+
+    ``scope`` is STRATEGY (one strategy execution) or ACCOUNT (every open
+    position of the user).
+    """
+
+    __tablename__ = "bulk_exit_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    client_order_id: Mapped[str] = mapped_column(String(64))
+    scope: Mapped[str] = mapped_column(String(12))  # STRATEGY | ACCOUNT
+    strategy_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(12))  # SUCCESS | NO_POSITIONS | FAILED | PARTIAL
+    requested_count: Mapped[int] = mapped_column(Integer, default=0)
+    exited_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    cash_change: Mapped[float] = mapped_column(Float, default=0.0)
+    positions_json: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of position outcomes
+    groups_json: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of group outcomes
+    errors_json: Mapped[str] = mapped_column(Text, default="[]")  # JSON list of error strings
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "client_order_id", name="uq_bulk_exit_client_order"),)
 
 
 class IVObservation(Base):

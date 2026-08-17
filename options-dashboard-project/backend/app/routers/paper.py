@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -6,6 +7,8 @@ from app.routers.chains import INSTRUMENT_KEYS, transform_chain
 from app.routers.deps import get_session_id
 from app.schemas import (
     AnalyticsOut,
+    BulkExitOut,
+    BulkExitRequestIn,
     CapitalOut,
     ExecutionOut,
     ExecutionRequestIn,
@@ -33,6 +36,7 @@ from app.services.market_status import get_market_status
 from app.services.performance import get_analytics
 from app.services.paper_execution import (
     PaperExecutionError,
+    bulk_exit,
     execute_strategy,
     exit_position,
     find_exit_replay,
@@ -173,6 +177,46 @@ async def resolve_market_prices(access_token: str, symbol: str, legs) -> dict:
     return prices
 
 
+async def resolve_bulk_market_prices(access_token: str, positions) -> dict:
+    """Resolve the authoritative fill price for every open position (bulk).
+
+    Fetches each required (symbol, expiry) chain ONCE and maps every position
+    to the LTP of its OWN strike/side (Phase 2.1 rule: every expiry uses its
+    own chain; no fallback from another expiry, no stale client values). A
+    missing chain, strike or quote raises ``BULK_EXIT_CHAIN_DATA_MISSING``
+    BEFORE any mutation — the whole bulk request is rejected, never a
+    partial closure.
+
+    Returns ``{(symbol, expiry, strike, option_type): ltp}``.
+    """
+    by_chain: dict[tuple[str, str], list] = {}
+    for p in positions:
+        by_chain.setdefault((p.symbol.upper(), p.expiry), []).append(p)
+
+    prices: dict[tuple, float] = {}
+    try:
+        for (symbol, expiry), leg_list in by_chain.items():
+            raw = await upstox.get_option_chain(access_token, INSTRUMENT_KEYS[symbol], expiry)
+            chain = transform_chain(symbol, expiry, raw)["chain"]
+            by_strike = {row["strike"]: row for row in chain}
+            for p in leg_list:
+                row = by_strike.get(p.strike)
+                side = row.get(p.option_type) if row else None
+                ltp = side.get("ltp") if side else None
+                if ltp is None or ltp <= 0:
+                    raise PaperExecutionError(
+                        "BULK_EXIT_CHAIN_DATA_MISSING",
+                        f"Market data unavailable for {symbol} {p.strike:g} "
+                        f"{p.option_type.upper()} ({expiry}). No position was closed.",
+                    )
+                prices[(symbol, p.expiry, p.strike, p.option_type)] = ltp
+    except UpstoxError as exc:
+        raise PaperExecutionError(
+            "EXECUTION_FAILED", f"Could not load market data: {exc.message}"
+        ) from exc
+    return prices
+
+
 def _paper_error(exc: PaperExecutionError) -> HTTPException:
     """Map a structured execution error to an HTTP response.
 
@@ -182,6 +226,7 @@ def _paper_error(exc: PaperExecutionError) -> HTTPException:
     """
     status = {
         "CHAIN_DATA_MISSING": 409,
+        "BULK_EXIT_CHAIN_DATA_MISSING": 409,
         "INVALID_QUANTITY": 400,
         "POSITION_NOT_FOUND": 404,
         "INSUFFICIENT_POSITION": 400,
@@ -255,6 +300,80 @@ async def submit_position_exit(
         prices = await resolve_market_prices(access_token, position.symbol, [pseudo_leg])
         fill_price = prices[(position.expiry, position.strike, position.option_type)]
         return exit_position(user_id, position_id, request, db, fill_price)
+    except PaperExecutionError as exc:
+        raise _paper_error(exc) from exc
+
+
+@router.post("/executions/{strategy_execution_id}/exit-all", response_model=BulkExitOut)
+async def submit_execution_exit_all(
+    strategy_execution_id: str,
+    request: BulkExitRequestIn,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """EXIT STRATEGY — close every open position of ONE strategy execution.
+
+    Guards, in order: session, market OPEN re-checked at execution time,
+    the strategy execution exists + belongs to the user, then all required
+    chain data is resolved BEFORE any mutation. Every position exits through
+    the same trusted position-exit path in ONE transaction; the whole
+    operation is idempotent via ``client_order_id``.
+    """
+    from app.models import Position as PositionModel
+    from app.models import StrategyExecution as StrategyExecutionModel
+
+    user_id, access_token = require_session(session_id)
+    await require_market_open(access_token)
+    execution = db.scalar(
+        select(StrategyExecutionModel).where(
+            StrategyExecutionModel.user_id == user_id,
+            StrategyExecutionModel.execution_id == strategy_execution_id,
+        )
+    )
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Strategy execution not found.")
+    positions = db.scalars(
+        select(PositionModel)
+        .where(
+            PositionModel.user_id == user_id,
+            PositionModel.strategy_execution_id == strategy_execution_id,
+            PositionModel.status == "open",
+        )
+        .order_by(PositionModel.id.asc())
+    ).all()
+    try:
+        prices = await resolve_bulk_market_prices(access_token, positions)
+        return bulk_exit(user_id, "STRATEGY", strategy_execution_id, request, db, prices)
+    except PaperExecutionError as exc:
+        raise _paper_error(exc) from exc
+
+
+@router.post("/positions/exit-all", response_model=BulkExitOut)
+async def submit_exit_all(
+    request: BulkExitRequestIn,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """EXIT ALL — close every open paper position of the authenticated user.
+
+    The backend owns the bulk operation (the frontend never loops over
+    positions): session, market OPEN re-checked at execution time, then all
+    required chain data is resolved BEFORE any mutation, then every position
+    exits through the same trusted position-exit path in ONE transaction.
+    The whole operation is idempotent via ``client_order_id``.
+    """
+    from app.models import Position as PositionModel
+
+    user_id, access_token = require_session(session_id)
+    await require_market_open(access_token)
+    positions = db.scalars(
+        select(PositionModel)
+        .where(PositionModel.user_id == user_id, PositionModel.status == "open")
+        .order_by(PositionModel.id.asc())
+    ).all()
+    try:
+        prices = await resolve_bulk_market_prices(access_token, positions)
+        return bulk_exit(user_id, "ACCOUNT", None, request, db, prices)
     except PaperExecutionError as exc:
         raise _paper_error(exc) from exc
 

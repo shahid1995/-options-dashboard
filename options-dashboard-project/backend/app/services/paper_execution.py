@@ -1,4 +1,4 @@
-"""Server-authoritative paper trading engine (Phase 5.0).
+"""Server-authoritative paper trading engine (Phase 5.0/5.2).
 
 The backend is the single source of truth for paper orders, fills,
 positions, cash and P&L. This service implements:
@@ -10,13 +10,18 @@ positions, cash and P&L. This service implements:
   derived as ``starting_capital + SUM(amount)``
 - idempotent strategy executions (``client_order_id`` unique per user) and
   idempotent exits
+- idempotent BULK exits (Phase 5.2): EXIT STRATEGY (one
+  ``strategy_execution_id``) and EXIT ALL (the whole account) reuse the
+  exact same trusted position-exit path, one commit, one result record
 - strategy grouping (all legs of one execution share ``execution_id``)
 - portfolio summary, strategy-grouped view and a reconciliation check
 
 Execution is ATOMIC: every validation (market gate, chain data, prices)
 happens BEFORE any row is written, so a successful execution is FILLED with
 all orders filled and a failed one writes nothing. No fake async fills, no
-partial-success ambiguity.
+partial-success ambiguity. Bulk exits follow the same rule: all positions
+and prices are validated up front, and only then does the mutation phase
+run inside ONE database transaction.
 
 All quantities are LOTS. Rupee exposure scales by ``lot_size``
 (contracts per lot). Position quantity convention: BUY = +, SELL = −.
@@ -24,6 +29,7 @@ All quantities are LOTS. Rupee exposure scales by ``lot_size``
 
 from __future__ import annotations
 
+import json
 import secrets
 from datetime import datetime, timezone
 
@@ -31,6 +37,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    BulkExitRecord,
     Leg,
     PaperAccount,
     PaperOrder,
@@ -40,6 +47,10 @@ from app.models import (
     Trade,
 )
 from app.schemas import (
+    BulkExitGroupOut,
+    BulkExitOut,
+    BulkExitPositionOut,
+    ExitRequestIn,
     ExecutionOut,
     ExitOut,
     OrderOut,
@@ -441,7 +452,9 @@ def find_exit_replay(user_id: str, position: Position, client_order_id: str, db:
     return ExitOut(order=_serialize_order(existing), position=_serialize_position(position), duplicated=True)
 
 
-def exit_position(user_id: str, position_id: int, request, db: Session, fill_price: float) -> ExitOut:
+def exit_position(
+    user_id: str, position_id: int, request, db: Session, fill_price: float, *, commit: bool = True
+) -> ExitOut:
     """Exit (partially or fully) a paper position at the authoritative price.
 
     Validates: position exists + belongs to the user, quantity is valid and
@@ -451,6 +464,10 @@ def exit_position(user_id: str, position_id: int, request, db: Session, fill_pri
 
     Idempotent: retrying the same ``client_order_id`` for the same position
     returns the original exit order + the current position.
+
+    ``commit=False`` lets the Phase 5.2 bulk-exit engine run many exits and
+    commit ONCE, so a bulk operation is one atomic transaction; the
+    single-position path keeps committing per request (unchanged).
     """
     now = _now()
 
@@ -537,14 +554,26 @@ def exit_position(user_id: str, position_id: int, request, db: Session, fill_pri
         if execution is not None:
             # Accumulate realized P&L on EVERY exit (partial OR full) so the
             # execution's total equals the sum of its positions' realizations.
-            # exit_at marks the moment the strategy fully closes (last leg).
             execution.realized_pnl = round((execution.realized_pnl or 0.0) + realized, 2)
             execution.updated_at = now
             if new_net == 0:
-                execution.exit_at = now
+                # exit_at marks the moment the STRATEGY fully closes: only
+                # when no position of the execution is still open (a two-leg
+                # spread is not "exited" when just its first leg closes).
+                db.flush()  # persist this position's CLOSED state first
+                siblings_open = db.scalar(
+                    select(func.count(Position.id)).where(
+                        Position.user_id == user_id,
+                        Position.strategy_execution_id == position.strategy_execution_id,
+                        Position.status == "open",
+                    )
+                )
+                if not siblings_open:
+                    execution.exit_at = now
 
-    db.commit()
-    db.refresh(position)
+    if commit:
+        db.commit()
+        db.refresh(position)
     return ExitOut(order=_serialize_order(order), position=_serialize_position(position), duplicated=False)
 
 
@@ -598,6 +627,300 @@ def _close_journal_legs(user_id: str, position: Position, exit_qty: int, exit_pr
                 t.exit_at = now
                 t.realized_pnl = round(sum(l.realized_pnl or 0.0 for l in t.legs), 2)
                 t.updated_at = now
+
+
+# ---- Bulk exit (Phase 5.2) ---------------------------------------------------
+
+
+def bulk_exit(
+    user_id: str,
+    scope: str,
+    strategy_execution_id: str | None,
+    request: ExitRequestIn,
+    db: Session,
+    prices: dict,
+) -> BulkExitOut:
+    """Exit many positions in ONE atomic, idempotent operation.
+
+    ``scope`` is "STRATEGY" (every open position of one execution) or
+    "ACCOUNT" (every open position of the user). ``prices`` maps
+    ``(symbol, expiry, strike, option_type) -> authoritative fill price``
+    and is resolved by the router from market data BEFORE any write happens
+    (a missing chain/quote raises ``BULK_EXIT_CHAIN_DATA_MISSING`` and
+    NOTHING is closed).
+
+    Every position exits through the SAME trusted ``exit_position`` path as
+    the single-position endpoint (ONE authoritative P&L/cash/position-
+    closing implementation), run with ``commit=False`` and committed ONCE at
+    the end — the whole operation is one database transaction.
+
+    Idempotency: the same ``client_order_id`` replays the ORIGINAL result
+    from ``BulkExitRecord`` (``duplicated=True``) — no second exit orders,
+    no duplicate cash-ledger entries, no duplicate journal rows.
+    """
+    key = request.client_order_id
+
+    # 1. Idempotent replay — return the ORIGINAL result, never re-run.
+    record = db.scalar(
+        select(BulkExitRecord).where(
+            BulkExitRecord.user_id == user_id,
+            BulkExitRecord.client_order_id == key,
+        )
+    )
+    if record is not None:
+        return _bulk_exit_replay(record)
+
+    # 2. Collect the target open positions (server-authoritative).
+    if scope == "STRATEGY":
+        positions = db.scalars(
+            select(Position)
+            .where(
+                Position.user_id == user_id,
+                Position.strategy_execution_id == strategy_execution_id,
+                Position.status == "open",
+            )
+            .order_by(Position.id.asc())
+        ).all()
+    else:  # ACCOUNT
+        positions = db.scalars(
+            select(Position)
+            .where(Position.user_id == user_id, Position.status == "open")
+            .order_by(Position.id.asc())
+        ).all()
+
+    if not positions:
+        result = BulkExitOut(
+            execution_id=key,
+            scope=scope,  # type: ignore[arg-type]
+            status="NO_POSITIONS",
+            requested_count=0,
+            exited_count=0,
+            failed_count=0,
+            total_realized_pnl=0.0,
+            cash_change=0.0,
+            positions=[],
+            groups=[],
+            errors=[],
+        )
+        _record_bulk_exit(user_id, scope, strategy_execution_id, key, result, db)
+        return result
+
+    # 3. Pre-validation BEFORE any mutation: every position must be open and
+    #    resolve to an authoritative market price. Any gap rejects the whole
+    #    bulk request — no partial closure from a validation failure.
+    missing = [
+        p for p in positions if prices.get((p.symbol, p.expiry, p.strike, p.option_type)) is None
+    ]
+    if missing:
+        bad = ", ".join(
+            f"{p.symbol} {p.strike:g} {p.option_type.upper()} ({p.expiry})" for p in missing[:5]
+        )
+        raise PaperExecutionError(
+            "BULK_EXIT_CHAIN_DATA_MISSING",
+            f"Market data unavailable for {bad}. No position was closed.",
+        )
+    for p in positions:
+        if p.status != "open" or p.net_quantity == 0:
+            raise PaperExecutionError(
+                "INSUFFICIENT_POSITION",
+                f"Position {p.id} is already closed — nothing to exit.",
+            )
+
+    # Strategy tags for the grouped outcome (Standalone when no execution).
+    exec_ids = {p.strategy_execution_id for p in positions if p.strategy_execution_id}
+    tags: dict[str, str] = {}
+    if exec_ids:
+        rows = db.execute(
+            select(StrategyExecution.execution_id, StrategyExecution.strategy_tag).where(
+                StrategyExecution.user_id == user_id,
+                StrategyExecution.execution_id.in_(exec_ids),
+            )
+        ).all()
+        tags = {r[0]: r[1] or "Custom" for r in rows}
+
+    # 4. Execution phase — ONE transaction for the whole operation. A position
+    #    that loses a genuine execution-time race (already closed by another
+    #    request) is reported ALREADY_CLOSED; nothing is re-closed.
+    outcomes: list[BulkExitPositionOut] = []
+    errors: list[str] = []
+    exited = 0
+    failed = 0
+    total_realized = 0.0
+    cash_change = 0.0
+    for p in positions:
+        if p.status != "open" or p.net_quantity == 0:
+            # Lost a genuine execution-time race (a concurrent individual
+            # exit closed it after pre-validation) — reported, never re-closed.
+            failed += 1
+            errors.append(
+                f"Position {p.id} ({p.symbol} {p.strike:g} {p.option_type.upper()}): "
+                "already closed — nothing to exit."
+            )
+            outcomes.append(
+                BulkExitPositionOut(
+                    position_id=p.id,
+                    symbol=p.symbol,
+                    expiry=p.expiry,
+                    strike=p.strike,
+                    option_type=p.option_type,
+                    strategy_execution_id=p.strategy_execution_id,
+                    strategy_tag=tags.get(p.strategy_execution_id, "Standalone"),
+                    status="ALREADY_CLOSED",
+                    error="Position already closed — nothing to exit.",
+                )
+            )
+            continue
+        fill_price = prices[(p.symbol, p.expiry, p.strike, p.option_type)]
+        per_position = ExitRequestIn(
+            client_order_id=f"{key}:pos-{p.id}", quantity=abs(p.net_quantity)
+        )
+        try:
+            result = exit_position(
+                user_id, p.id, per_position, db, fill_price, commit=False
+            )
+        except PaperExecutionError as exc:
+            failed += 1
+            errors.append(f"Position {p.id} ({p.symbol} {p.strike:g} {p.option_type.upper()}): {exc.message}")
+            status = "ALREADY_CLOSED" if exc.code == "INSUFFICIENT_POSITION" else "FAILED"
+            outcomes.append(
+                BulkExitPositionOut(
+                    position_id=p.id,
+                    symbol=p.symbol,
+                    expiry=p.expiry,
+                    strike=p.strike,
+                    option_type=p.option_type,
+                    strategy_execution_id=p.strategy_execution_id,
+                    strategy_tag=tags.get(p.strategy_execution_id, "Standalone"),
+                    status=status,
+                    error=exc.message,
+                )
+            )
+            continue
+        order = result.order
+        outcomes.append(
+            BulkExitPositionOut(
+                position_id=p.id,
+                symbol=p.symbol,
+                expiry=p.expiry,
+                strike=p.strike,
+                option_type=p.option_type,
+                strategy_execution_id=p.strategy_execution_id,
+                strategy_tag=tags.get(p.strategy_execution_id, "Standalone"),
+                status="EXITED",
+                realized_pnl=order.realized_pnl,
+                fill_price=order.fill_price,
+            )
+        )
+        exited += 1
+        total_realized += order.realized_pnl or 0.0
+        cash_change += cash_flow(
+            order.action, order.fill_price, order.filled_quantity, order.lot_size
+        )
+
+    if exited == 0:
+        final_status = "FAILED"
+    elif failed == 0:
+        final_status = "SUCCESS"
+    else:
+        final_status = "PARTIAL"
+
+    result = BulkExitOut(
+        execution_id=key,
+        scope=scope,  # type: ignore[arg-type]
+        status=final_status,  # type: ignore[arg-type]
+        requested_count=len(positions),
+        exited_count=exited,
+        failed_count=failed,
+        total_realized_pnl=round(total_realized, 2),
+        cash_change=round(cash_change, 2),
+        positions=outcomes,
+        groups=_group_bulk_outcomes(positions, outcomes, tags),
+        errors=errors,
+    )
+    _record_bulk_exit(user_id, scope, strategy_execution_id, key, result, db)
+    return result
+
+
+def _group_bulk_outcomes(
+    positions: list, outcomes: list[BulkExitPositionOut], tags: dict[str, str]
+) -> list[BulkExitGroupOut]:
+    """Group bulk outcomes by strategy execution (standalone = no execution)."""
+    counters: dict[str | None, dict] = {}
+    for p in positions:
+        eid = p.strategy_execution_id
+        g = counters.setdefault(eid, {"requested": 0, "exited": 0, "failed": 0, "realized": 0.0})
+        g["requested"] += 1
+    for o in outcomes:
+        g = counters[o.strategy_execution_id]
+        if o.status == "EXITED":
+            g["exited"] += 1
+            g["realized"] += o.realized_pnl or 0.0
+        else:
+            g["failed"] += 1
+
+    groups = []
+    for eid, g in counters.items():
+        if g["failed"] == 0:
+            status = "EXITED"
+        elif g["exited"] == 0:
+            status = "FAILED"
+        else:
+            status = "PARTIAL"
+        groups.append(
+            BulkExitGroupOut(
+                strategy_execution_id=eid,
+                strategy_tag=tags.get(eid, "Standalone"),
+                requested=g["requested"],
+                exited=g["exited"],
+                failed=g["failed"],
+                realized_pnl=round(g["realized"], 2),
+                status=status,
+            )
+        )
+    return groups
+
+
+def _record_bulk_exit(
+    user_id: str, scope: str, strategy_execution_id: str | None, key: str, result: BulkExitOut, db: Session
+) -> None:
+    """Persist the bulk-exit result (idempotency record) in the SAME
+    transaction as the exits, then commit — the whole operation is atomic."""
+    db.add(
+        BulkExitRecord(
+            user_id=user_id,
+            client_order_id=key,
+            scope=scope,
+            strategy_execution_id=strategy_execution_id,
+            status=result.status,
+            requested_count=result.requested_count,
+            exited_count=result.exited_count,
+            failed_count=result.failed_count,
+            total_realized_pnl=result.total_realized_pnl,
+            cash_change=result.cash_change,
+            positions_json=json.dumps([p.model_dump() for p in result.positions]),
+            groups_json=json.dumps([g.model_dump() for g in result.groups]),
+            errors_json=json.dumps(result.errors),
+        )
+    )
+    db.commit()
+
+
+def _bulk_exit_replay(record: BulkExitRecord) -> BulkExitOut:
+    """Rebuild the ORIGINAL bulk-exit result from its idempotency record."""
+    return BulkExitOut(
+        execution_id=record.client_order_id,
+        scope=record.scope,  # type: ignore[arg-type]
+        status=record.status,  # type: ignore[arg-type]
+        requested_count=record.requested_count,
+        exited_count=record.exited_count,
+        failed_count=record.failed_count,
+        total_realized_pnl=record.total_realized_pnl,
+        cash_change=record.cash_change,
+        positions=[BulkExitPositionOut(**d) for d in json.loads(record.positions_json)],
+        groups=[BulkExitGroupOut(**d) for d in json.loads(record.groups_json)],
+        errors=json.loads(record.errors_json),
+        duplicated=True,
+    )
 
 
 # ---- Read models (§24/§25) ---------------------------------------------------

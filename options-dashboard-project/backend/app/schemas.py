@@ -167,6 +167,80 @@ class ExitOut(BaseModel):
     duplicated: bool = False  # true when this is an idempotent replay
 
 
+# ---- Phase 5.2: bulk paper position exit ------------------------------------
+
+
+class BulkExitRequestIn(BaseModel):
+    """Bulk exit request (idempotent via ``client_order_id``).
+
+    One key covers the WHOLE bulk operation: EXIT STRATEGY closes every open
+    position of one ``strategy_execution_id``; EXIT ALL closes every open
+    position of the authenticated user. Replaying the same key returns the
+    original result without closing anything twice.
+    """
+
+    client_order_id: str = Field(..., min_length=8, max_length=64)
+
+
+class BulkExitPositionOut(BaseModel):
+    """One position's outcome within a bulk exit.
+
+    ``status`` is EXITED (closed by this operation), ALREADY_CLOSED (lost a
+    genuine execution-time race to another request — reported, never
+    re-closed) or FAILED (execution-time error, with ``error``).
+    """
+
+    position_id: int
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    strategy_execution_id: str | None = None
+    strategy_tag: str | None = None
+    status: str  # EXITED | ALREADY_CLOSED | FAILED
+    realized_pnl: float | None = None
+    fill_price: float | None = None
+    error: str | None = None
+
+
+class BulkExitGroupOut(BaseModel):
+    """Bulk outcome grouped by strategy execution where possible."""
+
+    strategy_execution_id: str | None = None
+    strategy_tag: str
+    requested: int
+    exited: int
+    failed: int
+    realized_pnl: float
+    status: str  # EXITED | PARTIAL | FAILED | SKIPPED
+
+
+class BulkExitOut(BaseModel):
+    """Result of a bulk exit (EXIT STRATEGY or EXIT ALL).
+
+    ``status`` is SUCCESS (every requested position exited), NO_POSITIONS
+    (nothing was open to exit), FAILED (every requested position failed) or
+    PARTIAL (some exited, some did not — only possible for a true
+    execution-time failure after all pre-validation passed, e.g. a
+    concurrent individual exit winning the race for one position).
+    ``duplicated`` is true when the same ``client_order_id`` is replayed;
+    the returned numbers are then the ORIGINAL result, never a re-run.
+    """
+
+    execution_id: str  # the bulk operation's own id (== client_order_id)
+    scope: Literal["STRATEGY", "ACCOUNT"]
+    status: Literal["SUCCESS", "NO_POSITIONS", "FAILED", "PARTIAL"]
+    requested_count: int
+    exited_count: int
+    failed_count: int
+    total_realized_pnl: float
+    cash_change: float
+    positions: list[BulkExitPositionOut]
+    groups: list[BulkExitGroupOut]
+    errors: list[str] = []
+    duplicated: bool = False
+
+
 class PortfolioOut(BaseModel):
     """Portfolio: summary numbers + strategy-grouped view."""
 

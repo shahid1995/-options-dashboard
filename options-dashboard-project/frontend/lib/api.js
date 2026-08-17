@@ -66,6 +66,17 @@ export const submitPaperExecution = (payload) =>
 export const exitPaperPosition = (positionId, payload) =>
   api.post(`/paper/positions/${positionId}/exit`, payload).then((r) => r.data);
 
+// ---- Phase 5.2: bulk paper position exit ----
+// Server-authoritative bulk operations: EXIT STRATEGY (one strategy
+// execution) and EXIT ALL (every open position). The backend owns the bulk
+// operation, validates everything up front, and is idempotent per key.
+
+export const exitPaperStrategy = (executionId, payload) =>
+  api.post(`/paper/executions/${executionId}/exit-all`, payload).then((r) => r.data);
+
+export const exitAllPaperPositions = (payload) =>
+  api.post("/paper/positions/exit-all", payload).then((r) => r.data);
+
 export const getPaperPositions = () => api.get("/paper/positions").then((r) => r.data);
 
 export const getPaperOrders = () => api.get("/paper/orders").then((r) => r.data);

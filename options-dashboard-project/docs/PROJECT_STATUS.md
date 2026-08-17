@@ -24,6 +24,7 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | 🔄 Implemented | Generic statistics + market analytics engine, neutral Analytics UI — pending review |
 | Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
 | Phase 5.1 — Portfolio & Journal Analytics | ✅ Complete | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal |
+| Phase 5.2 — Bulk Paper Position Exit & Exit-All Safety | 🔄 Implemented | Server-authoritative EXIT STRATEGY + EXIT ALL, atomic pre-validation, idempotent replay, strategy-grouped outcomes, double-confirmation UI — pending review |
 | Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — implemented & committed, pending final market-hours verification |
 | Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
 | Phase 6.2 — Analytical Margin Model | 🔵 Next | Not started |
@@ -132,6 +133,35 @@ Verification:
 - Implementation commit: `3d032f2`
 
 Overall: ✅ **Complete**
+
+## Phase 5.2 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (bulk paper position exit ONLY — no redesign of the Phase 5.0 execution model, no real-money trading, no new trading signals, no changes to Phase 6.0/6.1 capital calculations):
+
+- **Two distinct server-authoritative operations**:
+  - `POST /paper/executions/{strategy_execution_id}/exit-all` — EXIT STRATEGY: closes every OPEN position of ONE strategy execution (all legs share the strategy; multi-leg strategies are treated as one logical strategy exit, no duplicate strategy records)
+  - `POST /paper/positions/exit-all` — EXIT ALL: closes every OPEN position of the authenticated user across all strategies + standalone positions
+- **Atomicity**: market OPEN re-checked at execution time, then ALL required (symbol, expiry) chains are fetched once and every position's own strike/side LTP is resolved BEFORE any mutation — a missing chain/quote raises `BULK_EXIT_CHAIN_DATA_MISSING` (409) and NO position is closed (no partial closure from a pre-validation failure)
+- **ONE authoritative exit path**: every position exits through the existing trusted `exit_position()` (same P&L/cash/journal logic as the single-position endpoint, with a `commit=False` mode) and the whole operation commits in ONE database transaction; the single-position endpoint `POST /paper/positions/{id}/exit` is unchanged
+- **Idempotency**: the whole bulk operation is keyed by `client_order_id` (stored in a new `bulk_exit_records` table); a replay returns the ORIGINAL result (`duplicated: true`) — no second exit orders, no duplicate cash-ledger entries, no duplicate journal rows (including the NO_POSITIONS case)
+- **Result contract**: `{ execution_id, scope: STRATEGY | ACCOUNT, status: SUCCESS | NO_POSITIONS | FAILED | PARTIAL, requested_count, exited_count, failed_count, total_realized_pnl, cash_change, positions[], groups[], errors[] }` with per-position EXITED / ALREADY_CLOSED / FAILED outcomes and strategy-grouped summary (strategy tag + counts + realized per group); PARTIAL is only possible for a true execution-time failure after pre-validation passed (e.g. a concurrent individual exit winning the race for one position — reported ALREADY_CLOSED, never re-closed)
+- **Concurrency**: the existing per-position quantity re-check inside the same transaction protects Exit All vs Exit All and Exit All vs individual Exit; the loser sees ALREADY_CLOSED (bulk) or the existing `INSUFFICIENT_POSITION` (individual); per-position keys are namespaced under the bulk key (`<bulk_key>:pos-<id>`)
+- **Strategy completion correctness fix**: `StrategyExecution.exit_at` is now stamped only when ALL positions of the execution are closed (previously the first leg closing stamped it); analytics counts exactly ONE completed trade per fully-exited strategy with the exact realized sum (regression-tested)
+- **Frontend** (`app/paper/page.js` + new `app/paper/BulkExit.js`): prominent but safe EXIT ALL button in the Active Positions header (disabled + "No open positions" when empty — no API call), a strategy-grouped strip with one EXIT STRATEGY per open strategy, double-confirmation modals (EXIT STRATEGY shows Positions / Approximate current value / Current unrealized P&L — informational only; EXIT ALL shows open positions/strategies), an EXITING… disabled state, and an EXIT COMPLETE / EXIT PARTIALLY COMPLETED / EXIT FAILED result banner listing failed positions; after success the page refreshes portfolio, positions, analytics, capital and journal from the existing authoritative endpoints; pure display helpers in `frontend/lib/portfolio.js` (`buildBulkExitRequest`, `openStrategyGroups`, `bulkExitDisplay`)
+- **No changes** to capital formulas (Phase 6.0/6.1), market-hours protection, chain handling, Greek/IV analytics, reconciliation, or the single-position exit calculation; the Recharts `Line` import fix in `PortfolioAnalyticsPanel.js` is preserved (equity curve renders after bulk-exit refreshes)
+
+Automated tests (actual):
+
+- Backend: 287/287 tests passed — 29 new (`tests/test_bulk_exit.py`: single-position exit unchanged, exit strategy, exit account, multiple strategies, standalone, no positions, market closed/unknown, missing chain/quote, idempotent replay, duplicate Exit All, individual+bulk concurrency race → PARTIAL + ALREADY_CLOSED, cash ledger exactly-once, realized P&L aggregation, journal without duplicates, strategy completion, user isolation, partial reporting, reconcile/portfolio/analytics consistency)
+- Frontend: 541/541 tests passed (26 files) — 20 new (bulk-exit helpers + BulkExit modal/result banner states)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
 
 ## Phase 6.0 implementation
 
@@ -364,4 +394,6 @@ Phase 6.1 (Upstox broker margin integration) is implemented and pending review. 
 
 ## Next action
 
-**User:** Manually verify Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges and the "as of" caption during market hours; funds maintenance window shows UNAVAILABLE with the maintenance message; a strategy with 21+ legs or a missing instrument key shows the structured error; duplicate loads reuse the cached broker snapshot). Also complete the pending Phase 6.0 market-hours verification. Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.2 (Analytical Margin Model) begin. The project owner creates the Phase 6.1 commit/push from the Changes panel — FreeBuff does not commit or push this phase.
+**User:** Manually verify Phase 5.2 (EXIT STRATEGY closes every leg of one strategy with one confirmation; EXIT ALL closes the whole account only after the double-confirmation modal; missing chain/quote rejects the whole operation with no position closed; a retried request replays the original result; the result banner shows EXIT COMPLETE with counts and realized P&L, and EXIT PARTIALLY COMPLETED lists failed positions; positions/analytics/capital/journal refresh afterwards). Then ChatGPT reviews the working-tree diff. Phase 5.2 remains in the working tree — the project owner commits it from the Changes panel (FreeBuff does not commit or push). After Phase 5.2 (and the pending 6.0/6.1 reviews) are approved, the roadmap continues with Phase 6.2 (Analytical Margin Model).
+
+Also pending: **User:** Manually verify Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges and the "as of" caption during market hours; funds maintenance window shows UNAVAILABLE with the maintenance message; a strategy with 21+ legs or a missing instrument key shows the structured error; duplicate loads reuse the cached broker snapshot). Also complete the pending Phase 6.0 market-hours verification. Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.2 (Analytical Margin Model) begin. The project owner creates the Phase 6.1 commit/push from the Changes panel — FreeBuff does not commit or push this phase.
