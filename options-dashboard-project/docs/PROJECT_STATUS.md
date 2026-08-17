@@ -4,7 +4,7 @@ _Last updated: 2026-08-17_
 
 ## Current phase
 
-**Phase 6.3 — Capital Efficiency & Return Metrics Foundation**
+**Phase 6.4 — Capital Allocation & Portfolio Risk Controls**
 
 Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
 
@@ -30,7 +30,7 @@ Status: 🔄 **Implemented / Pending Review** (implementation complete — autom
 | Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
 | Phase 6.2 — Analytical Margin Model | 🔄 Implemented | Frontend analytical capital model — premium/risk bases, scenario capital, Strategy Review CAPITAL section, broker-vs-estimate separation — pending review |
 | Phase 6.3 — Capital Efficiency & Return Metrics | 🔄 Implemented | Source-aware return metrics (Premium ROI, Return on Capital/Margin/Risk Capital, Capital Efficiency) with explicit denominators, Strategy Review + Portfolio Analytics + Journal integration — pending review |
-| Phase 6.4 — Capital Allocation / Portfolio Risk Controls | ⏳ Planned | Not started |
+| Phase 6.4 — Capital Allocation / Portfolio Risk Controls | 🔄 Implemented | Capital allocation, risk concentration, strategy/underlying/expiry concentration, configurable monitoring-only limits, portfolio allocation & risk dashboard — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -53,7 +53,7 @@ The Phase 4.2 implementation is committed but was never user-verified or ChatGPT
 
 Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
 
-Phase 6.3 is implemented in the current working tree (uncommitted): `frontend/lib/calculations/capitalEfficiency.js` + `capitalEfficiency.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` and `frontend/app/paper/page.js` (modified). The project owner commits it from the Changes panel — FreeBuff does not commit or push.
+Phase 6.4 is implemented in the current working tree (uncommitted): `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` and `frontend/app/paper/PortfolioAnalyticsPanel.test.js` (modified), and this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phase 6.4 from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 
@@ -456,9 +456,101 @@ ChatGPT review: ⏳ pending
 
 Overall: **Implemented / Pending Review**
 
-## Next phase objective — Phase 6.4
+## Phase 6.4 implementation
 
-Phase 6.3 (Capital Efficiency & Return Metrics) is implemented and pending review. The next milestone is **Phase 6.4 — Capital Allocation / Portfolio Risk Controls** (per-strategy capital allocation and portfolio risk controls, including the portfolio-level Return on Risk Capital that Phase 6.3 deliberately left N/A). Do NOT implement Phase 6.4 until Phase 6.3 is verified and approved. Phase 6.1 (Upstox broker margin) and Phase 6.2 (analytical capital model) remain implemented / pending the owner's live broker verification and review.
+Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+Implemented (portfolio-level capital allocation & risk-control infrastructure ONLY — no SPAN calculator, no broker-margin replacement, no Return on Capital / Margin recomputation, no Capital Efficiency Score, no trading signals, no strategy recommendations, no execution blocking, no new broker APIs, no new polling, no backtesting, no deployment):
+
+### Capital allocation architecture
+
+- **Pure domain module** (`frontend/lib/calculations/capitalAllocation.js`): `calculateStrategyAllocation`, `calculatePortfolioAllocation`, `calculateAllocatedCapitalRatio`, `calculateCapitalConcentration`, `calculateRiskExposure`, `calculateAllocationLimits`, `calculatePortfolioRiskControls`. Deterministic, pure, side-effect free, dependency-light, user-data agnostic, broker-independent (no network, no broker calls). It CONSUMES the Phase 6.2 analytical capital result and the authoritative theoretical max loss — no payoff/risk/premium/option-price formula is duplicated (§38, asserted by tests).
+- **Source awareness (§3/§10)**: Paper Available Cash, Broker Available Funds, Premium Outlay, Estimated Capital, Broker Margin, Defined Risk / Max Loss, Capital Used, Capital Allocation and Capital Efficiency stay strictly separate — "capital used" is never a synonym for broker margin, and every figure carries its basis/source.
+- **Coverage semantics (§37)**: null / NaN / Infinity members count as MISSING — an aggregate either states PARTIAL coverage or returns unavailable; nothing is silently treated as ₹0. Two small domain corrections surfaced by the tests: null members now count toward partial coverage (previously dropped), and a mixed-expiry structure preserves its `MIXED_EXPIRY_APPROXIMATION` flag even when it contributes no value to the chosen basis.
+
+### Strategy allocation
+
+- One logical allocation unit per OPEN strategy execution (§27) — multi-leg strategies are never double-counted by summing legs; per-strategy rows carry `executionId`, `strategyTag`, `openPositions`, `premiumOutlay`, `estimatedCapital`, `brokerMargin`, `definedRisk`, `capitalBasis`, `riskBasis`, `allocationStatus`, `warnings`.
+- **Current remaining quantity (§26)**: positions/legs reflect what is still open after partial exits and reversals; closed and zero-quantity positions are excluded at the source (backend open-position invariant), never counted into current exposure.
+- **Premium basis (§6)**: Phase 6.2 PREMIUM results (defined-debit strategies) flow through unchanged; **risk basis**: RISK_MODEL / MAX_LOSS for same-expiry defined-risk strategies.
+- **Defined risk (§8/§28/§29)**: `abs(maxLoss)` from the authoritative theoretical payoff/risk engine for same-expiry finite-risk structures; unlimited risk → `definedRisk = null` + `UNLIMITED_RISK` (never an arbitrary large number); mixed-expiry → `null` + `MIXED_EXPIRY_APPROXIMATION` (never a fabricated cross-expiry number).
+
+### Portfolio allocation
+
+- Descriptive aggregates (§9): open strategy count, open position count, total premium outlay, total estimated capital, total defined risk, paper starting capital, paper available cash, broker available funds, broker-reported aggregate margin — with per-aggregate coverage.
+- **Additivity rule (§10)**: only mathematically additive values are summed (premium outlay, estimated capital, defined risk); per-strategy broker margins are NEVER summed into an account figure (`BROKER_MARGIN_NOT_ADDITIVE` when only per-strategy rows exist; the broker-reported account aggregate is preferred).
+- **Allocation ratio (§11/§12)**: `allocatedCapitalRatio` with an explicit denominator — the Paper Trading view defaults to Paper Starting Capital / Paper Available Cash (paper values are never relabeled as broker funds and vice versa); `PAPER_STARTING_CAPITAL | PAPER_AVAILABLE_CASH | BROKER_AVAILABLE_FUNDS | BROKER_MARGIN_CAPACITY` are all supported with labels.
+
+### Risk exposure
+
+- Neutral BUY/SELL and CALL/PUT contract exposure (§18) from CURRENT legs (`qty × lotSize`) — measured in contracts, never labeled bullish/bearish, never a signal.
+
+### Concentration
+
+- Descriptive concentration (§13/§16/§17) by strategy execution, underlying symbol, and expiry, over estimated capital / premium outlay / defined risk bases — execution identity is used internally, never merged by strategy tag (§15); no NIFTY-specific logic (§16); expiry concentration never infers directional risk.
+- **Risk concentration (§14)**: finite defined-risk shares of total defined risk; unlimited-risk strategies are excluded from the finite denominator and surfaced as `unlimitedRiskStrategyCount` + `unlimitedRiskExposure = true` — never a fabricated percentage.
+
+### Limit framework
+
+- Configurable, pure limit rules (§21/§22/§23): `maxEstimatedCapitalAllocationPct`, `maxDefinedRiskPct`, `maxSingleStrategyAllocationPct`, `maxSingleStrategyRiskPct`, `maxUnderlyingConcentrationPct`, `maxOpenStrategies`, `allowUnlimitedRisk` — each returning `{rule, configured, threshold, actual, status, breached, warnings}` with statuses `NOT_CONFIGURED | OK | WARNING | BREACHED | UNAVAILABLE`. Default: **limits disabled** until explicitly configured; a 90% warning band is documented and overrideable.
+- **Monitoring only (§24/§42)**: a breach never blocks paper execution — the market-hours gate, order execution, exit logic, bulk exit, idempotency and broker execution are untouched; missing data never auto-breaches (§22).
+
+### Data quality handling
+
+- Every allocation/risk output carries `AVAILABLE | PARTIAL | UNAVAILABLE`; unavailable = null (never 0), no NaN/Infinity, no fabricated broker margin / estimated capital / max loss / risk / available funds / concentration (§37/§38).
+
+### Phase 6.2 integration
+
+- The Phase 6.2 `analyzeCapital` result is consumed per open strategy as-is (§6) — its basis is normalized (`premium` → PREMIUM, `risk_model` → RISK_MODEL, `max_loss` → MAX_LOSS, else UNAVAILABLE) and its warnings propagate; no duplicate analytical capital formula exists (test 36).
+
+### Phase 6.3 integration
+
+- Portfolio totals feed the Phase 6.3 metrics (e.g. `calculateReturnOnCapital` consumes `totalEstimatedCapital` as its explicit denominator) — Premium ROI / Return on Capital / Return on Margin are never recomputed in this phase (test 37); the allocation table shows per-strategy Estimated Capital, Broker Margin and Defined Risk so the Phase 6.3 Return-on-Risk-Capital denominator is now visible per strategy.
+
+### UI
+
+- **PortfolioAnalyticsPanel** gains a **CAPITAL ALLOCATION & RISK · OPEN STRATEGIES** section (§32): summary cards (Paper Capital / Allocated Capital / Remaining Cash / Broker Margin / Defined Risk / Unlimited-Risk strategies / highest Capital Concentration / highest Risk Concentration), an **ALLOCATION BY STRATEGY** table (Strategy / Open Legs / Estimated Capital / Broker Margin / Defined Risk / Capital % / Risk % — unavailable renders N/A, never 0, unlimited risk renders "UNLIMITED RISK"), descriptive CONCENTRATION chips (by strategy / underlying / expiry), a CONTROL LIMITS note (monitoring only, disabled by default), neutral BUY/SELL/CALL/PUT EXPOSURE chips, a data-quality status badge and structured warnings. Pure display only — no formulas duplicated in the component.
+- Standalone (non-execution) open positions form their own allocation row; the dashboard stays compact and never overcrowds.
+
+### Files changed
+
+- `frontend/app/paper/PortfolioAnalyticsPanel.js` (CAPITAL ALLOCATION & RISK section)
+- `frontend/app/paper/PortfolioAnalyticsPanel.test.js` (2 new UI tests)
+- `docs/PROJECT_STATUS.md` (this update)
+
+### Files created
+
+- `frontend/lib/calculations/capitalAllocation.js` (pure domain module)
+- `frontend/lib/calculations/capitalAllocation.test.js` (40-test matrix)
+
+### Tests
+
+- Frontend: 678/678 tests passed (30 files) — 42 new (40-item Phase 6.4 domain matrix §39 + 2 panel render tests)
+- Backend: 325/325 tests passed (unchanged — no backend code modified)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
+
+### Manual verification required
+
+- Open a paper portfolio with ≥1 defined-risk strategy and verify the ALLOCATION BY STRATEGY rows, concentration chips and data-quality badge; verify unavailable values render N/A (e.g. without a broker session) and that no value is ever shown as a fabricated ₹0; verify the section stays empty-state friendly with no open positions.
+- Phase 6.1 live Upstox verification and Phase 6.3 manual verification remain pending (owner).
+
+### Known limitations
+
+- Control limits are not yet persisted or configurable from the UI (defaults disabled) — persistence of user-scoped settings is deferred until a demonstrated need (§35).
+- Portfolio-level Return on Risk Capital remains N/A (Phase 6.3 contract) — per-strategy defined risk is now visible in the allocation table; an exit-period portfolio denominator is a future-phase decision.
+- Standalone legacy positions (no strategy execution) are grouped as one "Standalone" allocation row.
+
+### Git
+
+No commit. No push. Implementation left in the working tree for the owner's review.
+
+### Deployment
+
+No deployment.
+
+## Next phase objective — Phase 6.5
+
+Phase 6.4 (Capital Allocation / Portfolio Risk Controls) is implemented and pending review. The next milestone is **Phase 6.5 — Portfolio Risk Controls / Optional Execution Guardrails** (optional, explicitly configured execution guardrails built on the Phase 6.4 monitoring-only limit framework). Do NOT implement Phase 6.5 until Phase 6.4 is verified and approved. Phase 6.1 (Upstox broker margin), Phase 6.2 (analytical capital model) and Phase 6.3 (capital efficiency) remain implemented / pending the owner's review.
 
 ## Permanent project constraints
 

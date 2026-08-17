@@ -111,6 +111,47 @@ describe("PortfolioAnalyticsPanel — realized equity curve", () => {
     expect(html).toContain("recharts-responsive-container");
   });
 
+  it("renders the Phase 6.4 CAPITAL ALLOCATION & RISK section for open strategies", () => {
+    const positions = [
+      { positionId: "1", id: "pos-1", symbol: "NIFTY", type: "call", strike: 25000, expiry: "2026-08-18", action: "buy", qty: 1, lotSize: 65, entryPremium: 100, avgEntryPrice: 100, realizedPnl: 0, strategyName: "Bull Call Spread", executionId: "ex-bcs", status: "open", currentLtp: 120, rawLtp: 120, unrealizedPnl: 1300 },
+      { positionId: "2", id: "pos-2", symbol: "NIFTY", type: "call", strike: 25100, expiry: "2026-08-18", action: "sell", qty: 1, lotSize: 65, entryPremium: 80, avgEntryPrice: 80, realizedPnl: 0, strategyName: "Bull Call Spread", executionId: "ex-bcs", status: "open", currentLtp: 95, rawLtp: 95, unrealizedPnl: -975 },
+    ];
+    const capital = {
+      paper_starting_capital: { value: 500000, source: "CALCULATED", status: "available" },
+      paper_available_cash: { value: 480000, source: "CALCULATED", status: "available" },
+      broker_margin: { value: 37503, source: "BROKER_REPORTED", status: "available" },
+      broker_available_funds: { value: null, source: "UNAVAILABLE", status: "unavailable" },
+      strategies: [{ execution_id: "ex-bcs", strategy_tag: "Bull Call Spread", broker_margin: 37503, broker_margin_status: "available" }],
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioAnalyticsPanel, {
+        analytics: analyticsWithCompletedTrade(),
+        positionsWithLtp: positions,
+        capital,
+        loading: false,
+        error: null,
+      })
+    );
+    // Allocation section, strategy row, broker aggregate and status badge.
+    expect(html).toContain("ALLOCATION BY STRATEGY");
+    expect(html).toContain("Bull Call Spread");
+    expect(html).toContain("37,503"); // broker-reported aggregate, never summed per leg
+    expect(html).toContain("1,300"); // analytical risk-basis estimated capital (BCS)
+    expect(html).toContain("AVAILABLE"); // data-quality badge
+  });
+
+  it("renders the Phase 6.4 allocation empty state safely without positions/capital", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(PortfolioAnalyticsPanel, {
+        analytics: analyticsWithCompletedTrade(),
+        positionsWithLtp: [],
+        loading: false,
+        error: null,
+      })
+    );
+    expect(html).toContain("No open positions");
+  });
+
   it("renders the empty curve state safely when no trade has completed", () => {
     const analytics = analyticsWithCompletedTrade();
     analytics.performance.total_completed_trades = 0;

@@ -21,12 +21,40 @@ import {
   normalizeMarkedPosition,
   sortJournalRows,
 } from "@/lib/analytics";
-import { capitalDisplay } from "@/lib/capital";
+import { capitalDisplay, capitalStrategyRows } from "@/lib/capital";
 import { calculateCapitalEfficiencySet, calculatePremiumRoi } from "@/lib/calculations/capitalEfficiency";
+// Phase 6.4: portfolio capital allocation & risk controls (MONITORING ONLY).
+import { openStrategyGroups } from "@/lib/portfolio";
+import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
+import { analyzeCapital } from "@/lib/calculations/analyticalCapital";
+import {
+  calculatePortfolioRiskControls,
+  calculateStrategyAllocation,
+} from "@/lib/calculations/capitalAllocation";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
 const dash = (v) => (v == null || Number.isNaN(v) ? "—" : v);
+
+// Phase 6.4 — data-quality badges are neutral status chips (§20/§37), never
+// traffic-light trading signals; unavailable values render N/A, never 0.
+const ALLOC_STATUS_COLORS = { AVAILABLE: C.green, PARTIAL: C.gold, UNAVAILABLE: C.faint };
+const ALLOC_WARNING_LABELS = {
+  UNLIMITED_RISK: "Unlimited-risk strategy present",
+  MIXED_EXPIRY_APPROXIMATION: "Mixed-expiry structure · defined risk unavailable",
+  PARTIAL_COVERAGE: "Partial coverage · some values unavailable",
+  BROKER_MARGIN_NOT_ADDITIVE: "Per-strategy broker margins are never summed",
+  BROKER_MARGIN_AGGREGATE_USED: "Broker margin is the broker-reported aggregate",
+  NO_OPEN_STRATEGIES: "No open strategies",
+  INVALID_DENOMINATOR: "Invalid allocation denominator",
+  MISSING_DENOMINATOR: "Allocation denominator unavailable",
+};
+const ALLOC_BASIS_LABELS = {
+  PREMIUM: "Premium basis",
+  RISK_MODEL: "Risk basis · defined loss",
+  MAX_LOSS: "Max-loss basis",
+  UNAVAILABLE: "Basis unavailable",
+};
 
 function Metric({ label, value, color = C.text, hint }) {
   return (
@@ -92,6 +120,77 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
     }
     return map;
   }, [analytics]);
+
+  // Phase 6.4 — CAPITAL ALLOCATION & RISK (MONITORING ONLY). Built from the
+  // server-authoritative OPEN positions (CURRENT remaining quantity, §26),
+  // the Phase 6.2 analytical capital result per open strategy (§6 — never
+  // recomputed), and broker margin ONLY as BROKER_REPORTED (§7/§10 — the
+  // account aggregate is preferred; per-strategy rows are never summed).
+  // Limits default to DISABLED until explicitly configured (§21).
+  const allocationView = useMemo(() => {
+    const groups = openStrategyGroups(positionsWithLtp ?? []);
+    const brokerByExecution = new Map(capitalStrategyRows(capD.strategies).map((r) => [r.executionId, r]));
+    const strategies = groups.map((g) => {
+      const legs = g.positions.map((p) => ({
+        action: p.action,
+        type: p.type,
+        strike: p.strike,
+        expiry: p.expiry,
+        symbol: p.symbol,
+        qty: p.qty,
+        price: p.entryPremium,
+        lotSize: p.lotSize,
+      }));
+      const lotSize = g.positions[0]?.lotSize ?? 1;
+      const multiplier = 1;
+      let calc = null;
+      try {
+        calc = calculateStrategy(legs, { lotSize, multiplier });
+      } catch {
+        calc = null;
+      }
+      const brokerRow = brokerByExecution.get(g.executionId);
+      const brokerMargin = brokerRow?.brokerMarginStatus === "available" ? brokerRow.brokerMargin : null;
+      return calculateStrategyAllocation({
+        executionId: g.executionId,
+        strategyTag: g.strategyName,
+        positions: g.positions,
+        legs,
+        estimatedCapital: analyzeCapital(legs, { lotSize, multiplier }),
+        maxLoss: calc?.maxLoss ?? null,
+        maxLossUnlimited: calc?.maxLossUnlimited === true,
+        payoffMode: calc?.payoffMode ?? "same-expiry",
+        brokerMargin,
+        brokerMarginSource: brokerMargin == null ? null : "BROKER_REPORTED",
+        premiumOutlay: null,
+      });
+    });
+    const paperStarting = capD.paperStartingCapital.value;
+    const paperAvailable = capD.paperAvailableCash.value;
+    const brokerAgg = capD.brokerMargin.source === "BROKER_REPORTED" ? capD.brokerMargin.value : null;
+    const brokerFunds = capD.brokerAvailableFunds.source === "BROKER_REPORTED" ? capD.brokerAvailableFunds.value : null;
+    return calculatePortfolioRiskControls({
+      strategies,
+      paperStartingCapital: paperStarting,
+      paperAvailableCash: paperAvailable,
+      brokerAvailableFunds: brokerFunds,
+      brokerMarginAggregate: brokerAgg,
+      brokerMarginSource: brokerAgg == null ? null : "BROKER_REPORTED",
+      limits: {}, // Phase 6.4: limits disabled until explicitly configured
+    });
+  }, [positionsWithLtp, capD]);
+
+  const hasOpenPositions = (positionsWithLtp ?? []).length > 0;
+  // Allocation-table rows enriched with each strategy's capital/risk share.
+  const allocRows = useMemo(() => {
+    const capPct = new Map((allocationView.concentration?.byStrategy?.items ?? []).map((i) => [i.key, i.concentrationPct]));
+    const riskPct = new Map((allocationView.concentration?.byRisk?.items ?? []).map((i) => [i.key, i.concentrationPct]));
+    return (allocationView.allocation?.strategies ?? []).map((s) => {
+      const key = s.executionId ?? "standalone";
+      return { ...s, capitalPct: capPct.get(key) ?? null, riskPct: riskPct.get(key) ?? null };
+    });
+  }, [allocationView]);
+  const allocWarnings = (allocationView.warnings ?? []).map((w) => ALLOC_WARNING_LABELS[w] ?? w);
 
   if (loading && !analytics) {
     return (
@@ -166,8 +265,148 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
           color={ce.returnOnMargin.value == null ? C.faint : pnlColor(ce.returnOnMargin.value)}
           hint={ce.returnOnMargin.value == null ? "N/A — broker margin unavailable" : `return on broker-reported margin · ₹${fmtIN(ce.returnOnMargin.denominator, 2)}`}
         />
-        <Metric label="Return on Risk Capital" value="N/A" color={C.faint} hint="needs per-strategy defined max loss (Phase 6.4)" />
+        <Metric label="Return on Risk Capital" value="N/A" color={C.faint} hint="per-strategy defined max loss is shown below in CAPITAL ALLOCATION & RISK" />
       </div>
+
+      {/* Phase 6.4: capital allocation & risk (monitoring only) */}
+      <div style={{ ...sectionTitle, marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+        <span>Capital allocation &amp; risk · open strategies</span>
+        {hasOpenPositions && (
+          <span
+            title="Data-quality state — monitoring only, never a trading signal"
+            style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.6, color: ALLOC_STATUS_COLORS[allocationView.status] ?? C.faint, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px" }}
+          >
+            {allocationView.status}
+          </span>
+        )}
+      </div>
+      {!hasOpenPositions ? (
+        <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0 10px" }}>
+          No open positions — capital allocation and portfolio risk are computed from currently open positions only.
+        </div>
+      ) : (
+        <>
+          {/* §20 summary cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
+            <Metric label="Paper Capital" value={`₹${fmtIN(allocationView.allocation.paperStartingCapital ?? 0, 2)}`} hint="paper starting capital" />
+            <Metric
+              label="Allocated Capital"
+              value={allocationView.allocation.totalEstimatedCapital == null ? "N/A" : `₹${fmtIN(allocationView.allocation.totalEstimatedCapital, 2)}`}
+              color={allocationView.allocation.totalEstimatedCapital == null ? C.faint : C.gold}
+              hint="estimated capital · analytical"
+            />
+            <Metric label="Remaining Cash" value={allocationView.allocation.paperAvailableCash == null ? "N/A" : `₹${fmtIN(allocationView.allocation.paperAvailableCash, 2)}`} hint="paper available cash" />
+            <Metric
+              label="Broker Margin"
+              value={allocationView.allocation.brokerMargin == null ? "Unavailable" : `₹${fmtIN(allocationView.allocation.brokerMargin, 2)}`}
+              color={allocationView.allocation.brokerMargin == null ? C.faint : C.gold}
+              hint="broker-reported aggregate · never summed per strategy"
+            />
+            <Metric label="Defined Risk" value={allocationView.allocation.totalDefinedRisk == null ? "N/A" : `₹${fmtIN(allocationView.allocation.totalDefinedRisk, 2)}`} hint="finite open risk · same-expiry only" />
+            <Metric label="Unlimited-Risk" value={allocationView.unlimitedRiskStrategyCount ?? 0} hint="open strategies with open-ended risk" />
+            <Metric
+              label="Cap. Concentration"
+              value={allocationView.concentration.byStrategy.highest?.concentrationPct == null ? "N/A" : `${allocationView.concentration.byStrategy.highest.concentrationPct.toFixed(1)}%`}
+              hint="highest estimated-capital share · descriptive"
+            />
+            <Metric
+              label="Risk Concentration"
+              value={allocationView.concentration.byRisk.highest?.concentrationPct == null ? "N/A" : `${allocationView.concentration.byRisk.highest.concentrationPct.toFixed(1)}%`}
+              hint="highest defined-risk share · descriptive"
+            />
+          </div>
+
+          {/* §19 allocation table — one logical unit per open strategy execution */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.7, color: C.muted, margin: "6px 0 6px" }}>ALLOCATION BY STRATEGY</div>
+          {allocRows.length === 0 ? (
+            <div style={{ fontSize: 11.5, color: C.faint, padding: "4px 0 8px" }}>No open strategy executions.</div>
+          ) : (
+            <div style={{ overflowX: "auto", marginBottom: 10 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead>
+                  <tr style={{ color: C.muted, fontSize: 9.5, textAlign: "left" }}>
+                    <th style={{ padding: "5px 6px" }}>Strategy</th>
+                    <th style={{ padding: "5px 6px" }}>Open Legs</th>
+                    <th style={{ padding: "5px 6px" }}>Estimated Capital</th>
+                    <th style={{ padding: "5px 6px" }}>Broker Margin</th>
+                    <th style={{ padding: "5px 6px" }}>Defined Risk</th>
+                    <th style={{ padding: "5px 6px" }}>Capital %</th>
+                    <th style={{ padding: "5px 6px" }}>Risk %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allocRows.map((s) => (
+                    <tr key={s.executionId ?? "standalone"} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td style={{ padding: "5px 6px", fontWeight: 700 }}>{s.strategyTag}</td>
+                      <td style={{ padding: "5px 6px" }}>{s.openPositions}</td>
+                      <td style={{ padding: "5px 6px", color: s.estimatedCapital == null ? C.faint : C.text }}>
+                        {s.estimatedCapital == null ? "N/A" : `₹${fmtIN(s.estimatedCapital, 2)}`}
+                        {s.estimatedCapital != null && <div style={{ fontSize: 9, color: C.faint }}>{ALLOC_BASIS_LABELS[s.capitalBasis] ?? s.capitalBasis}</div>}
+                      </td>
+                      <td style={{ padding: "5px 6px", color: s.brokerMargin == null ? C.faint : C.text }}>{s.brokerMargin == null ? "N/A" : `₹${fmtIN(s.brokerMargin, 2)}`}</td>
+                      <td style={{ padding: "5px 6px" }}>
+                        {s.unlimitedRisk ? (
+                          <span title="Open-ended risk — never converted to a fabricated rupee figure" style={{ fontSize: 9.5, fontWeight: 700, color: C.gold }}>UNLIMITED RISK</span>
+                        ) : s.definedRisk == null ? (
+                          <span style={{ color: C.faint }}>N/A</span>
+                        ) : (
+                          `₹${fmtIN(s.definedRisk, 2)}`
+                        )}
+                      </td>
+                      <td style={{ padding: "5px 6px", color: s.capitalPct == null ? C.faint : C.text }}>{s.capitalPct == null ? "N/A" : `${s.capitalPct.toFixed(1)}%`}</td>
+                      <td style={{ padding: "5px 6px", color: s.riskPct == null ? C.faint : C.text }}>{s.riskPct == null ? "N/A" : `${s.riskPct.toFixed(1)}%`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* §13/§16/§17 concentration — descriptive, never directional */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.7, color: C.muted, margin: "6px 0 6px" }}>CONCENTRATION · DESCRIPTIVE</div>
+          {[
+            ["By strategy · estimated capital", allocationView.concentration.byStrategy.items],
+            ["By underlying", allocationView.concentration.byUnderlying.items],
+            ["By expiry", allocationView.concentration.byExpiry.items],
+          ].map(([label, items]) => (
+            <div key={label} style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 9.5, color: C.faint, marginBottom: 3 }}>{label}</div>
+              {items.length === 0 ? (
+                <span style={{ fontSize: 10, color: C.faint }}>—</span>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {items.map((i) => (
+                    <span key={`${label}-${i.key}`} style={{ fontSize: 10, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 9px" }}>
+                      {i.key} · {i.concentrationPct == null ? "—" : `${i.concentrationPct.toFixed(1)}%`}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          {/* §21–§24 control limits — monitoring only, defaults disabled */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.7, color: C.muted, margin: "6px 0 6px" }}>CONTROL LIMITS · MONITORING ONLY</div>
+          <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.5 }}>
+            Limits are disabled until explicitly configured. Phase 6.4 never blocks paper execution — limits are control visibility only.
+          </div>
+
+          {/* §18 exposure — neutral measurement, never bullish/bearish */}
+          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.7, color: C.muted, margin: "8px 0 6px" }}>EXPOSURE · CONTRACTS</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <span style={{ fontSize: 10, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 9px" }}>BUY {allocationView.exposure.buyExposure}</span>
+            <span style={{ fontSize: 10, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 9px" }}>SELL {allocationView.exposure.sellExposure}</span>
+            <span style={{ fontSize: 10, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 9px" }}>CALL {allocationView.exposure.callExposure}</span>
+            <span style={{ fontSize: 10, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 9px" }}>PUT {allocationView.exposure.putExposure}</span>
+          </div>
+
+          {allocWarnings.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 10, color: C.gold, lineHeight: 1.5 }}>
+              ⚠️ {allocWarnings.join(" · ")}
+            </div>
+          )}
+        </>
+      )}
 
       {/* Performance */}
       <div style={sectionTitle}>Performance · completed trades</div>
