@@ -21,6 +21,8 @@ import {
   normalizeMarkedPosition,
   sortJournalRows,
 } from "@/lib/analytics";
+import { capitalDisplay } from "@/lib/capital";
+import { calculateCapitalEfficiencySet, calculatePremiumRoi } from "@/lib/calculations/capitalEfficiency";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
@@ -41,7 +43,7 @@ const pnlColor = (v) => (v == null ? C.muted : v >= 0 ? C.green : C.red);
 const fmtPnl = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`);
 const fmtPct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`);
 
-export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, loading, error }) {
+export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, capital, loading, error }) {
   const [journalSort, setJournalSort] = useState("date");
 
   const d = useMemo(() => analyticsDisplay(analytics), [analytics]);
@@ -55,6 +57,41 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
   const conc = useMemo(() => concentration(marked), [marked]);
   const exposure = useMemo(() => markedExposure(marked), [marked]);
   const marksAvailable = marked.some((p) => p.currentLtp != null);
+
+  // Phase 6.3: capital-efficiency metrics (portfolio level, since inception).
+  // Every metric carries its explicit denominator/source; broker margin is
+  // used only when BROKER_REPORTED and available — never estimated, never
+  // paper cash, never an invented aggregate (§15/§25/§28).
+  const capD = useMemo(() => capitalDisplay(capital), [capital]);
+  const ce = useMemo(
+    () =>
+      calculateCapitalEfficiencySet({
+        pnl: summary.realizedPnl,
+        pnlType: "REALIZED",
+        period: "inception",
+        capitalPeriod: "inception",
+        premiumOutlay: capD.premiumOutlay.value,
+        estimatedCapital: { value: capD.estimatedCapital.value, source: capD.estimatedCapital.source, basis: capD.estimatedCapitalBasis },
+        brokerMargin: { value: capD.brokerMargin.value, source: capD.brokerMargin.source, status: capD.brokerMargin.status },
+        maxLoss: null,
+        maxLossUnlimited: false,
+      }),
+    [summary.realizedPnl, capD]
+  );
+  // §29: per-journal-row Premium ROI — premium outlay derived from the row's
+  // own buy-leg fills (fill_price × qty × lot_size), the only journal-level
+  // denominator genuinely available; other denominators stay N/A.
+  const journalRoi = useMemo(() => {
+    const map = new Map();
+    for (const row of analytics?.journal ?? []) {
+      const outlay = (row.legs ?? []).reduce(
+        (s, l) => (l.action === "buy" ? s + Number(l.fill_price ?? 0) * Number(l.quantity ?? 0) * Number(l.lot_size ?? 0) : s),
+        0
+      );
+      map.set(row.execution_id, calculatePremiumRoi({ pnl: row.realized_pnl, premiumOutlay: outlay }));
+    }
+    return map;
+  }, [analytics]);
 
   if (loading && !analytics) {
     return (
@@ -106,6 +143,30 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
         />
         <Metric label="Total P&L" value={fmtPnl(summary.totalPnl)} color={pnlColor(summary.totalPnl)} />
         <Metric label="Return" value={summary.returnPct == null ? "—" : fmtPct(summary.returnPct)} color={pnlColor(summary.returnPct)} />
+      </div>
+
+      {/* Phase 6.3: capital efficiency — denominators explicit, never hidden */}
+      <div style={sectionTitle}>Capital efficiency · since inception</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 14 }}>
+        <Metric
+          label="Premium ROI"
+          value={ce.premiumRoi.value == null ? "N/A" : fmtPct(ce.premiumRoi.value)}
+          color={ce.premiumRoi.value == null ? C.faint : pnlColor(ce.premiumRoi.value)}
+          hint={ce.premiumRoi.value == null ? "N/A — premium outlay unavailable" : `return on premium outlay · ₹${fmtIN(ce.premiumRoi.denominator, 2)}`}
+        />
+        <Metric
+          label="Return on Capital"
+          value={ce.returnOnCapital.value == null ? "N/A" : fmtPct(ce.returnOnCapital.value)}
+          color={ce.returnOnCapital.value == null ? C.faint : pnlColor(ce.returnOnCapital.value)}
+          hint={ce.returnOnCapital.value == null ? "N/A — estimated capital unavailable" : `return on estimated capital · ₹${fmtIN(ce.returnOnCapital.denominator, 2)} · ${String(ce.returnOnCapital.basis ?? "").toUpperCase()}`}
+        />
+        <Metric
+          label="Return on Margin"
+          value={ce.returnOnMargin.value == null ? "N/A" : fmtPct(ce.returnOnMargin.value)}
+          color={ce.returnOnMargin.value == null ? C.faint : pnlColor(ce.returnOnMargin.value)}
+          hint={ce.returnOnMargin.value == null ? "N/A — broker margin unavailable" : `return on broker-reported margin · ₹${fmtIN(ce.returnOnMargin.denominator, 2)}`}
+        />
+        <Metric label="Return on Risk Capital" value="N/A" color={C.faint} hint="needs per-strategy defined max loss (Phase 6.4)" />
       </div>
 
       {/* Performance */}
@@ -253,27 +314,40 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
                 <th style={{ padding: "5px 6px" }}>Entry / Exit</th>
                 <th style={{ padding: "5px 6px" }}>Duration</th>
                 <th style={{ padding: "5px 6px" }}>P&L</th>
+                <th style={{ padding: "5px 6px" }}>Premium ROI</th>
                 <th style={{ padding: "5px 6px" }}>Result</th>
               </tr>
             </thead>
             <tbody>
-              {sortedRows.map((r) => (
-                <tr key={r.executionId} className="paper-row" style={{ borderTop: `1px solid ${C.border}`, verticalAlign: "top" }}>
-                  <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>{r.exitLabel}</td>
-                  <td style={{ padding: "5px 6px", fontWeight: 700 }}>{r.strategy}</td>
-                  <td style={{ padding: "5px 6px", fontSize: 10, color: C.muted }}>
-                    <div>{r.entryLabel} → {r.exitLabel}</div>
-                    <div style={{ marginTop: 2 }}>{r.legs.slice(0, 2).map((l) => l.label).join(" / ")}</div>
-                  </td>
-                  <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>{r.durationLabel ?? "—"}</td>
-                  <td style={{ padding: "5px 6px", fontWeight: 700, color: pnlColor(r.realizedPnl) }}>{fmtPnl(r.realizedPnl)}</td>
-                  <td style={{ padding: "5px 6px" }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 700, color: r.resultColor, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px" }}>
-                      {r.result}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {sortedRows.map((r) => {
+                const premRoi = journalRoi.get(r.executionId);
+                return (
+                  <tr key={r.executionId} className="paper-row" style={{ borderTop: `1px solid ${C.border}`, verticalAlign: "top" }}>
+                    <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>{r.exitLabel}</td>
+                    <td style={{ padding: "5px 6px", fontWeight: 700 }}>{r.strategy}</td>
+                    <td style={{ padding: "5px 6px", fontSize: 10, color: C.muted }}>
+                      <div>{r.entryLabel} → {r.exitLabel}</div>
+                      <div style={{ marginTop: 2 }}>{r.legs.slice(0, 2).map((l) => l.label).join(" / ")}</div>
+                    </td>
+                    <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>{r.durationLabel ?? "—"}</td>
+                    <td style={{ padding: "5px 6px", fontWeight: 700, color: pnlColor(r.realizedPnl) }}>{fmtPnl(r.realizedPnl)}</td>
+                    <td style={{ padding: "5px 6px", fontSize: 10.5 }}>
+                      {premRoi && premRoi.value != null ? (
+                        <span title={`return on premium outlay · ₹${fmtIN(premRoi.denominator, 2)}`} style={{ fontWeight: 700, color: pnlColor(premRoi.value) }}>
+                          {fmtPct(premRoi.value)}
+                        </span>
+                      ) : (
+                        <span style={{ color: C.faint }}>N/A</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "5px 6px" }}>
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: r.resultColor, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "2px 8px" }}>
+                        {r.result}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -22,6 +22,7 @@ import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies
 import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
 import { analyzeCapital } from "@/lib/calculations/analyticalCapital";
+import { calculateReturnOnCapital, calculateReturnOnRiskCapital } from "@/lib/calculations/capitalEfficiency";
 import { calculateScenario, calculateScenarioMatrix } from "@/lib/calculations/scenario";
 import { estimatedBasisLabel } from "@/lib/capital";
 import { calculateStrategyGreeks } from "@/lib/calculations/greekAnalytics";
@@ -1320,6 +1321,7 @@ export default function PaperTradingPage() {
       <PortfolioAnalyticsPanel
         analytics={analytics}
         positionsWithLtp={positionsWithLtp}
+        capital={capital}
         loading={portfolio === null && !portfolioError}
         error={analyticsError}
       />
@@ -2641,6 +2643,32 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
     capital.value == null
       ? "ESTIMATED · UNAVAILABLE"
       : `ESTIMATED · ${(estimatedBasisLabel(capital.basis) ?? "ANALYTICAL").toUpperCase()}`;
+  // Phase 6.3: return metrics for the review. The only strategy-level P&L
+  // figure in the builder is the projected max profit, so these are labeled
+  // AT MAX PROFIT · PROJECTED (never presented as realized P&L). Each metric
+  // carries its explicit denominator and source; nothing is silently mixed,
+  // fabricated or substituted (§27).
+  const reviewReturns = useMemo(() => {
+    const projected = calc.maxProfitUnlimited ? null : calc.maxProfit;
+    return {
+      returnOnCapital: calculateReturnOnCapital({
+        pnl: projected,
+        estimatedCapital: capital.value,
+        basis: capital.basis,
+        unlimited: calc.maxProfitUnlimited,
+        pnlType: "PROJECTED",
+        period: null,
+      }),
+      returnOnRiskCapital: calculateReturnOnRiskCapital({
+        pnl: projected,
+        maxLoss: calc.maxLoss,
+        unlimited: calc.maxLossUnlimited,
+        pnlType: "PROJECTED",
+        period: null,
+      }),
+    };
+  }, [calc.maxProfit, calc.maxProfitUnlimited, calc.maxLoss, calc.maxLossUnlimited, capital.value, capital.basis]);
+  const fmtReviewPct = (v) => (v == null ? "N/A" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`);
   const badge = (label, color, bg, bd) => ({
     padding: "2px 9px",
     borderRadius: 999,
@@ -2736,6 +2764,29 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
             {capital.notes[0]}
           </div>
         )}
+      </div>
+
+      {/* Phase 6.3: returns at max profit (projected — never realized P&L). */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 9.5, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>RETURNS (AT MAX PROFIT · PROJECTED)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "6px 12px" }}>
+          <ReviewMetric
+            label="Return on Capital"
+            value={fmtReviewPct(reviewReturns.returnOnCapital.value)}
+            color={reviewReturns.returnOnCapital.value == null ? C.faint : reviewReturns.returnOnCapital.value >= 0 ? C.green : C.red}
+          />
+          <ReviewMetric
+            label="Return on Risk Capital"
+            value={fmtReviewPct(reviewReturns.returnOnRiskCapital.value)}
+            color={reviewReturns.returnOnRiskCapital.value == null ? C.faint : reviewReturns.returnOnRiskCapital.value >= 0 ? C.green : C.red}
+          />
+        </div>
+        <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.4, marginTop: 2 }}>
+          RETURN ON CAPITAL ÷ ESTIMATED CAPITAL · RETURN ON RISK CAPITAL ÷ DEFINED MAX LOSS · AT MAX PROFIT, NOT REALIZED P&L
+          {reviewReturns.returnOnCapital.warnings.length > 0 && (
+            <span style={{ color: C.gold }}> · {reviewReturns.returnOnCapital.warnings.join(" · ")}</span>
+          )}
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>

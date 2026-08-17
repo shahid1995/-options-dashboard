@@ -4,9 +4,9 @@ _Last updated: 2026-08-17_
 
 ## Current phase
 
-**Phase 6.1 — Upstox Broker Margin Integration**
+**Phase 6.3 — Capital Efficiency & Return Metrics Foundation**
 
-Status: 🔄 **Implemented / Pending Review** (final audit complete — implementation audited against the full Phase 6.1 spec, all automated verification passed, manual broker verification pending)
+Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
 
 ## Overall progress
 
@@ -29,6 +29,8 @@ Status: 🔄 **Implemented / Pending Review** (final audit complete — implemen
 | Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — implemented & committed, pending final market-hours verification |
 | Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
 | Phase 6.2 — Analytical Margin Model | 🔄 Implemented | Frontend analytical capital model — premium/risk bases, scenario capital, Strategy Review CAPITAL section, broker-vs-estimate separation — pending review |
+| Phase 6.3 — Capital Efficiency & Return Metrics | 🔄 Implemented | Source-aware return metrics (Premium ROI, Return on Capital/Margin/Risk Capital, Capital Efficiency) with explicit denominators, Strategy Review + Portfolio Analytics + Journal integration — pending review |
+| Phase 6.4 — Capital Allocation / Portfolio Risk Controls | ⏳ Planned | Not started |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -49,7 +51,9 @@ Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1
 
 The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
 
-Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history — the current working tree is clean apart from this status update.
+Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
+
+Phase 6.3 is implemented in the current working tree (uncommitted): `frontend/lib/calculations/capitalEfficiency.js` + `capitalEfficiency.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` and `frontend/app/paper/page.js` (modified). The project owner commits it from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 
@@ -423,9 +427,38 @@ ChatGPT review: ⏳ pending
 
 Overall: **Implemented / Pending Review**
 
-## Next phase objective — Phase 6.3
+## Phase 6.3 implementation
 
-Phase 6.2 (Analytical Margin Model) is implemented and pending review. The next milestone is **Phase 6.3 — Capital Efficiency / Return on Capital Foundation** (computes the capital-efficiency metrics whose inputs Phase 6.0/6.2 prepared: `{pnl, capital_used, broker_margin, estimated_capital, available}`). Do not implement Phase 6.3 until Phase 6.2 is verified and approved. Phase 6.1 (Upstox broker margin) remains implemented / pending the owner's live broker verification.
+Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+Implemented (canonical, source-aware capital-efficiency analytics ONLY — no signals, no trading methodology, no annualized/CAGR returns, no SPAN calculator, no broker-margin replacement, no changes to Upstox API / MarginProvider / broker margin / broker funds):
+
+- **Pure domain module**: new `frontend/lib/calculations/capitalEfficiency.js` — `calculatePremiumRoi`, `calculateReturnOnCapital`, `calculateReturnOnMargin`, `calculateReturnOnRiskCapital`, `calculateCapitalEfficiency`, `calculateCapitalEfficiencySet`. Deterministic, pure, side-effect free, dependency-light, broker-independent (consumes broker-reported values, never fetches). Reuses existing authoritative sources only (Phase 5.0/5.1 P&L, Phase 6.0 premium_outlay/estimated_capital, Phase 6.1 broker_margin, Phase 6.2 analytical capital / risk / premium bases); no payoff/risk/premium formula is duplicated.
+- **Metric definitions (§1–§2)**: PREMIUM ROI = P&L / Premium Outlay; RETURN ON CAPITAL = P&L / Estimated Capital; RETURN ON MARGIN = P&L / Broker Margin (BROKER_REPORTED only); RETURN ON RISK CAPITAL = P&L / abs(Max Loss) with basis MAX_LOSS / DEFINED RISK (unlimited → null + UNLIMITED_RISK); CAPITAL EFFICIENCY = P&L / an explicitly named denominator (PREMIUM_OUTLAY | ESTIMATED_CAPITAL | BROKER_MARGIN | MAX_LOSS — never auto-selected; missing/invalid type → unavailable + DENOMINATOR_NOT_SPECIFIED). No percentage is ever displayed as a bare "ROI".
+- **Result contract (§5)**: every metric returns `{value, status (available | unavailable | partial), numerator, denominator, denominatorLabel, denominatorSource, basis, pnlType (REALIZED | UNREALIZED | TOTAL | PROJECTED), period, warnings[]}`; value is a finite percentage or null. Zero P&L is a valid 0.0% (never collapsed with unavailable); unavailable = null, never 0, never NaN, never Infinity.
+- **Denominator/source separation (§6/§21–§25)**: null / 0 / negative / NaN / Infinity / unavailable denominators → value null (INVALID_DENOMINATOR / MISSING_DENOMINATOR). No fallbacks in any direction — paper cash never substitutes for broker margin, estimated capital never substitutes for broker margin, max loss never substitutes for premium outlay, etc. Non-BROKER_REPORTED values are rejected as a margin denominator (SOURCE_NOT_BROKER_REPORTED). Broker vs estimate stay independently addressable.
+- **Realized vs unrealized (§13)**: the numerator is always labeled REALIZED / UNREALIZED / TOTAL / PROJECTED; realized P&L is authoritative for closed trades; builder contexts use PROJECTED (at max profit) and are labeled as such, never presented as realized P&L.
+- **Period (§16/§17)**: P&L period must match the capital period; a mismatch returns unavailable + MISMATCHED_PERIOD. No annualization, no CAGR, no time-normalized returns (deferred to a future phase).
+- **Strategy-level (§14/§27)**: Strategy Review gains a RETURNS (AT MAX PROFIT · PROJECTED) section — Return on Capital (÷ estimated capital) and Return on Risk Capital (÷ defined max loss), with explicit denominator captions and warnings; recomputed live on every strategy edit (pure client recompute, no broker API call per edit).
+- **Portfolio-level (§15/§28)**: PortfolioAnalyticsPanel gains a "Capital efficiency · since inception" section — Premium ROI, Return on Capital, Return on Margin (BROKER_REPORTED only) — each card showing its denominator and source; Return on Risk Capital stays N/A until per-strategy defined max loss exists (Phase 6.4); portfolio broker margin is used only as the broker-reported aggregate, never a sum of stale per-strategy snapshots.
+- **Journal (§29)**: completed journal rows add a Premium ROI column (per-row premium outlay derived from the row's own buy-leg fills: fill_price × quantity × lot_size — the only journal-level denominator genuinely available); missing denominators render N/A, never 0%.
+- **Capital-efficiency inputs (§30)**: consumes the Phase 6.0/6.2 input values (premium_outlay, estimated_capital, broker_margin, analytical basis) — no parallel input contract was introduced.
+- No changes to cash ledger, realized/unrealized P&L, positions, execution, exits, payoff/risk/scenario/Greek/IV engines, Upstox API, MarginProvider, or broker margin calculations.
+
+Automated tests (actual):
+
+- Frontend: 636/636 tests passed (29 files) — 36 new in `frontend/lib/calculations/capitalEfficiency.test.js` (the full §31 matrix: Premium ROI 1–6, Return on Capital 7–12, Return on Margin 13–17, Return on Risk Capital 18–21, separation 22–25, period 26–27, portfolio 28–30, numeric safety 31–35, plus no NaN/Infinity leak)
+- Backend: 325/325 tests passed (unchanged — no backend code modified)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+Overall: **Implemented / Pending Review**
+
+## Next phase objective — Phase 6.4
+
+Phase 6.3 (Capital Efficiency & Return Metrics) is implemented and pending review. The next milestone is **Phase 6.4 — Capital Allocation / Portfolio Risk Controls** (per-strategy capital allocation and portfolio risk controls, including the portfolio-level Return on Risk Capital that Phase 6.3 deliberately left N/A). Do NOT implement Phase 6.4 until Phase 6.3 is verified and approved. Phase 6.1 (Upstox broker margin) and Phase 6.2 (analytical capital model) remain implemented / pending the owner's live broker verification and review.
 
 ## Permanent project constraints
 
@@ -449,6 +482,6 @@ Phase 6.2 (Analytical Margin Model) is implemented and pending review. The next 
 
 ## Next action
 
-**User:** Manually verify Phase 5.2 (EXIT STRATEGY closes every leg of one strategy with one confirmation; EXIT ALL closes the whole account only after the double-confirmation modal; missing chain/quote rejects the whole operation with no position closed; a retried request replays the original result; the result banner shows EXIT COMPLETE with counts and realized P&L, and EXIT PARTIALLY COMPLETED lists failed positions; positions/analytics/capital/journal refresh afterwards). Then ChatGPT reviews the working-tree diff. Phase 5.2 remains in the working tree — the project owner commits it from the Changes panel (FreeBuff does not commit or push). After Phase 5.2 (and the pending 6.0/6.1 reviews) are approved, the roadmap continues with Phase 6.2 (Analytical Margin Model).
+**User:** Manually verify Phase 6.3 — Portfolio Analytics shows the "Capital efficiency · since inception" cards with explicit denominators (Premium ROI ÷ premium outlay, Return on Capital ÷ estimated capital, Return on Margin ÷ broker-reported margin; N/A when a denominator is genuinely unavailable — never substituted, never 0%); completed journal rows show a Premium ROI column; Strategy Review shows RETURNS (AT MAX PROFIT · PROJECTED) with Return on Capital and Return on Risk Capital (N/A + UNLIMITED_RISK for unlimited structures); no percentage is ever shown without its denominator. Then ChatGPT reviews the working-tree diff. Phase 6.3 remains in the working tree — the project owner commits it from the Changes panel (FreeBuff does not commit or push).
 
-Also pending: **User:** Manually verify Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges and the "as of" caption during market hours; funds maintenance window shows UNAVAILABLE with the maintenance message; a strategy with 21+ legs or a missing instrument key shows the structured error; duplicate loads reuse the cached broker snapshot). Also complete the pending Phase 6.0 market-hours verification. Then ChatGPT reviews the working-tree diff. Only after approval does Phase 6.2 (Analytical Margin Model) begin. The project owner creates the Phase 6.1 commit/push from the Changes panel — FreeBuff does not commit or push this phase.
+Also pending: **User:** Manually verify Phase 6.2 (Strategy Review CAPITAL section shows Estimated Capital with ESTIMATED · PREMIUM BASIS / RISK BASIS · DEFINED LOSS and Broker Margin as BROKER REPORTED · live refresh not performed in builder; both values stay independent). Also pending Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges during market hours; funds maintenance window shows UNAVAILABLE; duplicate loads reuse the cached broker snapshot) and the Phase 6.0 market-hours verification. Only after Phase 6.3 is approved does Phase 6.4 (Capital Allocation / Portfolio Risk Controls) begin.
