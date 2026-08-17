@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
 import {
   brokerDataCaption,
+  brokerVsEstimateDifference,
   capitalDisplay,
   capitalRows,
   capitalStrategyRows,
@@ -81,6 +82,12 @@ export default function CapitalPanel({ capital, loading, error }) {
   const rocReady = rocInputsAvailable(d.rocInputs);
   const brokerError = useMemo(() => firstBrokerError(d), [d]);
   const brokerCaption = useMemo(() => brokerDataCaption(d), [d]);
+  // Phase 6.2 §18: neutral descriptive difference, ONLY when both numbers are
+  // available. Never labeled Savings/Advantage/Efficiency/Better.
+  const brokerVsEstimate = useMemo(
+    () => brokerVsEstimateDifference(d.brokerMargin.value, d.estimatedCapital.value),
+    [d]
+  );
 
   if (loading && !capital) {
     return (
@@ -127,6 +134,32 @@ export default function CapitalPanel({ capital, loading, error }) {
             (unavailable states are never replaced by estimated capital or paper cash). Paper values are
             paper-account values. Return on Capital is a future metric; only its inputs are prepared.
           </div>
+          {brokerVsEstimate != null && (
+            <div
+              title="Broker-reported whole-strategy margin minus the analytical estimated capital. Descriptive only — never a savings/advantage claim."
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                padding: "7px 10px",
+                marginTop: 8,
+                background: C.surface2,
+                border: `1px solid ${C.border}`,
+                borderRadius: 8,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.text }}>Broker vs Estimate Difference</div>
+                <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.4, marginTop: 1 }}>
+                  BROKER MARGIN − ESTIMATED CAPITAL · DESCRIPTIVE ONLY
+                </div>
+              </div>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text, whiteSpace: "nowrap" }}>
+                {money(brokerVsEstimate)}
+              </div>
+            </div>
+          )}
           {brokerCaption && (
             <div style={{ fontSize: 9.5, color: C.muted, marginTop: 8, letterSpacing: 0.3 }}>
               🕒 {brokerCaption}

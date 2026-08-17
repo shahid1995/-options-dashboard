@@ -28,7 +28,7 @@ Status: 🔄 **Implemented / Pending Review** (final audit complete — implemen
 | Phase 5.2.1 — Active Positions UX, Strategy Filtering, Market Session Awareness & Option Price Precision | 🔄 Implemented | Strategy identity/filtering (strategy_execution_id, never Custom for named strategies), strategy-grouped Active Positions + EXIT STRATEGY/EXIT ALL, segment-aware market sessions (INDEX_DERIVATIVES default, CAS never conflated with index options), NIFTY ₹0.05 option tick normalization at every fill boundary, two-decimal financial display — pending review |
 | Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — implemented & committed, pending final market-hours verification |
 | Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
-| Phase 6.2 — Analytical Margin Model | 🔵 Planned / Blocked | Preparation plan drafted (see below); implementation blocked until Phase 6.1 live broker verification is approved |
+| Phase 6.2 — Analytical Margin Model | 🔄 Implemented | Frontend analytical capital model — premium/risk bases, scenario capital, Strategy Review CAPITAL section, broker-vs-estimate separation — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -393,39 +393,39 @@ Verified manually:
 - Legacy journal leg-close on exits is FIFO at whole-leg granularity: for exotic partial netting across multiple executions of the same instrument, journal legs may close with realized scaled to the covered quantity (position math is exact; the journal is a secondary view).
 - The legacy `/paper/fills` endpoint still writes only the journal tables (not the authoritative layer); it is retained for backward compatibility and superseded by `/paper/executions`.
 
-## Phase 6.2 implementation plan (preparation only — NOT implemented)
+## Phase 6.2 implementation
 
-Status: 🔵 **Planned / Blocked pending Phase 6.1 live broker verification approval.** No application code was modified for Phase 6.2; the working tree contains only this plan + the Phase 6.1 audit status update. Implementation will begin only after the project owner confirms: *"Phase 6.1 live broker verification approved."*
+Status: 🔄 **Implemented / Pending Review** (implementation complete — manual verification pending, ChatGPT review pending)
 
-### Architecture (decision)
+Implemented (ANALYTICAL capital infrastructure ONLY — no SPAN calculator, no broker-margin replacement, no Return on Capital / Margin, no Capital Efficiency Score, no signals, no trading methodology, no real-money execution, no new broker APIs, no new polling):
 
-The analytical capital model is a **frontend pure domain module** that consumes the existing authoritative calculation outputs — it never duplicates payoff/risk math and never calls the broker API:
+- **Analytical capital architecture**: new frontend pure domain module `frontend/lib/calculations/analyticalCapital.js` — `analyzeCapital(legs, {lotSize, multiplier})` + `scenarioCapital(...)` + `capitalEfficiencyInputs(...)`. Deterministic, dependency-light, side-effect free, broker-independent (no network, no DB writes, no Upstox/broker calls). It CONSUMES the existing authoritative engines (`calculateStrategy` → payoff.js/risk.js; `roundOptionPrice` from pricing.js) — no payoff/risk/premium/option-price formula is duplicated.
+- **Result contract**: `{value, source: "ESTIMATED", basis: "premium" | "max_loss" | "risk_model" | "unavailable", status: "available" | "partial" | "unavailable", warnings[], notes[]}`. Unavailable = null (never 0); 0 is a valid estimate; no NaN/Infinity; never fabricated.
+- **Premium basis**: defined-debit strategies → whole-strategy net debit (`calculateStrategy().netTotal`), e.g. Long Call / Long Put; valid for mixed-expiry net-debit (Calendar/Diagonal) — deterministic across expiries.
+- **Risk basis (defined loss)**: same-expiry defined-risk strategies → `abs(maxLoss)` from the authoritative theoretical payoff engine — Bull/Bear spreads, Iron Condor, Butterfly, Long Straddle/Strangle (finite), defined ratios (finite), and Naked Short Put follows the existing Phase 2 S ≥ 0 domain result (defined, no new interpretation).
+- **Unsupported/unlimited handling**: Naked Short Call / Short Straddle / Short Strangle / short ratios with open-ended risk → UNAVAILABLE + `UNLIMITED_RISK`; never a fabricated finite number.
+- **Mixed-expiry handling**: Calendar/Diagonal → premium basis only when net debit is defined; risk basis UNAVAILABLE + `MIXED_EXPIRY_APPROXIMATION`; the engine's own calculation warnings are preserved in `notes` (no silent primary-expiry substitution, no fake same-expiry exactness).
+- **Input validation**: zero legs / zero / negative / fractional quantity / invalid option type / invalid action / missing premium / missing lot size / invalid strike / malformed expiry → UNAVAILABLE with structured warnings (`INVALID_LEG`, `MISSING_PREMIUM`, `UNSUPPORTED_STRUCTURE`, `INSUFFICIENT_RISK_MODEL`); no exceptions leak to the UI.
+- **Scenario capital**: `scenarioCapital(...)` operates on scenario-modified legs, produces the same contract, tick-aligns scenario premiums via the canonical ₹0.05 `roundOptionPrice` (capital totals are NEVER tick-rounded), and never calls the broker / paper endpoints.
+- **Strategy Review UI**: the review panel gains a CAPITAL section — Premium Outlay (CALCULATED), Estimated Capital (ESTIMATED · PREMIUM BASIS / ESTIMATED · RISK BASIS · DEFINED LOSS / ESTIMATED · UNAVAILABLE + warning codes), Broker Margin (BROKER REPORTED · live refresh not performed in the builder) — both figures stay independently visible; an unavailable broker margin is never replaced by the estimate. Recomputes live on every strike/action/quantity/option-type/expiry/leg change (pure client recompute, no polling, no broker call per edit).
+- **Broker separation (§2/§18)**: analytical estimates are `ESTIMATED` only; broker margin stays BROKER_REPORTED (Phase 6.1 authoritative); `GET /paper/capital` contract is untouched. New neutral "Broker vs Estimate Difference" (= broker margin − estimated capital, only when both exist) in the Capital Panel — descriptive only, never "Savings/Advantage/Efficiency/Better".
+- **Future capital-efficiency inputs**: `capitalEfficiencyInputs()` returns `{pnl, capital_used, broker_margin, estimated_capital, available}` — no Return on Capital / Return on Margin / Capital Efficiency computed (Phase 6.3).
+- No changes to cash ledger, realized/unrealized P&L, positions, execution, exits, `capital_used` semantics, payoff/risk/scenario/Greek/IV engines, or the backend.
 
-- New `frontend/lib/calculations/analyticalCapital.js` — `analyzeCapital(legs, {lotSize, multiplier})` + `scenarioCapital(...)`. It consumes `calculateStrategy()` (netTotal, maxLoss, maxLossUnlimited, payoffMode, calculationWarnings) and the canonical ₹0.05 tick helper (`roundOptionPrice`) — no new formulas, no Upstox import.
-- Contract (§4): `{ value, source: "ESTIMATED" | "CALCULATED", basis: "premium" | "max_loss" | "risk_model" | "unavailable", status: "available" | "partial" | "unavailable", warnings: [] }`.
-- Bases: **PREMIUM** (defined-debit strategies → whole-strategy net debit, reusing `netTotal`; valid even for mixed-expiry); **MAX_LOSS / RISK_MODEL** (defined-risk same-expiry strategies → whole-strategy worst-case defined loss from `maxLoss`, labeled "RISK BASIS · DEFINED LOSS"); **UNAVAILABLE** otherwise with structured warnings (`UNLIMITED_RISK`, `MIXED_EXPIRY_APPROXIMATION`, `MISSING_PREMIUM`, `INVALID_LEG`, `UNSUPPORTED_STRUCTURE`, `INSUFFICIENT_RISK_MODEL`).
-- Rules by structure (§27): Long Call / Long Put → PREMIUM (net debit); Bull Call Spread / Bear Put Spread / Bull Put Spread / Bear Call Spread / Iron Condor / Butterfly / Long Straddle / Long Strangle / defined ratios → MAX_LOSS/RISK_MODEL where same-expiry and loss is finite; Naked Short Call / Short Straddle / Short Strangle / short ratios → UNAVAILABLE + UNLIMITED_RISK (naked short put is classified defined under the existing Phase 2 S ≥ 0 domain rule — max loss at S=0 — same as the current engine); Calendar / Diagonal → premium basis only if net debit, risk basis UNAVAILABLE + MIXED_EXPIRY_APPROXIMATION. No trading recommendations.
-- **Broker separation**: `analyticalCapital.js` never imports `broker_margin.py`/Upstox; broker margin stays BROKER_REPORTED (Phase 6.1) and is never replaced/overridden by the estimate. A test asserts the analytical module performs no broker call.
-- **Persisted portfolio**: `GET /paper/capital` keeps its Phase 6.0/6.1 contract unchanged (premium-basis estimated capital + broker-reported margin). Adding a server-side risk-basis mirror for open credit/naked strategies would duplicate the client-side Phase 2 engine and is deferred — flagged as an explicit decision for the owner at implementation time.
-- **UI (§13/§14/§15/§25/§26)**: Strategy Review gains a CAPITAL section — Premium Outlay (CALCULATED), Estimated Capital (ESTIMATED · basis badge), Broker Margin (BROKER REPORTED · unavailable in the builder without a live refresh); both stay visible, never one hiding the other; optional neutral "Broker vs Estimate Difference" row (never "Savings/Efficiency"); estimated capital updates immediately as the user edits quantity/strike/leg/buy-sell/expiry (pure client recompute); no ROI / Return on Capital anywhere.
-- **capital_used / ROC (§17/§18)**: untouched — Phase 6.0 semantics preserved; only `{pnl, capital_used, broker_margin, estimated_capital, available}` inputs are prepared for Phase 6.3.
+Automated tests (actual):
 
-### Files (when implementation is authorized)
+- Frontend: 600/600 tests passed (28 files) — 43 new in `frontend/lib/calculations/analyticalCapital.test.js` (the full §23 matrix: premium/risk bases per structure, unlimited-risk safety, mixed-expiry warnings, invalid inputs, zero-vs-unavailable, no NaN/Infinity, quantity/lot/multiplier scaling, strategy mutation, scenario capital, no broker API call, broker/estimate separation, tick compatibility, two-decimal contract, capital-efficiency inputs)
+- Backend: 325/325 tests passed (unchanged — no backend code modified)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
 
-- New: `frontend/lib/calculations/analyticalCapital.js`, `frontend/lib/calculations/analyticalCapital.test.js`
-- Edited: `frontend/app/paper/page.js` (CAPITAL section in review + live recompute), `frontend/lib/capital.js` (basis labels, difference helper), possibly `frontend/app/paper/CapitalPanel.js` (difference row). No backend application-code changes unless the owner approves the risk-basis mirror.
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
 
-### Tests (§29)
+Overall: **Implemented / Pending Review**
 
-Deterministic unit tests for: defined-debit premium basis · defined-risk max-loss basis · credit unsupported → unavailable · naked unlimited → unavailable · mixed-expiry warning · missing data · invalid inputs · zero vs unavailable · no NaN/Infinity · whole-strategy multi-leg analysis (never per-leg sums) · lot-size scaling · quantity scaling · strategy mutation (strike/qty/action changes update the estimate) · scenario capital · reuse of existing payoff/risk outputs · no broker API call · broker-vs-estimate separation · NIFTY ₹0.05 tick compatibility · two-decimal display. Regression: all existing suites stay green (payoff/risk/pricing/scenario/Greek/IV/paper execution/bulk exit/filtering/sessions/tick/capital/broker margin).
+## Next phase objective — Phase 6.3
 
-### Git / deployment
-
-Implementation (once authorized) stays in the working tree — no commit, no push, no deploy.
-
-## Next phase objective — Phase 6.2
-
-Phase 6.1 (Upstox broker margin integration) is implemented and pending review. The next milestone is **Phase 6.2 — Analytical Margin Model** (model-derived estimated margin for strategies where premium-basis and broker-reported figures are not appropriate, e.g. credit/naked structures — kept strictly separate from BROKER_REPORTED figures). A preparation plan exists above. Do not implement Phase 6.2 until Phase 6.1 is verified and approved.
+Phase 6.2 (Analytical Margin Model) is implemented and pending review. The next milestone is **Phase 6.3 — Capital Efficiency / Return on Capital Foundation** (computes the capital-efficiency metrics whose inputs Phase 6.0/6.2 prepared: `{pnl, capital_used, broker_margin, estimated_capital, available}`). Do not implement Phase 6.3 until Phase 6.2 is verified and approved. Phase 6.1 (Upstox broker margin) remains implemented / pending the owner's live broker verification.
 
 ## Permanent project constraints
 
