@@ -37,7 +37,8 @@ function Metric({ label, value, color = C.text, hint }) {
 }
 
 const pnlColor = (v) => (v == null ? C.muted : v >= 0 ? C.green : C.red);
-const fmtPnl = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v))}`);
+// Phase 5.2.1: financial values always display with two decimals (₹3,169.00).
+const fmtPnl = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`);
 const fmtPct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`);
 
 export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, loading, error }) {
@@ -93,9 +94,9 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
       {/* Portfolio summary */}
       <div style={sectionTitle}>Portfolio summary</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 14 }}>
-        <Metric label="Starting capital" value={`₹${fmtIN(summary.startingCapital ?? 0)}`} />
-        <Metric label="Available cash" value={summary.availableCash == null ? "—" : `₹${fmtIN(summary.availableCash)}`} />
-        <Metric label="Open exposure" value={`₹${fmtIN(summary.investedValue ?? 0)}`} hint="entry value · not margin" />
+        <Metric label="Starting capital" value={`₹${fmtIN(summary.startingCapital ?? 0, 2)}`} />
+        <Metric label="Available cash" value={summary.availableCash == null ? "—" : `₹${fmtIN(summary.availableCash, 2)}`} />
+        <Metric label="Open exposure" value={`₹${fmtIN(summary.investedValue ?? 0, 2)}`} hint="entry value · not margin" />
         <Metric label="Realized P&L" value={fmtPnl(summary.realizedPnl)} color={pnlColor(summary.realizedPnl)} />
         <Metric
           label="Unrealized P&L"
@@ -155,12 +156,12 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
             <LineChart data={curve}>
               <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
               <XAxis dataKey="date" stroke={C.faint} fontSize={10} tickFormatter={(v) => v.slice(5)} />
-              <YAxis stroke={C.faint} fontSize={10} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={72} />
+              <YAxis stroke={C.faint} fontSize={10} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} width={72} />
               <ReferenceLine y={summary.startingCapital ?? 0} stroke={C.faint} strokeDasharray="4 2" />
               <Tooltip
                 contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11 }}
                 labelFormatter={(v) => v}
-                formatter={(v, name) => [name === "equity" ? `₹${fmtIN(v)}` : v, name === "equity" ? "Equity" : "Cumulative P&L"]}
+                formatter={(v, name) => [name === "equity" ? `₹${fmtIN(v, 2)}` : v, name === "equity" ? "Equity" : "Cumulative P&L"]}
               />
               <Line type="monotone" dataKey="equity" stroke={C.gold} strokeWidth={2} dot={{ r: 2 }} name="equity" />
             </LineChart>
@@ -212,9 +213,9 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, l
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
-            <Metric label="Long exposure" value={`₹${fmtIN(exposure.longExposure ?? 0)}`} color={C.green} hint="mark value · not margin" />
-            <Metric label="Short exposure" value={`₹${fmtIN(exposure.shortExposure ?? 0)}`} color={C.red} hint="mark value · not margin" />
-            <Metric label="Total exposure" value={`₹${fmtIN(exposure.totalExposure ?? 0)}`} color={C.gold} />
+            <Metric label="Long exposure" value={`₹${fmtIN(exposure.longExposure ?? 0, 2)}`} color={C.green} hint="mark value · not margin" />
+            <Metric label="Short exposure" value={`₹${fmtIN(exposure.shortExposure ?? 0, 2)}`} color={C.red} hint="mark value · not margin" />
+            <Metric label="Total exposure" value={`₹${fmtIN(exposure.totalExposure ?? 0, 2)}`} color={C.gold} />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {conc.items.map((i) => (

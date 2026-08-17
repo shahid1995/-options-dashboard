@@ -1,10 +1,10 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-16_
+_Last updated: 2026-08-17_
 
 ## Current phase
 
-**Phase 6.1 — Broker Margin Integration (Upstox)**
+**Phase 5.2.1 — Active Positions UX, Strategy Filtering, Market Session Awareness & Option Price Precision**
 
 Status: 🔄 **Implemented / Pending Review**
 
@@ -25,6 +25,7 @@ Status: 🔄 **Implemented / Pending Review**
 | Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete | Server-authoritative orders/positions/cash/P&L, idempotency, netting, exits, portfolio UI |
 | Phase 5.1 — Portfolio & Journal Analytics | ✅ Complete | Server-authoritative portfolio analytics: summary, performance, realized equity curve, drawdown, strategy groups, grouped journal |
 | Phase 5.2 — Bulk Paper Position Exit & Exit-All Safety | 🔄 Implemented | Server-authoritative EXIT STRATEGY + EXIT ALL, atomic pre-validation, idempotent replay, strategy-grouped outcomes, double-confirmation UI — pending review |
+| Phase 5.2.1 — Active Positions UX, Strategy Filtering, Market Session Awareness & Option Price Precision | 🔄 Implemented | Strategy identity/filtering (strategy_execution_id, never Custom for named strategies), strategy-grouped Active Positions + EXIT STRATEGY/EXIT ALL, segment-aware market sessions (INDEX_DERIVATIVES default, CAS never conflated with index options), NIFTY ₹0.05 option tick normalization at every fill boundary, two-decimal financial display — pending review |
 | Phase 6.0 — Capital & Margin Foundation | 🔄 Implemented | Source-classified capital figures, broker margin abstraction, estimated capital (premium basis), capital summary — implemented & committed, pending final market-hours verification |
 | Phase 6.1 — Broker Margin Integration (Upstox) | 🔄 Implemented | Real Upstox funds + whole-strategy margin APIs behind MarginProvider, broker source/status/timestamp, caching — pending review |
 | Phase 6.2 — Analytical Margin Model | 🔵 Next | Not started |
@@ -47,6 +48,30 @@ Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1
 The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
 
 The Phase 6.1 implementation is NOT committed yet: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
+
+The Phase 5.2.1 implementation is also NOT committed: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
+
+## Phase 5.2.1 implementation
+
+Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+
+Implemented (platform/data/UX feature — no trading methodology, no signals):
+
+- **Strategy identity**: `GET /paper/positions` and position exits now expose `strategy_tag` (batched from `StrategyExecution`), so Long Seagull / Bull Put Spread / Bull Condor never display as "Custom"; the authoritative relationship stays `strategy_execution_id` → `StrategyExecution.strategy_tag`; legacy/missing executions fall back to "Custom"
+- **Active-position invariant**: the backend `get_open_positions` enforces status == open AND net_quantity != 0 — a zero-quantity position never appears as Active
+- **Strategy filter**: `ALL OPEN POSITIONS (N)` dropdown above Active Positions, built dynamically from the currently-open strategy executions with leg counts; selection filters by `strategy_execution_id` only; strategy-grouped cards show legs, ≈value and unrealized P&L with EXIT STRATEGY; EXIT ALL remains account-wide
+- **Segment-aware market sessions**: `app/services/market_status.py` refactored to explicit, configurable per-segment session definitions (EQUITY_CASH, EQUITY_DERIVATIVES, INDEX_DERIVATIVES, STOCK_DERIVATIVES, CURRENCY, COMMODITY); status carries `segment` + `session_state` (OPEN | CLOSING_AUCTION | TRANSITION | CLOSED | UNKNOWN); the execution gate resolves the instrument's own segment feed (INDEX_DERIVATIVES → NSE_FO) so a cash-segment SEBI closing auction can never enable index-option execution; Upstox remains authoritative, local calendar fallback never invents sessions; badge shows session states (CLOSING AUCTION / TRANSITION) while the backend re-validates at execution time
+- **Option tick-size normalization**: canonical `round_option_price` (backend) / `roundOptionPrice` (frontend) — NIFTY index options use the ₹0.05 tick; authoritative fill prices (strategy entry, single exit, bulk exit) are tick-aligned; raw broker LTPs used for analytics are never overwritten (kept as `rawLtp`); frontend position marks use the tick-aligned tradable price so fill and display boundaries agree
+- **Two-decimal financial display**: paper-trading UI (LTP, entry price, premiums, P&L, cash, strategy value, estimated capital, exposure) renders with two decimals via the existing Indian `fmtIN` helper; integer fields (lot qty, strike, counts, expiry) keep natural formatting; no ₹0.05 rounding is applied to spot/IV/Greeks/P&L totals
+
+Automated tests (actual):
+
+- Frontend: 557/557 tests passed (27 files) — new pricing tests (tick rounding + two-decimal), strategy filter/grouping tests, session-awareness tests
+- Backend: 325/325 tests passed — new tick-rounding tests, strategy-tag tests, segment/session tests (cash CAS never enables index-option execution, F&O closing is TRANSITION not auction, gate authoritative)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
 
 ## Phase 4.2 implementation
 

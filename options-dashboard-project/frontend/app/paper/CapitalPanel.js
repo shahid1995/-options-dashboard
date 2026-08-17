@@ -13,9 +13,10 @@ import {
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
 
-const money = (v) => (v == null ? "—" : `₹${fmtIN(v)}`);
+// Phase 5.2.1: financial values always display with two decimals (₹8,420.00).
+const money = (v) => (v == null ? "—" : `₹${fmtIN(v, 2)}`);
 const fmtSigned = (v) =>
-  v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v))}`;
+  v == null ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`;
 
 function Row({ label, value, source, status, note }) {
   const unavailable = value == null;

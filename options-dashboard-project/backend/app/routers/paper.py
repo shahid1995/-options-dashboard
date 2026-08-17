@@ -45,6 +45,7 @@ from app.services.paper_execution import (
     get_portfolio,
     reconcile,
     reset_portfolio,
+    round_option_price,
 )
 from app.services.upstox import UpstoxError
 
@@ -78,10 +79,20 @@ async def require_market_open(access_token: str) -> None:
 
 
 @router.get("/market-status", response_model=MarketStatusOut)
-async def market_status(session_id: str | None = Depends(get_session_id)):
-    """Current NSE market status for the paper-trading UI badge."""
+async def market_status(
+    session_id: str | None = Depends(get_session_id),
+    segment: str = "INDEX_DERIVATIVES",
+):
+    """Current market status for the paper-trading UI badge (segment-aware).
+
+    Phase 5.2.1: the status is resolved for ONE segment (default
+    INDEX_DERIVATIVES — the product's NIFTY index-options segment), so a
+    cash-segment closing auction can never be mistaken for index-options
+    trading. The badge is informational; the execution gate re-resolves the
+    same segment at the exact moment of execution.
+    """
     _, access_token = require_session(session_id)
-    status = await get_market_status(access_token)
+    status = await get_market_status(access_token, segment=segment)
     return MarketStatusOut(
         status=status.status,
         source=status.source,
@@ -89,6 +100,10 @@ async def market_status(session_id: str | None = Depends(get_session_id)):
         checked_at=status.checked_at,
         message=status.message,
         open=status.status == "open",
+        segment=status.segment,
+        session_state=status.session_state,
+        timezone=status.timezone,
+        trading_allowed=status.trading_allowed,
     )
 
 
@@ -169,7 +184,11 @@ async def resolve_market_prices(access_token: str, symbol: str, legs) -> dict:
                         f"Market data unavailable for {symbol} {leg.strike_price:g} "
                         f"{leg.option_type.upper()} ({expiry}). Paper order was not executed.",
                     )
-                prices[(expiry, leg.strike_price, leg.option_type)] = ltp
+                # Phase 5.2.1: the authoritative FILL price is normalized to
+                # the option's tick size (NIFTY index options: ₹0.05). The raw
+                # broker LTP is kept for analytics; only the tradable price
+                # crosses the fill boundary tick-aligned.
+                prices[(expiry, leg.strike_price, leg.option_type)] = round_option_price(ltp)
     except UpstoxError as exc:
         raise PaperExecutionError(
             "EXECUTION_FAILED", f"Could not load market data for {symbol}: {exc.message}"
@@ -209,7 +228,10 @@ async def resolve_bulk_market_prices(access_token: str, positions) -> dict:
                         f"Market data unavailable for {symbol} {p.strike:g} "
                         f"{p.option_type.upper()} ({expiry}). No position was closed.",
                     )
-                prices[(symbol, p.expiry, p.strike, p.option_type)] = ltp
+                # Phase 5.2.1: authoritative bulk-exit fill prices are
+                # normalized to the option tick size (NIFTY: ₹0.05), matching
+                # the single-position exit boundary exactly.
+                prices[(symbol, p.expiry, p.strike, p.option_type)] = round_option_price(ltp)
     except UpstoxError as exc:
         raise PaperExecutionError(
             "EXECUTION_FAILED", f"Could not load market data: {exc.message}"

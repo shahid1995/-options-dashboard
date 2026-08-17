@@ -56,14 +56,17 @@ import {
   buildExecutionRequest,
   buildExitRequest,
   bulkExitDisplay,
+  filterPositionsByStrategy,
   openStrategyGroups,
   paperErrorMessage,
   portfolioDisplay,
+  strategyFilterOptions,
   toFrontendPosition,
   unrealizedPnl as markUnrealizedPnl,
   validateExitQuantity,
 } from "@/lib/portfolio";
-import { nseCalendarStatus, priceModeLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
+import { nseCalendarStatus, priceModeLabel, sessionStateLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
+import { formatOptionPrice, NIFTY_OPTION_TICK_SIZE, roundOptionPrice } from "@/lib/pricing";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
@@ -852,13 +855,35 @@ export default function PaperTradingPage() {
 
   // Marks come from the existing chain cache (the platform market-data path);
   // everything else (qty, avg entry, realized, cash) is the backend's state.
+  // Phase 5.2.1: the position LTP is a TRADABLE option price, so it is
+  // normalized to the NIFTY ₹0.05 tick (roundOptionPrice) — the same
+  // boundary the backend uses for fills. The raw broker LTP stays available
+  // as `rawLtp` (analytics/display never overwrite the raw market value).
   const positionsWithLtp = paperPositions.map((p) => {
-    const ltp = getCurrentLtp(p);
-    return { ...p, currentLtp: ltp, unrealizedPnl: markUnrealizedPnl(p, ltp) };
+    const rawLtp = getCurrentLtp(p);
+    const currentLtp = rawLtp == null ? null : roundOptionPrice(rawLtp, NIFTY_OPTION_TICK_SIZE);
+    return { ...p, currentLtp, rawLtp, unrealizedPnl: markUnrealizedPnl(p, currentLtp) };
   });
   // Phase 5.2: open positions grouped by strategy execution — one EXIT
   // STRATEGY per group (standalone positions form a group without a button).
   const openGroups = useMemo(() => openStrategyGroups(positionsWithLtp), [positionsWithLtp]);
+  // Phase 5.2.1: strategy filter — null = ALL OPEN POSITIONS. The filter is
+  // built dynamically from the open strategy executions and matches by
+  // strategy_execution_id (never by name string / symbol / strike).
+  const [strategyFilter, setStrategyFilter] = useState(null);
+  const strategyFilters = useMemo(() => strategyFilterOptions(positionsWithLtp), [positionsWithLtp]);
+  const visiblePositions = useMemo(
+    () => filterPositionsByStrategy(positionsWithLtp, strategyFilter),
+    [positionsWithLtp, strategyFilter]
+  );
+  const visibleGroups = useMemo(() => openStrategyGroups(visiblePositions), [visiblePositions]);
+  // If the selected strategy execution fully closes (or is reset), drop the
+  // stale filter back to ALL OPEN POSITIONS instead of showing an empty list.
+  useEffect(() => {
+    if (strategyFilter != null && !strategyFilters.some((o) => o.executionId === strategyFilter)) {
+      setStrategyFilter(null);
+    }
+  }, [strategyFilters, strategyFilter]);
   const totalUnrealized = positionsWithLtp.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const equity = paperCash + positionsWithLtp.reduce((sum, p) => (p.currentLtp == null ? sum : sum + dirOf(p.action) * p.currentLtp * p.lotSize * p.qty), 0);
   const totalPnl = equity - paperStartingCapital;
@@ -1196,7 +1221,7 @@ export default function PaperTradingPage() {
           <span
             title={
               marketStatus
-                ? `${marketStatus.message}${marketStatus.tradeDate ? ` · ${marketStatus.tradeDate}` : ""} · source: ${marketStatus.source}${marketStatus.status === "closed" ? " · P&L uses last available prices" : ""}`
+                ? `${marketStatus.message}${marketStatus.tradeDate ? ` · ${marketStatus.tradeDate}` : ""} · segment: ${marketStatus.segment ?? "INDEX_DERIVATIVES"} · session: ${marketStatus.session_state ?? "UNKNOWN"} · source: ${marketStatus.source}${marketStatus.status === "closed" ? " · P&L uses last available prices" : ""}`
                 : "Checking market status…"
             }
             style={{
@@ -1221,7 +1246,7 @@ export default function PaperTradingPage() {
               whiteSpace: "nowrap",
             }}
           >
-            {marketStatus ? MARKET_STATUS_LABELS[marketStatus.status] : "⏳ Checking market…"}
+            {marketStatus ? (sessionStateLabel(marketStatus.session_state) ?? MARKET_STATUS_LABELS[marketStatus.status]) : "⏳ Checking market…"}
           </span>
         </div>
 
@@ -1239,12 +1264,12 @@ export default function PaperTradingPage() {
               <div style={popover}>
                 <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 8 }}>FUNDS &amp; MARGINS (MTM)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px" }}>
-                  <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital)}`} fs={12.5} />
-                  <Stat label="Cash" value={`₹${fmtIN(paperCash)}`} fs={12.5} />
-                  <Stat label="Equity (MTM)" value={`₹${fmtIN(equity)}`} fs={12.5} color={C.gold} />
-                  <Stat label="Total P&L" value={`₹${fmtIN(totalPnl)}`} fs={12.5} color={totalPnl >= 0 ? C.green : C.red} />
-                  <Stat label="Unrealized" value={`₹${fmtIN(totalUnrealized)}`} fs={12.5} color={totalUnrealized >= 0 ? C.green : C.red} />
-                  <Stat label="Realized" value={`₹${fmtIN(totalRealized)}`} fs={12.5} color={totalRealized >= 0 ? C.green : C.red} />
+                  <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital, 2)}`} fs={12.5} />
+                  <Stat label="Cash" value={`₹${fmtIN(paperCash, 2)}`} fs={12.5} />
+                  <Stat label="Equity (MTM)" value={`₹${fmtIN(equity, 2)}`} fs={12.5} color={C.gold} />
+                  <Stat label="Total P&L" value={`₹${fmtIN(totalPnl, 2)}`} fs={12.5} color={totalPnl >= 0 ? C.green : C.red} />
+                  <Stat label="Unrealized" value={`₹${fmtIN(totalUnrealized, 2)}`} fs={12.5} color={totalUnrealized >= 0 ? C.green : C.red} />
+                  <Stat label="Realized" value={`₹${fmtIN(totalRealized, 2)}`} fs={12.5} color={totalRealized >= 0 ? C.green : C.red} />
                   <Stat label="Win rate" value={journal?.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"} fs={12.5} />
                   <Stat
                     label="Profit factor"
@@ -1557,7 +1582,7 @@ export default function PaperTradingPage() {
                   </div>
                   <div style={{ fontSize: 11.5 }}>
                     <span style={{ color: C.faint }}>{netTotal >= 0 ? "Premium Pay" : "Premium Receive"}: </span>
-                    <span style={{ fontWeight: 600 }}>₹{fmtIN(Math.abs(netTotal))}</span>
+                    <span style={{ fontWeight: 600 }}>₹{fmtIN(Math.abs(netTotal), 2)}</span>
                   </div>
                 </div>
               )}
@@ -1734,7 +1759,7 @@ export default function PaperTradingPage() {
                           </div>
                           <div style={{ textAlign: "right", flexShrink: 0 }}>
                             <div style={{ fontSize: 11.5, fontWeight: 700, color: p.unrealizedPnl == null ? C.muted : p.unrealizedPnl >= 0 ? C.green : C.red }}>
-                              {p.unrealizedPnl == null ? "—" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl)}`}
+                              {p.unrealizedPnl == null ? "—" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl, 2)}`}
                             </div>
                             <button
                               onClick={() => closePosition(p.id)}
@@ -1908,7 +1933,7 @@ export default function PaperTradingPage() {
                   </span>
                   <span style={{ fontSize: 11.5, color: C.muted }}>
                     Capital / Premium Requirement:{" "}
-                    <span style={{ color: C.text, fontWeight: 700 }}>₹{fmtIN(calc.premiumOutlay)}</span>
+                    <span style={{ color: C.text, fontWeight: 700 }}>₹{fmtIN(calc.premiumOutlay, 2)}</span>
                   </span>
                 </>
               ) : (
@@ -1936,19 +1961,19 @@ export default function PaperTradingPage() {
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(6, 1fr)", gap: 10 }}>
               <SummaryBlock
                 label={netTotal > 0 ? "Net Debit" : netTotal < 0 ? "Net Credit" : "Net Premium"}
-                value={!legs.length ? "—" : `₹${fmtIN(Math.abs(netTotal))}`}
+                value={!legs.length ? "—" : `₹${fmtIN(Math.abs(netTotal), 2)}`}
                 sub={!legs.length ? "" : netTotal > 0 ? "debit paid" : netTotal < 0 ? "credit received" : "zero premium flow"}
                 color={!legs.length ? C.text : netTotal > 0 ? C.gold : netTotal < 0 ? C.green : C.text}
               />
               <SummaryBlock
                 label="Max Profit"
-                value={!legs.length ? "—" : maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(maxProfit)}`}
+                value={!legs.length ? "—" : maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(maxProfit, 2)}`}
                 sub="at expiry"
                 color={C.green}
               />
               <SummaryBlock
                 label="Max Loss"
-                value={!legs.length ? "—" : maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(maxLoss))}`}
+                value={!legs.length ? "—" : maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(maxLoss), 2)}`}
                 sub="at expiry"
                 color={C.red}
               />
@@ -2017,7 +2042,7 @@ export default function PaperTradingPage() {
                       <ComposedChart data={payoffData}>
                         <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
                         <XAxis dataKey="strike" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
-                        <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
+                        <YAxis yAxisId="pnl" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} />
                         <YAxis yAxisId="oi" orientation="right" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
                         <ReferenceLine yAxisId="pnl" y={0} stroke={C.faint} />
                         {spot != null && (
@@ -2060,7 +2085,7 @@ export default function PaperTradingPage() {
                     {targetPnl != null && (
                       <div style={{ fontSize: 12, marginTop: 6 }}>
                         Projected {targetPnl >= 0 ? "profit" : "loss"}:{" "}
-                        <span style={{ color: targetPnl >= 0 ? C.green : C.red, fontWeight: 700 }}>₹{fmtIN(Math.abs(targetPnl))}</span>
+                        <span style={{ color: targetPnl >= 0 ? C.green : C.red, fontWeight: 700 }}>₹{fmtIN(Math.abs(targetPnl), 2)}</span>
                       </div>
                     )}
                     {daysToExpiry != null && (
@@ -2111,7 +2136,7 @@ export default function PaperTradingPage() {
                       {payoffData.map((d) => (
                         <tr key={d.strike} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
                           <td style={{ padding: 6 }}>{fmtIN(d.strike)}</td>
-                          <td style={{ padding: 6, color: d.pnl >= 0 ? C.green : C.red }}>₹{fmtIN(d.pnl)}</td>
+                          <td style={{ padding: 6, color: d.pnl >= 0 ? C.green : C.red }}>₹{fmtIN(d.pnl, 2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -2156,7 +2181,7 @@ export default function PaperTradingPage() {
                       <ComposedChart data={legPayoffData}>
                         <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
                         <XAxis dataKey="strike" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => fmtIN(v)} />
-                        <YAxis stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v)}`} />
+                        <YAxis stroke={C.faint} fontSize={10.5} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} />
                         <ReferenceLine y={0} stroke={C.faint} />
                         <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }} />
                         {legs.map((l, i) => (
@@ -2207,13 +2232,13 @@ export default function PaperTradingPage() {
                         padding: "2px 9px",
                       }}
                     >
-                      {eqDelta >= 0 ? "▲" : "▼"} {fmtIN(Math.abs(eqDelta))} vs start
+                      {eqDelta >= 0 ? "▲" : "▼"} {fmtIN(Math.abs(eqDelta), 2)} vs start
                     </span>
                   )}
                 </div>
                 {equityHistory.length > 1 && (
                   <div style={{ fontSize: 11, color: C.faint }}>
-                    Last: <span style={{ color: eqColor, fontWeight: 700 }}>₹{fmtIN(eqLast)}</span>
+                    Last: <span style={{ color: eqColor, fontWeight: 700 }}>₹{fmtIN(eqLast, 2)}</span>
                   </div>
                 )}
               </div>
@@ -2232,12 +2257,12 @@ export default function PaperTradingPage() {
                         fontSize={10.5}
                         tickFormatter={(t) => new Date(t).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
                       />
-                      <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v)}`} width={80} />
+                      <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} width={80} />
                       <ReferenceLine y={paperStartingCapital} stroke={C.faint} strokeDasharray="4 2" />
                       <Tooltip
                         contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11.5 }}
                         labelFormatter={(t) => new Date(t).toLocaleString("en-IN")}
-                        formatter={(v) => [`₹${fmtIN(v)}`, "Equity"]}
+                        formatter={(v) => [`₹${fmtIN(v, 2)}`, "Equity"]}
                       />
                       <defs>
                         <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
@@ -2258,6 +2283,23 @@ export default function PaperTradingPage() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <div style={{ fontSize: fluid(12, 14), fontWeight: 800, letterSpacing: 0.8, color: C.text }}>⚡ ACTIVE POSITIONS {priceLive ? "& LIVE P&L" : "& P&L"}</div>
+                  {/* Phase 5.2.1: strategy filter — built from the currently-open
+                      strategy executions, never hard-coded. */}
+                  {strategyFilters.length > 0 && (
+                    <select
+                      value={strategyFilter ?? ""}
+                      onChange={(e) => setStrategyFilter(e.target.value || null)}
+                      title="Filter active positions by strategy (options are the currently-open strategy executions)"
+                      style={{ fontSize: 10.5, background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "3px 8px", maxWidth: 230 }}
+                    >
+                      <option value="">ALL OPEN POSITIONS ({positionsWithLtp.length})</option>
+                      {strategyFilters.map((o) => (
+                        <option key={o.executionId} value={o.executionId}>
+                          {o.strategyName.toUpperCase()} ({o.count})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   {positionsWithLtp.length > 0 && (
                     <span
                       style={{
@@ -2270,7 +2312,7 @@ export default function PaperTradingPage() {
                         padding: "2px 9px",
                       }}
                     >
-                      {totalUnrealized >= 0 ? "+" : "−"}₹{fmtIN(Math.abs(totalUnrealized))} unrealized
+                      {totalUnrealized >= 0 ? "+" : "−"}₹{fmtIN(Math.abs(totalUnrealized), 2)} unrealized
                     </span>
                   )}
                 </div>
@@ -2306,21 +2348,23 @@ export default function PaperTradingPage() {
               {/* Phase 5.2: bulk-exit result banner (mirrors the server result) */}
               <BulkExitResultBanner result={bulkResult} onDismiss={() => setBulkResult(null)} />
 
-              {/* Strategy-grouped strip: one EXIT STRATEGY per open strategy */}
-              {openGroups.some((g) => g.isStrategy) && (
+              {/* Phase 5.2.1 strategy-grouped cards: one card per open strategy
+                  execution (or the selected one). EXIT STRATEGY closes exactly
+                  that execution; EXIT ALL (above) closes the whole account. */}
+              {visibleGroups.some((g) => g.isStrategy) && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                  {openGroups.map((g) => (
+                  {visibleGroups.map((g) => (
                     <div
                       key={g.executionId ?? "standalone"}
                       style={{ display: "flex", alignItems: "center", gap: 8, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "5px 8px 5px 10px" }}
                     >
                       <div style={{ fontSize: 10.5, color: C.muted, lineHeight: 1.4 }}>
-                        <span style={{ fontWeight: 800, color: C.text }}>{g.strategyName}</span>
-                        {" · "}{g.positions.length} pos{g.positions.length > 1 ? "s" : ""}
-                        {" · ≈₹"}{g.value == null ? "—" : fmtIN(g.value)}
+                        <span style={{ fontWeight: 800, color: C.text, letterSpacing: 0.3 }}>{g.strategyName.toUpperCase()}</span>
+                        {" · "}{g.positions.length} leg{g.positions.length === 1 ? "" : "s"}
+                        {" · ≈₹"}{g.value == null ? "—" : fmtIN(g.value, 2)}
                         {" · "}
                         <span style={{ color: g.unrealized == null ? C.muted : g.unrealized >= 0 ? C.green : C.red }}>
-                          {g.unrealized == null ? "P&L —" : `${g.unrealized >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(g.unrealized))}`}
+                          {g.unrealized == null ? "P&L —" : `${g.unrealized >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(g.unrealized), 2)}`}
                         </span>
                       </div>
                       {g.isStrategy && (
@@ -2342,7 +2386,7 @@ export default function PaperTradingPage() {
                   ⚠️ Could not load the server portfolio: {portfolioError} — positions and cash below are not authoritative.
                 </div>
               )}
-              {positionsWithLtp.length === 0 ? (
+              {visiblePositions.length === 0 ? (
                 <div style={{ fontSize: 12.5, color: C.faint, padding: "18px 0" }}>
                   {portfolioError ? "No position data loaded from the server." : "No open positions."}
                 </div>
@@ -2361,7 +2405,7 @@ export default function PaperTradingPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {positionsWithLtp.map((p) => (
+                      {visiblePositions.map((p) => (
                         <tr key={p.id} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
                           <td style={{ padding: 6 }}>
                             <div>
@@ -2371,10 +2415,10 @@ export default function PaperTradingPage() {
                           </td>
                           <td style={{ padding: 6, color: C.muted }}>{p.strategyName ?? "Custom"}</td>
                           <td style={{ padding: 6 }}>{p.qty}</td>
-                          <td style={{ padding: 6 }}>{p.entryPremium}</td>
-                          <td style={{ padding: 6 }}>{p.currentLtp ?? "-"}</td>
+                          <td style={{ padding: 6 }}>{formatOptionPrice(p.entryPremium)}</td>
+                          <td style={{ padding: 6 }}>{formatOptionPrice(p.currentLtp)}</td>
                           <td style={{ padding: 6, color: p.unrealizedPnl == null ? C.muted : p.unrealizedPnl >= 0 ? C.green : C.red }}>
-                            {p.unrealizedPnl == null ? "-" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl)}`}
+                            {p.unrealizedPnl == null ? "-" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl, 2)}`}
                           </td>
                           <td style={{ padding: 6 }}>
                             <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
@@ -2472,7 +2516,7 @@ export default function PaperTradingPage() {
                 style={{ fontSize: 10.5, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 10px" }}
               >
                 {s.strategyName} · {s.trades} closed · {(s.winRate * 100).toFixed(0)}% win ·{" "}
-                <span style={{ color: s.totalPnl >= 0 ? C.green : C.red, fontWeight: 600 }}>₹{fmtIN(s.totalPnl)}</span>
+                <span style={{ color: s.totalPnl >= 0 ? C.green : C.red, fontWeight: 600 }}>₹{fmtIN(s.totalPnl, 2)}</span>
               </span>
             ))}
           </div>
@@ -2524,9 +2568,9 @@ export default function PaperTradingPage() {
                             <td style={{ padding: 6, color: C.muted }}>
                               {h.action.toUpperCase()} {fmtIN(h.strike)} {h.type === "call" ? "CE" : "PE"}×{h.qty}
                             </td>
-                            <td style={{ padding: 6, color: C.muted }}>Entry {fmtIN(h.entryPremium)}</td>
+                            <td style={{ padding: 6, color: C.muted }}>Entry {fmtIN(h.entryPremium, 2)}</td>
                             <td style={{ padding: 6, color: h.realizedPnl >= 0 ? C.green : C.red }}>
-                              {`${h.realizedPnl >= 0 ? "+" : ""}₹${fmtIN(h.realizedPnl)}`}
+                              {`${h.realizedPnl >= 0 ? "+" : ""}₹${fmtIN(h.realizedPnl, 2)}`}
                             </td>
                             <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(h.entryTime)}</td>
                             <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(h.exitTime)}</td>
@@ -2555,10 +2599,10 @@ export default function PaperTradingPage() {
                               .join(" · ")}
                           </td>
                           <td style={{ padding: 6, color: credit ? C.green : C.muted }}>
-                            {credit ? `Credit ${fmtIN(Math.abs(t.entry_net))}` : `Debit ${fmtIN(t.entry_net)}`}
+                            {credit ? `Credit ${fmtIN(Math.abs(t.entry_net), 2)}` : `Debit ${fmtIN(t.entry_net, 2)}`}
                           </td>
                           <td style={{ padding: 6, color: realized == null ? C.muted : realized >= 0 ? C.green : C.red }}>
-                            {realized == null ? "—" : `${realized >= 0 ? "+" : ""}₹${fmtIN(realized)}`}
+                            {realized == null ? "—" : `${realized >= 0 ? "+" : ""}₹${fmtIN(realized, 2)}`}
                           </td>
                           <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(t.entry_at)}</td>
                           <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{t.exit_at ? fmtJournalDate(t.exit_at) : "—"}</td>
@@ -2628,11 +2672,11 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px 12px", marginBottom: 10 }}>
         <ReviewMetric
           label={calc.netTotal > 0 ? "Net Debit" : calc.netTotal < 0 ? "Net Credit" : "Net Premium"}
-          value={`₹${fmtIN(Math.abs(calc.netTotal))}`}
+          value={`₹${fmtIN(Math.abs(calc.netTotal), 2)}`}
           color={calc.netTotal > 0 ? C.gold : calc.netTotal < 0 ? C.green : C.text}
         />
-        <ReviewMetric label="Max Loss" value={calc.maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(calc.maxLoss))}`} color={C.red} />
-        <ReviewMetric label="Max Profit" value={calc.maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(calc.maxProfit)}`} color={C.green} />
+        <ReviewMetric label="Max Loss" value={calc.maxLossUnlimited ? "Unlimited" : `−₹${fmtIN(Math.abs(calc.maxLoss), 2)}`} color={C.red} />
+        <ReviewMetric label="Max Profit" value={calc.maxProfitUnlimited ? "Unlimited" : `+₹${fmtIN(calc.maxProfit, 2)}`} color={C.green} />
         <ReviewMetric
           label={calc.breakevens.length > 1 ? "Breakevens" : "Breakeven"}
           value={calc.breakevens.length ? calc.breakevens.map((b) => fmtIN(b)).join(" · ") : "—"}
@@ -2660,7 +2704,7 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
                 : badge("🟡 UNABLE TO VERIFY — Orders Disabled", C.gold, "rgba(224,163,58,0.12)", "rgba(224,163,58,0.45)")
           }
         >
-          {marketStatus ? MARKET_STATUS_LABELS[marketStatus.status] : "⏳ Checking market…"}
+          {marketStatus ? (sessionStateLabel(marketStatus.session_state) ?? MARKET_STATUS_LABELS[marketStatus.status]) : "⏳ Checking market…"}
         </span>
         <span style={{ fontSize: 10.5, color: C.faint }}>final market check happens at execution time</span>
       </div>

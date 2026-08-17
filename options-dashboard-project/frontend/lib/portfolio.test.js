@@ -3,9 +3,12 @@ import {
   buildExecutionRequest,
   buildExitRequest,
   canTrade,
+  filterPositionsByStrategy,
   makeClientOrderId,
+  openStrategyGroups,
   paperErrorMessage,
   portfolioDisplay,
+  strategyFilterOptions,
   toFrontendPosition,
   unrealizedPnl,
   validateExitQuantity,
@@ -211,5 +214,81 @@ describe("buildExitRequest", () => {
     const req = buildExitRequest(2);
     expect(req.client_order_id.startsWith("exit-")).toBe(true);
     expect(req.quantity).toBe(2);
+  });
+});
+
+describe("Phase 5.2.1 strategy filter", () => {
+  const pos = (over) => ({
+    positionId: over.id,
+    id: `pos-${over.id}`,
+    symbol: "NIFTY",
+    type: "call",
+    strike: over.strike,
+    expiry: "2026-08-27",
+    action: over.action ?? "buy",
+    qty: 1,
+    lotSize: 65,
+    entryPremium: 100,
+    strategyName: over.strategyName ?? "Custom",
+    executionId: over.executionId ?? null,
+    status: "open",
+    currentLtp: over.currentLtp ?? null,
+    unrealizedPnl: over.unrealizedPnl ?? null,
+  });
+
+  it("builds the dropdown from the currently-open strategy executions with counts", () => {
+    const positions = [
+      pos({ id: 1, executionId: "ex-a", strategyName: "Long Seagull", strike: 24350 }),
+      pos({ id: 2, executionId: "ex-a", strategyName: "Long Seagull", strike: 24550 }),
+      pos({ id: 3, executionId: "ex-b", strategyName: "Bull Put Spread", strike: 25100 }),
+      pos({ id: 4, executionId: null, strategyName: "Custom", strike: 25200 }),
+    ];
+    const options = strategyFilterOptions(positions);
+    expect(options).toEqual([
+      { executionId: "ex-a", strategyName: "Long Seagull", count: 2 },
+      { executionId: "ex-b", strategyName: "Bull Put Spread", count: 1 },
+    ]);
+  });
+
+  it("filters by strategy_execution_id only (never by name string)", () => {
+    const positions = [
+      pos({ id: 1, executionId: "ex-a", strategyName: "Long Seagull", strike: 24350 }),
+      pos({ id: 2, executionId: "ex-a", strategyName: "Long Seagull", strike: 24550 }),
+      pos({ id: 3, executionId: "ex-b", strategyName: "Long Seagull", strike: 25100 }),
+      pos({ id: 4, executionId: null, strategyName: "Standalone", strike: 25200 }),
+    ];
+    const onlyA = filterPositionsByStrategy(positions, "ex-a");
+    expect(onlyA.map((p) => p.strike)).toEqual([24350, 24550]);
+    const onlyB = filterPositionsByStrategy(positions, "ex-b");
+    expect(onlyB.map((p) => p.strike)).toEqual([25100]);
+    // A different execution with the SAME strategy name stays separate.
+    expect(onlyA[0].executionId).not.toBe(onlyB[0].executionId);
+  });
+
+  it("returns everything for the ALL OPEN POSITIONS selection", () => {
+    const positions = [
+      pos({ id: 1, executionId: "ex-a", strategyName: "Long Seagull", strike: 24350 }),
+      pos({ id: 2, executionId: null, strategyName: "Custom", strike: 25200 }),
+    ];
+    expect(filterPositionsByStrategy(positions, null)).toHaveLength(2);
+    expect(filterPositionsByStrategy(positions, undefined)).toHaveLength(2);
+    expect(filterPositionsByStrategy([], null)).toEqual([]);
+  });
+
+  it("groups the filtered set and exposes leg counts + mark totals", () => {
+    const positions = [
+      pos({ id: 1, executionId: "ex-a", strategyName: "Long Seagull", strike: 24350, currentLtp: 125.25, unrealizedPnl: 10 }),
+      pos({ id: 2, executionId: "ex-a", strategyName: "Long Seagull", strike: 24550, currentLtp: 35.6, unrealizedPnl: -5 }),
+      pos({ id: 3, executionId: "ex-b", strategyName: "Bull Put Spread", strike: 25100, currentLtp: 80, unrealizedPnl: 20 }),
+    ];
+    const groups = openStrategyGroups(filterPositionsByStrategy(positions, "ex-a"));
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      executionId: "ex-a",
+      strategyName: "Long Seagull",
+      isStrategy: true,
+    });
+    expect(groups[0].positions).toHaveLength(2); // legs count
+    expect(groups[0].unrealized).toBe(5); // 10 − 5
   });
 });

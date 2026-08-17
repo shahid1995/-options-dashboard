@@ -7,8 +7,9 @@
 
 import { C, fmtIN } from "@/lib/ui";
 
-const fmtPnl = (v) => (v == null || Number.isNaN(v) ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v))}`);
-const fmtCash = (v) => (v == null || Number.isNaN(v) ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v))}`);
+// Phase 5.2.1: financial values always display with two decimals (₹3,169.00).
+const fmtPnl = (v) => (v == null || Number.isNaN(v) ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`);
+const fmtCash = (v) => (v == null || Number.isNaN(v) ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`);
 
 const overlay = {
   position: "fixed",
@@ -65,7 +66,7 @@ export function BulkExitModal({ kind, target, accountStats, busy, error, onCance
               </div>
               <div style={row}>
                 <span style={{ color: C.faint }}>Approximate current value</span>
-                <span style={{ color: C.text, fontWeight: 700 }}>{value == null ? "—" : `₹${fmtIN(value)}`}</span>
+                <span style={{ color: C.text, fontWeight: 700 }}>{value == null ? "—" : `₹${fmtIN(value, 2)}`}</span>
               </div>
               <div style={row}>
                 <span style={{ color: C.faint }}>Current unrealized P&amp;L</span>

@@ -33,6 +33,10 @@ def gate_status(status_value):
         checked_at="2026-08-14T10:00:00+05:30",
         message=f"test market status: {status_value}",
         error=None,
+        segment="INDEX_DERIVATIVES",
+        session_state="OPEN" if status_value == "open" else "CLOSED",
+        timezone="Asia/Kolkata",
+        trading_allowed=status_value == "open",
     )
     return patch("app.routers.paper.get_market_status", new=AsyncMock(return_value=status))
 

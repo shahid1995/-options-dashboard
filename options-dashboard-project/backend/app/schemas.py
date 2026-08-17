@@ -127,6 +127,12 @@ class PositionOut(BaseModel):
     realized_pnl: float
     status: str
     strategy_execution_id: str | None
+    # Phase 5.2.1: the strategy's displayed name rides on the position so the
+    # UI never falls back to "Custom" for a named strategy. The authoritative
+    # relationship stays strategy_execution_id → StrategyExecution.strategy_tag
+    # (the position itself never duplicates strategy logic). Null/legacy rows
+    # fall back to "Custom" at the boundary.
+    strategy_tag: str | None = None
     opened_at: datetime
     closed_at: datetime | None
     # Unrealized P&L requires a market mark. The backend never fabricates it:
@@ -309,7 +315,16 @@ class JournalOut(BaseModel):
 
 
 class MarketStatusOut(BaseModel):
-    """Current NSE market status for the paper-trading UI badge."""
+    """Current market status for the paper-trading UI badge (Phase 5.2.1).
+
+    Segment-aware: the status is resolved for ONE segment (default
+    INDEX_DERIVATIVES — the product's NIFTY index-options segment), so a
+    cash-segment closing auction can never be mistaken for index-derivatives
+    trading. ``session_state`` carries the explicit session the gate resolved
+    (OPEN | CLOSING_AUCTION | TRANSITION | CLOSED | UNKNOWN); only OPEN
+    authorizes orders. The backend remains the final authority — the badge
+    is informational.
+    """
 
     status: Literal["open", "closed", "unknown"]
     source: str
@@ -317,6 +332,10 @@ class MarketStatusOut(BaseModel):
     checked_at: str
     message: str
     open: bool
+    segment: str = "INDEX_DERIVATIVES"
+    session_state: str = "UNKNOWN"  # OPEN | CLOSING_AUCTION | TRANSITION | CLOSED | UNKNOWN
+    timezone: str = "Asia/Kolkata"
+    trading_allowed: bool = False
 
 
 # ---- Phase 5.1: portfolio & journal analytics schemas -----------------------

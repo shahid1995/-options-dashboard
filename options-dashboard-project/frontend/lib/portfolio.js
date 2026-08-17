@@ -177,6 +177,32 @@ export function openStrategyGroups(positionsWithLtp) {
   }));
 }
 
+// ---- Phase 5.2.1: strategy filter over ACTIVE positions ---------------------
+//
+// The filter is built dynamically from the currently-open strategy
+// executions (never hard-coded). Its unique identity is the strategy
+// EXECUTION id — selecting a strategy filters by strategy_execution_id, not
+// by name string, symbol, strike or option type.
+
+// Dropdown options: [{ executionId, strategyName, count }] — one per open
+// strategy execution (count = number of open legs/positions it owns).
+export function strategyFilterOptions(positionsWithLtp) {
+  const groups = openStrategyGroups(positionsWithLtp).filter((g) => g.isStrategy);
+  return groups.map((g) => ({
+    executionId: g.executionId,
+    strategyName: g.strategyName,
+    count: g.positions.length,
+  }));
+}
+
+// Filter the active positions to ONE strategy execution (or all when
+// executionId is null/undefined — "All Open Positions"). The comparison is
+// always against the position's strategy_execution_id.
+export function filterPositionsByStrategy(positionsWithLtp, executionId) {
+  if (executionId == null) return positionsWithLtp ?? [];
+  return (positionsWithLtp ?? []).filter((p) => p.executionId === executionId);
+}
+
 // Shape a backend BulkExitOut into the display object the result banner uses.
 export function bulkExitDisplay(result) {
   const r = result ?? {};

@@ -789,11 +789,7 @@ def test_portfolio_reset_clears_state(client, logged_in, db_session):
     assert db_session.query(StrategyExecution).count() == 0
     assert db_session.query(PaperOrder).count() == 0
     assert db_session.query(Position).count() == 0
-    assert db_session.query(Trade).count() == 0
-
-
-# ---- Auth guard --------------------------------------------------------------
-
+    assert db_session.query(Trade).count() == 0# ---- Auth guard --------------------------------------------------------------
 def test_execution_requires_login(client):
     resp = client.post("/paper/executions", json=exec_payload())
     assert resp.status_code == 401
@@ -805,3 +801,238 @@ def test_positions_requires_login(client):
 
 def test_portfolio_requires_login(client):
     assert client.get("/paper/portfolio").status_code == 401
+
+
+# ---- Phase 5.2.1: strategy identity (§3/§4) ---------------------------------
+
+# Long Seagull legs: BUY 24350 CE, SELL 24550 CE, SELL 25000 PE (EXPIRY).
+# Every strategy below uses instruments that no other strategy in this file
+# touches — positions net by (symbol, expiry, strike, option_type), so
+# overlapping instruments would merge rows and blur execution identity.
+SEAGULL_LEGS = [
+    {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 24350,
+     "option_type": "call", "action": "buy", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 24550,
+     "option_type": "call", "action": "sell", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 25000,
+     "option_type": "put", "action": "sell", "quantity": 1, "lot_size": LOT},
+]
+
+# Bull Put Spread legs: SELL 25100 PE, BUY 26000 PE (EXPIRY).
+BULL_PUT_LEGS = [
+    {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 25100,
+     "option_type": "put", "action": "sell", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 26000,
+     "option_type": "put", "action": "buy", "quantity": 1, "lot_size": LOT},
+]
+
+# Bull Condor legs on EXPIRY2 (distinct instruments): BUY 24350 CE, SELL 24400
+# CE, SELL 24350 PE, BUY 24400 PE.
+BULL_CONDOR_LEGS = [
+    {"symbol": "NIFTY", "expiration_date": EXPIRY2, "strike_price": 24350,
+     "option_type": "call", "action": "buy", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY2, "strike_price": 24400,
+     "option_type": "call", "action": "sell", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY2, "strike_price": 24350,
+     "option_type": "put", "action": "sell", "quantity": 1, "lot_size": LOT},
+    {"symbol": "NIFTY", "expiration_date": EXPIRY2, "strike_price": 24400,
+     "option_type": "put", "action": "buy", "quantity": 1, "lot_size": LOT},
+]
+
+
+def test_named_strategy_tags_preserved_on_positions(client, logged_in):
+    """Long Seagull / Bull Put Spread / Bull Condor never render as Custom."""
+    seagull = execute(client, logged_in, exec_payload(
+        client_order_id="exec-tag-seagull", strategy_tag="Long Seagull", legs=SEAGULL_LEGS
+    )).json()
+    bps = execute(client, logged_in, exec_payload(
+        client_order_id="exec-tag-bps", strategy_tag="Bull Put Spread", legs=BULL_PUT_LEGS
+    )).json()
+    condor = execute(client, logged_in, exec_payload(
+        client_order_id="exec-tag-condor", strategy_tag="Bull Condor", legs=BULL_CONDOR_LEGS
+    )).json()
+
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert len(positions) == 3 + 2 + 4
+    tags = {p["strategy_tag"] for p in positions}
+    assert tags == {"Long Seagull", "Bull Put Spread", "Bull Condor"}
+    # Every position carries its execution id — the authoritative grouping key.
+    by_exec = {}
+    for p in positions:
+        by_exec.setdefault(p["strategy_execution_id"], set()).add(p["strategy_tag"])
+    assert by_exec[seagull["execution_id"]] == {"Long Seagull"}
+    assert by_exec[bps["execution_id"]] == {"Bull Put Spread"}
+    assert by_exec[condor["execution_id"]] == {"Bull Condor"}
+
+
+def test_custom_unnamed_strategy_remains_custom(client, logged_in):
+    # No real strategy name in the request → backend falls back to "Custom"
+    # (never a lie, never inferred from the legs).
+    payload = exec_payload(client_order_id="exec-tag-custom")
+    del payload["strategy_tag"]
+    resp = execute(client, logged_in, payload)
+    assert resp.status_code == 200
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert len(positions) == 2
+    assert {p["strategy_tag"] for p in positions} == {"Custom"}
+
+
+def test_legacy_position_without_execution_falls_back_to_custom(client, logged_in, db_session):
+    from datetime import datetime
+
+    from app.models import Position
+
+    now = datetime.utcnow()
+    db_session.add(Position(
+        user_id=logged_in, symbol="NIFTY", expiry=EXPIRY, strike=24400,
+        option_type="call", net_quantity=1, average_entry_price=50.0,
+        lot_size=LOT, realized_pnl=0.0, status="open",
+        strategy_execution_id=None, opened_at=now,
+    ))
+    db_session.commit()
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert any(p["strategy_tag"] == "Custom" for p in positions)
+
+
+def test_dangling_execution_id_falls_back_to_custom(client, logged_in, db_session):
+    from datetime import datetime
+
+    from app.models import Position
+
+    now = datetime.utcnow()
+    db_session.add(Position(
+        user_id=logged_in, symbol="NIFTY", expiry=EXPIRY, strike=24450,
+        option_type="put", net_quantity=-1, average_entry_price=60.0,
+        lot_size=LOT, realized_pnl=0.0, status="open",
+        strategy_execution_id="exec-no-longer-exists", opened_at=now,
+    ))
+    db_session.commit()
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert any(p["strategy_tag"] == "Custom" for p in positions)
+
+
+def test_same_execution_groups_and_distinct_executions_stay_separate(client, logged_in):
+    # Two SEPARATE Long Seagull executions: same strategy name, different ids,
+    # non-overlapping instruments (positions net by instrument, so a repeat of
+    # identical legs would merge into one group — this test uses distinct
+    # strikes to prove different executions never mix).
+    first = execute(client, logged_in, exec_payload(
+        client_order_id="exec-seagull-a", strategy_tag="Long Seagull", legs=SEAGULL_LEGS
+    )).json()
+    second_legs = [
+        {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 25100,
+         "option_type": "call", "action": "buy", "quantity": 1, "lot_size": LOT},
+        {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 26000,
+         "option_type": "call", "action": "sell", "quantity": 1, "lot_size": LOT},
+        {"symbol": "NIFTY", "expiration_date": EXPIRY, "strike_price": 24550,
+         "option_type": "put", "action": "sell", "quantity": 1, "lot_size": LOT},
+    ]
+    second = execute(client, logged_in, exec_payload(
+        client_order_id="exec-seagull-b", strategy_tag="Long Seagull", legs=second_legs
+    )).json()
+    assert first["execution_id"] != second["execution_id"]
+
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    ids = {p["strategy_execution_id"] for p in positions}
+    assert ids == {first["execution_id"], second["execution_id"]}
+    # The three legs of one execution group together; the other execution's
+    # legs never mix in.
+    for exec_id in ids:
+        legs = [p for p in positions if p["strategy_execution_id"] == exec_id]
+        assert len(legs) == 3
+        assert {p["strategy_tag"] for p in legs} == {"Long Seagull"}
+
+
+def test_positions_response_exposes_execution_id_and_strategy_tag(client, logged_in):
+    execute(client, logged_in, exec_payload(client_order_id="exec-tag-expose"))
+    pos = client.get("/paper/positions", headers=headers(logged_in)).json()[0]
+    assert pos["strategy_execution_id"]
+    assert pos["strategy_tag"] == "Bull Call Spread"
+
+
+# ---- Phase 5.2.1: option tick-size fills (§17/§18/§20) ------------------------
+
+
+def test_entry_fill_price_is_tick_rounded(client, logged_in, chain_quotes, db_session):
+    from app.models import PaperOrder
+
+    # Raw broker LTP 125.23 is NOT a valid ₹0.05 tick → fill at 125.25.
+    chain_quotes[EXPIRY][24350]["call"] = 125.23
+    resp = execute(client, logged_in, exec_payload(client_order_id="exec-tick-entry"))
+    assert resp.status_code == 200
+    fills = {o["strike"]: o["fill_price"] for o in resp.json()["orders"]}
+    assert fills[24350] == 125.25
+    assert fills[24550] == pytest.approx(35.60)
+    # The persisted authoritative order agrees (fill boundary == display).
+    order = db_session.query(PaperOrder).filter_by(kind="entry", strike=24350).one()
+    assert order.fill_price == 125.25
+
+
+def test_exit_fill_price_is_tick_rounded(client, logged_in, chain_quotes):
+    execute(client, logged_in, exec_payload(client_order_id="exec-tick-exit"))
+    positions = client.get("/paper/positions", headers=headers(logged_in)).json()
+    pos = next(p for p in positions if p["strike"] == 24550)
+    # Raw LTP 35.62 → valid tick 35.60.
+    chain_quotes[EXPIRY][24550]["call"] = 35.62
+    resp = exit_position(client, logged_in, pos["id"], {"client_order_id": "exit-tick-1", "quantity": 1})
+    assert resp.status_code == 200
+    assert resp.json()["order"]["fill_price"] == 35.60
+
+
+def test_bulk_exit_fill_prices_are_tick_rounded(client, logged_in, chain_quotes):
+    execute(client, logged_in, exec_payload(client_order_id="exec-tick-bulk"))
+    # 24350 call 125.23 → 125.25; 24550 call 35.62 → 35.60.
+    chain_quotes[EXPIRY][24350]["call"] = 125.23
+    chain_quotes[EXPIRY][24550]["call"] = 35.62
+    resp = client.post(
+        "/paper/positions/exit-all",
+        headers=headers(logged_in),
+        json={"client_order_id": "exitall-tick-1"},
+    )
+    assert resp.status_code == 200
+    fills = {p["strike"]: p["fill_price"] for p in resp.json()["positions"]}
+    assert fills[24350] == 125.25
+    assert fills[24550] == 35.60
+
+
+# ---- Phase 5.2.1: active-position semantics (§7) ------------------------------
+
+
+def test_zero_quantity_positions_never_appear_as_active(client, logged_in, db_session):
+    from app.models import Position
+
+    execute(client, logged_in, exec_payload(client_order_id="exec-zero-qty"))
+    # Force one instrument to zero quantity while keeping status="open" —
+    # it must never surface in the ACTIVE list (the server-side invariant is
+    # status == "open" AND net_quantity != 0).
+    pos = db_session.query(Position).filter_by(strike=24350).one()
+    pos.net_quantity = 0
+    pos.status = "open"
+    db_session.commit()
+
+    active = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert all(p["net_quantity"] != 0 for p in active)
+    assert all(p["status"] == "open" for p in active)
+    assert len(active) == 1  # only the 24550 leg remains
+
+
+def test_open_positions_are_user_isolated(client, logged_in, db_session):
+    from datetime import datetime
+
+    from app.models import Position
+
+    other_user = "tok-other-user"
+    now = datetime.utcnow()
+    db_session.add(Position(
+        user_id=other_user, symbol="NIFTY", expiry=EXPIRY, strike=24600,
+        option_type="call", net_quantity=3, average_entry_price=40.0,
+        lot_size=LOT, realized_pnl=0.0, status="open",
+        strategy_execution_id=None, opened_at=now,
+    ))
+    db_session.commit()
+
+    execute(client, logged_in, exec_payload(client_order_id="exec-isolation"))
+    active = client.get("/paper/positions", headers=headers(logged_in)).json()
+    assert all(p["strategy_execution_id"] is not None for p in active)
+    assert all(p["strike"] != 24600 for p in active)
+    assert len(active) == 2

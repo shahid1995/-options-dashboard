@@ -47,7 +47,87 @@ const NSE_TRADING_HOLIDAYS = new Set([
   "2026-12-25", // Christmas
 ]);
 
-// NSE F&O trading hours (IST): 09:15–15:30, Mon–Fri.
+// ---- Phase 5.2.1: segment-aware session definitions --------------------------
+//
+// The market is no longer one hard-coded 09:15–15:30 rule for all
+// instruments. Each segment has an explicit, configurable session definition
+// (mirroring the backend's `app/services/market_status.py`), and the status
+// badge carries an explicit session state. The product currently trades
+// NIFTY index options, so INDEX_DERIVATIVES is the default segment.
+
+export const INDEX_DERIVATIVES = "INDEX_DERIVATIVES";
+export const EQUITY_CASH = "EQUITY_CASH";
+export const EQUITY_DERIVATIVES = "EQUITY_DERIVATIVES";
+export const STOCK_DERIVATIVES = "STOCK_DERIVATIVES";
+export const CURRENCY = "CURRENCY";
+export const COMMODITY = "COMMODITY";
+
+// Segment → explicit session definition. `continuousOpen/continuousClose`
+// are the normal continuous-trading window in IST; `tradingAllowed` says
+// whether the segment can accept the requested paper action while open.
+export const SESSION_DEFINITIONS = {
+  [INDEX_DERIVATIVES]: {
+    segment: INDEX_DERIVATIVES,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:15",
+    continuousClose: "15:30",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+  [EQUITY_DERIVATIVES]: {
+    segment: EQUITY_DERIVATIVES,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:15",
+    continuousClose: "15:30",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+  [STOCK_DERIVATIVES]: {
+    segment: STOCK_DERIVATIVES,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:15",
+    continuousClose: "15:30",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+  // The equity CASH segment runs its own SEBI Closing Auction Session; it is
+  // a DIFFERENT session from index-options continuous trading and is never
+  // used to enable index-option execution (the backend resolves the
+  // instrument's own segment). The local calendar below does not invent the
+  // auction window — only the broker/exchange feed reports it.
+  [EQUITY_CASH]: {
+    segment: EQUITY_CASH,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:15",
+    continuousClose: "15:30",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+  [CURRENCY]: {
+    segment: CURRENCY,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:00",
+    continuousClose: "17:00",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+  [COMMODITY]: {
+    segment: COMMODITY,
+    timezone: "Asia/Kolkata",
+    continuousOpen: "09:00",
+    continuousClose: "23:30",
+    tradingAllowed: true,
+    session: "CONTINUOUS",
+  },
+};
+
+// Explicit session states the badge can display. OPEN is the only state that
+// authorizes orders; the others are informational (the backend re-validates
+// at execution time). States are only ever derived from broker/exchange
+// status values — nothing invents a session the feed did not report.
+export const SESSION_STATES = ["OPEN", "CLOSING_AUCTION", "TRANSITION", "CLOSED", "UNKNOWN"];
+
+// NSE F&O trading hours (IST): 09:15–15:30, Mon–Fri (INDEX_DERIVATIVES).
 export const MARKET_OPEN_MINUTES = 9 * 60 + 15;
 export const MARKET_CLOSE_MINUTES = 15 * 60 + 30;
 
@@ -62,31 +142,51 @@ export function istDateIso(date = new Date()) {
 }
 
 // Deterministic NSE calendar status: open / closed + human reason.
-export function nseCalendarStatus(date = new Date()) {
+// Segment-aware (Phase 5.2.1): uses the segment's explicit continuous
+// window. The local calendar never invents a closing-auction window — only
+// the broker/exchange feed reports those sessions.
+export function nseCalendarStatus(date = new Date(), segment = INDEX_DERIVATIVES) {
+  const def = SESSION_DEFINITIONS[segment] ?? SESSION_DEFINITIONS[INDEX_DERIVATIVES];
+  const [openH, openM] = def.continuousOpen.split(":").map(Number);
+  const [closeH, closeM] = def.continuousClose.split(":").map(Number);
+  const openMinutes = openH * 60 + openM;
+  const closeMinutes = closeH * 60 + closeM;
   const { weekday, hour, minute, second } = istClockParts(date);
   const tradeDate = istDateIso(date);
   const minutes = hour * 60 + minute + (second ?? 0) / 60;
 
   if (weekday === "Sat" || weekday === "Sun") {
-    return { status: "closed", reason: "Weekend — NSE is closed (Saturday/Sunday).", tradeDate };
+    return { status: "closed", reason: "Weekend — NSE is closed (Saturday/Sunday).", tradeDate, segment, sessionState: "CLOSED" };
   }
   if (NSE_TRADING_HOLIDAYS.has(tradeDate)) {
-    return { status: "closed", reason: "NSE trading holiday.", tradeDate };
+    return { status: "closed", reason: "NSE trading holiday.", tradeDate, segment, sessionState: "CLOSED" };
   }
-  if (minutes < MARKET_OPEN_MINUTES) {
-    return { status: "closed", reason: "Before the 09:15 IST market open.", tradeDate };
+  if (minutes < openMinutes) {
+    return { status: "closed", reason: `Before the ${def.continuousOpen} IST market open.`, tradeDate, segment, sessionState: "CLOSED" };
   }
-  if (minutes > MARKET_CLOSE_MINUTES) {
-    return { status: "closed", reason: "After the 15:30 IST market close.", tradeDate };
+  if (minutes > closeMinutes) {
+    return { status: "closed", reason: `After the ${def.continuousClose} IST market close.`, tradeDate, segment, sessionState: "CLOSED" };
   }
-  return { status: "open", reason: "Within NSE market hours (Mon–Fri 09:15–15:30 IST).", tradeDate };
+  return { status: "open", reason: `Within ${def.segment} market hours (Mon–Fri ${def.continuousOpen}–${def.continuousClose} IST).`, tradeDate, segment, sessionState: "OPEN" };
 }
 
 export const MARKET_STATUS_LABELS = {
   open: "🟢 MARKET OPEN — Orders Enabled",
   closed: "🔴 MARKET CLOSED — Orders Disabled",
   unknown: "🟠 UNABLE TO VERIFY — Orders Blocked",
+  // Phase 5.2.1 explicit session states: informational badges. Only OPEN
+  // authorizes orders; the backend re-validates at execution time.
+  closing_auction: "🟡 CLOSING AUCTION — Orders Disabled",
+  transition: "🟠 TRANSITION SESSION — Orders Disabled",
 };
+
+// Session-state → badge label (defaults to the status-level label when the
+// session state is not one of the explicit informational states).
+export function sessionStateLabel(sessionState) {
+  if (!sessionState) return null;
+  const key = String(sessionState).toLowerCase();
+  return MARKET_STATUS_LABELS[key] ?? null;
+}
 
 export const MARKET_CLOSED_MSG = "Market is closed. Paper order was not executed.";
 export const MARKET_UNKNOWN_MSG = "Unable to verify market status. Order was not executed.";

@@ -111,17 +111,20 @@ async def get_option_contracts(access_token: str, instrument_key: str) -> dict:
     )
 
 
-async def get_market_status(access_token: str) -> dict:
-    """NSE F&O market status from Upstox's authoritative feed.
+async def get_market_status(access_token: str, exchange: str = "NSE_FO") -> dict:
+    """Market status for one exchange from Upstox's authoritative feed.
 
-    Returns the full response body; the ``data`` object carries
-    ``exchange``, ``status`` (e.g. ``NORMAL_OPEN`` / ``NORMAL_CLOSE``) and
-    ``last_updated``. Raises :class:`UpstoxError` when the exchange is
-    unreachable or the request fails.
+    ``exchange`` is the segment's feed (NSE_FO for index/stock derivatives,
+    NSE_CASH for the equity cash segment, NSE_CD for currency, MCX_COMM for
+    commodities). Returns the full response body; the ``data`` object
+    carries ``exchange``, ``status`` (e.g. ``NORMAL_OPEN`` /
+    ``NORMAL_CLOSE`` / ``CLOSING``) and ``last_updated``. Raises
+    :class:`UpstoxError` when the exchange is unreachable or the request
+    fails.
     """
     return await _request(
         "GET",
-        "/market/status/NSE_FO",
+        f"/market/status/{exchange}",
         headers={
             "Accept": "application/json",
             "Authorization": f"Bearer {access_token}",

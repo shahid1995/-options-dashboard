@@ -63,6 +63,37 @@ from app.schemas import (
 
 DEFAULT_STARTING_CAPITAL = 500000
 
+# ---- Option tick-size normalization (Phase 5.2.1) ---------------------------
+#
+# NSE specifies the option price step for NIFTY index options as ₹0.05. The
+# authoritative paper FILL price is normalized to this tick, and the same
+# canonical helper is used at every fill boundary (strategy entry, single
+# position exit, bulk exit) so the server and the UI display agree. Raw
+# broker market-data LTPs used for analytics are NEVER overwritten — only
+# prices treated as tradable option prices cross the boundary tick-aligned.
+
+DEFAULT_OPTION_TICK_SIZE = 0.05
+
+
+def round_option_price(price: float | None, tick_size: float = DEFAULT_OPTION_TICK_SIZE) -> float | None:
+    """Round an option trading price to the nearest valid tick.
+
+    Numerically safe: works in tick units and re-normalizes with a final
+    10-decimal rounding so floating-point artifacts like
+    ``125.25000000000001`` never escape (125.23 → 125.25, 125.28 → 125.30).
+    Missing/invalid prices are never coerced to 0: ``None``/NaN stay
+    unavailable, and a negative (invalid) price passes through unchanged so
+    upstream validation can reject it explicitly.
+    """
+    if price is None or not isinstance(price, (int, float)):
+        return price
+    if isinstance(price, float) and price != price:  # NaN is not a valid price
+        return None
+    if tick_size is None or tick_size <= 0 or price < 0:
+        return price
+    ticks = round(price / tick_size)
+    return round(ticks * tick_size, 10)
+
 # ---- Order status lifecycle (§5) -------------------------------------------
 
 ORDER_STATUSES = frozenset({"PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELLED", "REJECTED"})
@@ -251,6 +282,45 @@ def _serialize_position(position: Position) -> dict:
     return PositionOut.model_validate(position).model_dump(mode="json")
 
 
+def _strategy_tag_for(db: Session, user_id: str, execution_id: str | None) -> str:
+    """Resolve the execution's displayed strategy name (fallback "Custom")."""
+    if not execution_id:
+        return "Custom"
+    tag = db.scalar(
+        select(StrategyExecution.strategy_tag).where(
+            StrategyExecution.user_id == user_id,
+            StrategyExecution.execution_id == execution_id,
+        )
+    )
+    return tag or "Custom"
+
+
+def _attach_strategy_tags(db: Session, user_id: str, rows: list[dict]) -> list[dict]:
+    """Attach ``strategy_tag`` to serialized positions in one batched lookup.
+
+    The authoritative relationship stays strategy_execution_id →
+    StrategyExecution.strategy_tag; positions never duplicate strategy
+    logic. Legacy/missing executions fall back to "Custom".
+    """
+    ids = {r.get("strategy_execution_id") for r in rows if r.get("strategy_execution_id")}
+    if ids:
+        mapping = dict(
+            db.execute(
+                select(StrategyExecution.execution_id, StrategyExecution.strategy_tag).where(
+                    StrategyExecution.user_id == user_id,
+                    StrategyExecution.execution_id.in_(ids),
+                )
+            ).all()
+        )
+        for r in rows:
+            eid = r.get("strategy_execution_id")
+            r["strategy_tag"] = mapping.get(eid) or "Custom"
+    else:
+        for r in rows:
+            r["strategy_tag"] = "Custom"
+    return rows
+
+
 # ---- Strategy execution (§7/§8) ---------------------------------------------
 
 
@@ -329,7 +399,10 @@ def execute_strategy(user_id: str, request, db: Session, prices: dict) -> Execut
     entry_net = 0.0
     orders: list[PaperOrder] = []
     for i, leg in enumerate(request.legs):
-        fill_price = round(prices[(leg.expiration_date, leg.strike_price, leg.option_type)], 2)
+        # Phase 5.2.1: the authoritative fill price is already tick-aligned
+        # by the router; the belt-and-braces normalization below guarantees
+        # no legacy caller can write an off-tick fill.
+        fill_price = round_option_price(prices[(leg.expiration_date, leg.strike_price, leg.option_type)])
         leg_symbol = leg.symbol.upper()
 
         order = PaperOrder(
@@ -449,7 +522,9 @@ def find_exit_replay(user_id: str, position: Position, client_order_id: str, db:
     )
     if existing is None:
         return None
-    return ExitOut(order=_serialize_order(existing), position=_serialize_position(position), duplicated=True)
+    position_out = _serialize_position(position)
+    position_out["strategy_tag"] = _strategy_tag_for(db, user_id, position.strategy_execution_id)
+    return ExitOut(order=_serialize_order(existing), position=position_out, duplicated=True)
 
 
 def exit_position(
@@ -515,7 +590,9 @@ def exit_position(
         lot_size=position.lot_size,
         status="FILLED",
         filled_quantity=qty,
-        fill_price=round(fill_price, 2),
+        # Phase 5.2.1: exits fill on the option tick, matching the entry
+        # boundary so the canonical fill/display price agrees.
+        fill_price=round_option_price(fill_price),
         price_source="market",
         realized_pnl=round(realized, 2),
     )
@@ -574,7 +651,9 @@ def exit_position(
     if commit:
         db.commit()
         db.refresh(position)
-    return ExitOut(order=_serialize_order(order), position=_serialize_position(position), duplicated=False)
+    position_out = _serialize_position(position)
+    position_out["strategy_tag"] = _strategy_tag_for(db, user_id, position.strategy_execution_id)
+    return ExitOut(order=_serialize_order(order), position=position_out, duplicated=False)
 
 
 def _close_journal_legs(user_id: str, position: Position, exit_qty: int, exit_price: float, db: Session, now: datetime) -> None:
@@ -927,13 +1006,23 @@ def _bulk_exit_replay(record: BulkExitRecord) -> BulkExitOut:
 
 
 def get_open_positions(user_id: str, db: Session) -> list[dict]:
+    # Phase 5.2.1 §7: an ACTIVE position is status == "open" AND
+    # net_quantity != 0 — a zero-quantity row is never active (the engine
+    # already marks full exits closed; this server-side invariant is the
+    # authoritative backstop the frontend mirrors).
     positions = db.scalars(
         select(Position)
-        .where(Position.user_id == user_id, Position.status == "open")
+        .where(
+            Position.user_id == user_id,
+            Position.status == "open",
+            Position.net_quantity != 0,
+        )
         .order_by(Position.opened_at.desc())
     ).all()
     # Unrealized P&L needs a market mark — never fabricated server-side.
-    return [_serialize_position(p) for p in positions]
+    # Phase 5.2.1: attach the displayed strategy name (never "Custom" for a
+    # named strategy; only legacy/missing executions fall back).
+    return _attach_strategy_tags(db, user_id, [_serialize_position(p) for p in positions])
 
 
 def get_order_history(user_id: str, db: Session) -> list[dict]:
