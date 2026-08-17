@@ -21,7 +21,9 @@ import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
+import { analyzeCapital } from "@/lib/calculations/analyticalCapital";
 import { calculateScenario, calculateScenarioMatrix } from "@/lib/calculations/scenario";
+import { estimatedBasisLabel } from "@/lib/capital";
 import { calculateStrategyGreeks } from "@/lib/calculations/greekAnalytics";
 import ScenarioPanel from "./ScenarioPanel";
 import GreekAnalyticsPanel from "./GreekAnalyticsPanel";
@@ -2628,6 +2630,17 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
   const marketOpen = marketStatus?.status === "open";
   const marketClosed = marketStatus?.status === "closed";
   const canExecute = structural.valid && !orderInFlight;
+  // Phase 6.2: analytical capital recomputes on every strategy change (strike,
+  // action, quantity, option type, expiry, leg add/remove) — a pure client
+  // recompute, no market-data polling and no broker call per edit (§17).
+  const capital = useMemo(
+    () => analyzeCapital(strategy.legs, { lotSize, multiplier }),
+    [strategy.legs, lotSize, multiplier]
+  );
+  const capitalBasisLine =
+    capital.value == null
+      ? "ESTIMATED · UNAVAILABLE"
+      : `ESTIMATED · ${(estimatedBasisLabel(capital.basis) ?? "ANALYTICAL").toUpperCase()}`;
   const badge = (label, color, bg, bd) => ({
     padding: "2px 9px",
     borderRadius: 999,
@@ -2692,6 +2705,37 @@ function ReviewPanel({ strategy, calc, lotSize, multiplier, structural, execIssu
           value={calc.roiUnlimited ? "Unlimited" : calc.roi != null ? `${calc.roi >= 0 ? "+" : ""}${calc.roi.toFixed(1)}%` : "N/A"}
           color={calc.roiUnlimited ? C.gold : calc.roi != null && calc.roi >= 0 ? C.green : calc.roi != null ? C.red : C.text}
         />
+      </div>
+
+      {/* Phase 6.2: analytical capital section. Broker Margin and Estimated
+          Capital are INDEPENDENT values — an unavailable broker margin is
+          never replaced by the analytical estimate (§2/§16). */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 9.5, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>CAPITAL</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "6px 12px" }}>
+          <ReviewMetric label="Premium Outlay" value={`₹${fmtIN(calc.premiumOutlay, 2)}`} color={C.gold} />
+          <ReviewMetric
+            label="Estimated Capital"
+            value={capital.value == null ? "Unavailable" : `₹${fmtIN(capital.value, 2)}`}
+            color={capital.value == null ? C.faint : C.text}
+          />
+          <ReviewMetric label="Broker Margin" value="Unavailable" color={C.faint} />
+        </div>
+        <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.4, marginTop: 2, display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <span>PREMIUM OUTLAY · CALCULATED</span>
+          <span>{capitalBasisLine}</span>
+          <span>BROKER MARGIN · BROKER REPORTED · LIVE REFRESH NOT PERFORMED IN BUILDER</span>
+        </div>
+        {capital.value == null && capital.warnings.length > 0 && (
+          <div style={{ fontSize: 9, color: C.gold, marginTop: 2 }}>
+            {capital.warnings.join(" · ")} — analytical capital unavailable, never fabricated
+          </div>
+        )}
+        {capital.notes.length > 0 && (
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>
+            {capital.notes[0]}
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>

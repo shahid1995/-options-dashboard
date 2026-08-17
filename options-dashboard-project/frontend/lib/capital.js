@@ -74,11 +74,26 @@ export function capitalDisplay(capital) {
   };
 }
 
-// Estimated-capital basis label, e.g. "Premium Basis" for the only basis
-// Phase 6.0 supports. Null when no estimate exists.
+// Estimated-capital basis label. Phase 6.0/6.1 support the premium basis;
+// Phase 6.2 adds the analytical risk basis (defined loss). Null when no
+// estimate exists.
 export function estimatedBasisLabel(basis) {
   if (basis === "premium") return "Premium Basis";
+  if (basis === "max_loss" || basis === "risk_model") return "Risk Basis · Defined Loss";
   return null;
+}
+
+// Neutral descriptive difference between the broker-reported margin and the
+// analytical estimate: broker_margin − estimated_capital. Returns null when
+// either side is unavailable — it is descriptive ONLY (never labeled
+// "Savings" / "Advantage" / "Efficiency" / "Better") and never computed
+// from a missing number.
+export function brokerVsEstimateDifference(brokerMargin, estimatedCapital) {
+  if (brokerMargin == null || estimatedCapital == null) return null;
+  const broker = Number(brokerMargin);
+  const estimate = Number(estimatedCapital);
+  if (!Number.isFinite(broker) || !Number.isFinite(estimate)) return null;
+  return Math.round((broker - estimate) * 100) / 100;
 }
 
 // Whether the future Return-on-Capital inputs are complete. This is an INPUT
