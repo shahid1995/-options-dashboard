@@ -4,9 +4,9 @@ _Last updated: 2026-08-17_
 
 ## Current phase
 
-**Phase 5.2.1 — Active Positions UX, Strategy Filtering, Market Session Awareness & Option Price Precision**
+**Phase 6.1 — Upstox Broker Margin Integration**
 
-Status: 🔄 **Implemented / Pending Review**
+Status: 🔄 **Implemented / Pending Review** (final audit complete — implementation audited against the full Phase 6.1 spec, all automated verification passed, manual broker verification pending)
 
 ## Overall progress
 
@@ -43,13 +43,13 @@ Status: 🔄 **Implemented / Pending Review**
 
 Phase 6.0 was committed via the Changes panel: implementation `01d008e` + status update `45b459e` (pending final market-hours verification).
 
+Phase 6.1 implementation commit: `e677bb9` (audited 2026-08-17 — see "Phase 6.1 final audit" below; not yet user-verified / ChatGPT-approved).
+
 Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1 `22f09073749db169905fd2dd06c81c3e37794e0a`, Phase 4.0 `9ae9966ca358a716c0e53d96203103f5e717e86f`.
 
 The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
 
-The Phase 6.1 implementation is NOT committed yet: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
-
-The Phase 5.2.1 implementation is also NOT committed: it exists only in the working tree (per the phase's commit/deployment rules) and will be committed by the project owner after review.
+Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history — the current working tree is clean apart from this status update.
 
 ## Phase 5.2.1 implementation
 
@@ -218,7 +218,7 @@ Overall: **Implemented / Pending Review**
 
 ## Phase 6.1 implementation
 
-Status: 🔄 Implemented / Pending Review (implementation complete — manual verification pending, ChatGPT review pending)
+Status: 🔄 Implemented / Pending Review (implementation complete — FINAL AUDIT DONE 2026-08-17, manual broker verification pending, ChatGPT review pending)
 
 Implemented (READ-ONLY broker integration ONLY — no SPAN calculation, no homemade margin calculator, no Return on Capital, no real-money order placement, no deployment):
 
