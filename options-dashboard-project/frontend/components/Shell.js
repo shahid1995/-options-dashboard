@@ -1,0 +1,308 @@
+"use client";
+import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { C, useIsMobile } from "@/lib/ui";
+
+const NAV_ITEMS = [
+  { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: "📊" },
+  { key: "market", href: "/market", label: "Market", icon: "📈" },
+  { key: "orders", href: "/orders", label: "Orders", icon: "📋" },
+  { key: "positions", href: "/positions", label: "Positions", icon: "📐" },
+  { key: "strategies", href: "/strategies", label: "Strategies", icon: "⚡" },
+  { key: "portfolio", href: "/portfolio", label: "Portfolio", icon: "💼" },
+  { key: "activity", href: "/activity", label: "Activity", icon: "🕐" },
+  { key: "brokers", href: "/brokers", label: "Brokers", icon: "🔗" },
+  { key: "settings", href: "/settings", label: "Settings", icon: "⚙️" },
+];
+
+// Legacy route mapping: map old paths to active nav keys
+const ROUTE_KEY_MAP = {
+  "/dashboard": "dashboard",
+  "/market": "market",
+  "/orders": "orders",
+  "/positions": "positions",
+  "/strategies": "strategies",
+  "/portfolio": "portfolio",
+  "/activity": "activity",
+  "/brokers": "brokers",
+  "/settings": "settings",
+  "/paper": "strategies",
+};
+
+function getActiveKey(pathname) {
+  if (!pathname) return "dashboard";
+  // Exact match first
+  if (ROUTE_KEY_MAP[pathname]) return ROUTE_KEY_MAP[pathname];
+  // Prefix match (e.g. /orders/123 → orders)
+  for (const [route, key] of Object.entries(ROUTE_KEY_MAP)) {
+    if (pathname.startsWith(route + "/")) return key;
+  }
+  return "dashboard";
+}
+
+/* ---------- Top Bar ---------- */
+
+function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 44,
+        background: C.surface,
+        borderBottom: `1px solid ${C.border}`,
+        display: "flex",
+        alignItems: "center",
+        padding: "0 16px",
+        zIndex: 100,
+        gap: 12,
+      }}
+    >
+      {/* Hamburger (mobile) */}
+      <button
+        onClick={onToggleSidebar}
+        style={{
+          display: "none",
+          background: "none",
+          border: "none",
+          color: C.muted,
+          fontSize: 18,
+          cursor: "pointer",
+          padding: 4,
+        }}
+        className="shell-hamburger"
+        aria-label="Toggle navigation"
+      >
+        {sidebarOpen ? "✕" : "☰"}
+      </button>
+
+      {/* App title */}
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 700,
+          color: C.gold,
+          letterSpacing: 0.5,
+          whiteSpace: "nowrap",
+        }}
+      >
+        Options Dashboard
+      </div>
+
+      {/* Execution mode badge */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginLeft: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 1,
+            padding: "3px 8px",
+            borderRadius: 4,
+            background:
+              executionMode === "PAPER"
+                ? "rgba(201,161,90,0.15)"
+                : "rgba(76,175,125,0.15)",
+            color: executionMode === "PAPER" ? C.gold : C.green,
+            border: `1px solid ${executionMode === "PAPER" ? "rgba(201,161,90,0.3)" : "rgba(76,175,125,0.3)"}`,
+          }}
+        >
+          {executionMode}
+        </span>
+        <span style={{ fontSize: 10, color: C.faint }}>
+          {executionMode === "PAPER"
+            ? "Simulated — no broker orders"
+            : executionMode === "LIVE"
+              ? "Live — orders sent to broker"
+              : "Simulated — no broker orders"}
+        </span>
+      </div>
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* Market status indicator */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-block",
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            background:
+              marketStatus === "open"
+                ? C.green
+                : marketStatus === "closed"
+                  ? C.red
+                  : C.faint,
+          }}
+        />
+        <span style={{ fontSize: 11, color: C.muted, letterSpacing: 0.5 }}>
+          {marketStatus === "open"
+            ? "MARKET OPEN"
+            : marketStatus === "closed"
+              ? "MARKET CLOSED"
+              : "MARKET UNKNOWN"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Sidebar ---------- */
+
+function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
+  return (
+    <nav
+      className="shell-sidebar"
+      style={{
+        position: "fixed",
+        top: 44,
+        left: 0,
+        bottom: 0,
+        width: isOpen ? 200 : 0,
+        minWidth: isOpen ? 200 : 0,
+        background: C.surface,
+        borderRight: isOpen ? `1px solid ${C.border}` : "none",
+        overflow: "hidden",
+        transition: "width 0.2s ease, min-width 0.2s ease",
+        zIndex: 90,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <div
+        style={{
+          padding: isOpen ? "12px 0" : 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          minWidth: 200,
+        }}
+      >
+        {NAV_ITEMS.map((item) => {
+          const isActive = activeKey === item.key;
+          return (
+            <a
+              key={item.key}
+              href={item.href}
+              onClick={isMobile ? onClose : undefined}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: isActive ? 600 : 400,
+                color: isActive ? C.gold : C.muted,
+                textDecoration: "none",
+                background: isActive ? "rgba(201,161,90,0.08)" : "transparent",
+                borderLeft: isActive
+                  ? `2px solid ${C.gold}`
+                  : "2px solid transparent",
+                transition: "background 0.15s, color 0.15s",
+              }}
+            >
+              <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>
+                {item.icon}
+              </span>
+              <span>{item.label}</span>
+            </a>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+/* ---------- Shell ---------- */
+
+export default function Shell({ children, executionMode = "PAPER", marketStatus = "unknown" }) {
+  const pathname = usePathname();
+  const isMobile = useIsMobile(900);
+  const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
+
+  const activeKey = getActiveKey(pathname);
+
+  // Close sidebar on mobile by default
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+    else setSidebarOpen(true);
+  }, [isMobile]);
+
+  // Close sidebar on navigation on mobile
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+  }, [pathname, isMobile]);
+
+  const contentMarginLeft = isMobile ? 0 : sidebarOpen ? 200 : 0;
+
+  return (
+    <>
+      <style>{`
+        @media (max-width: 900px) {
+          .shell-hamburger { display: block !important; }
+          .shell-sidebar { width: 0 !important; min-width: 0 !important; }
+          .shell-sidebar.shell-open { width: 220px !important; min-width: 220px !important; }
+        }
+      `}</style>
+
+      <TopBar
+        executionMode={executionMode}
+        marketStatus={marketStatus}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+      />
+
+      <Sidebar
+        activeKey={activeKey}
+        isMobile={isMobile}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      {/* Mobile overlay */}
+      {isMobile && sidebarOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: 44,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            zIndex: 80,
+          }}
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Main content */}
+      <main
+        style={{
+          marginTop: 44,
+          marginLeft: contentMarginLeft,
+          minHeight: "calc(100vh - 44px)",
+          transition: "margin-left 0.2s ease",
+          padding: 16,
+        }}
+      >
+        {children}
+      </main>
+    </>
+  );
+}

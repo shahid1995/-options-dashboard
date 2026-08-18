@@ -1,12 +1,21 @@
 # Options Dashboard — Project Master Blueprint
 
-_Last updated: 2026-08-16_
+_Last updated: 2026-08-18_
 
 ## 1. Product vision
 
-Build a professional options-trading research and paper-trading platform focused initially on Indian index options. The platform should let a user connect an authorized broker/data account, build and analyze multi-leg option strategies, paper trade them, monitor positions, study performance, and later backtest, scan, automate, and share strategies.
+Build a professional options-trading dashboard and trading terminal initially focused on Indian index options.
 
-The product is currently **paper trading only**. No real-money execution is part of the current scope.
+The platform must be architected for:
+
+- **PAPER execution** — simulated trading with no real broker orders
+- **LIVE broker execution** — future real-money execution through the broker-neutral BrokerGateway and broker-specific adapters
+
+Paper mode is an execution environment. Live mode is another execution environment. The same trading concepts (orders, positions, portfolio, P&L, strategies, journal, risk controls) work in both modes.
+
+**Every trading feature must be designed for eventual LIVE broker execution first.** PAPER is a safe execution backend that performs the equivalent workflow without sending an order to the broker.
+
+LIVE execution is currently **DISABLED**. No real broker orders are placed in the current version.
 
 ## 2. Core principles
 

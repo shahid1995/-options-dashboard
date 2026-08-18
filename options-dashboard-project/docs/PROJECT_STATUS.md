@@ -881,6 +881,49 @@ No commit. No push. Implementation left in the working tree for the owner's revi
 
 No deployment.
 
+## Phase 6.6.0–6.6.2 — Trading Workstation Foundation, Application Shell & Orders Module
+
+### Status: Implemented (working tree — pending review)
+
+### What was built
+
+**1. Application Shell** (`components/Shell.js`)
+- Fixed top bar with execution mode badge (PAPER / LIVE), market status indicator
+- Collapsible sidebar with 9 navigation modules
+- Responsive mobile drawer with overlay
+
+**2. Information Architecture**
+- `/dashboard` — Option Chain (existing)
+- `/orders` — Orders module (fully functional)
+- `/positions` — Positions (functional, reads existing API)
+- `/strategies` — Strategies (links to Builder)
+- `/portfolio`, `/market`, `/brokers`, `/settings`, `/activity` — navigation-ready placeholders
+
+**3. Orders Module** (`app/orders/page.js`)
+- Tabs: All, Open, Executed, Rejected, Cancelled with count badges
+- Full order table with expandable detail rows
+- Uses existing `GET /paper/orders` API
+
+**4. Execution Context**
+- Top bar shows PAPER with "Simulated — no broker orders"
+- LIVE is architecturally present but disabled
+
+**5. Documentation**
+- Blueprint: product vision now describes PAPER + LIVE execution modes
+- All existing functionality preserved
+
+### Files created
+- `components/Shell.js`, `app/orders/page.js`, `app/positions/page.js`, `app/portfolio/page.js`, `app/strategies/page.js`, `app/market/page.js`, `app/brokers/page.js`, `app/settings/page.js`, `app/activity/page.js`
+
+### Files modified
+- `app/layout.js`, `docs/PROJECT_MASTER_BLUEPRINT.md`, `docs/PROJECT_STATUS.md`
+
+### Database / backend changes
+None. Uses existing endpoints.
+
+### Git status
+No commit. No push. Working tree.
+
 ## Next phase objective — Phase 6.5
 
 Phases 6.4 (Capital Allocation / Portfolio Risk Controls) and 6.4.1 (Broker Profile & Connection Diagnostics) are implemented and pending review. The next milestone is **Phase 6.5 — Portfolio Risk Controls / Optional Execution Guardrails** (optional, explicitly configured execution guardrails built on the Phase 6.4 monitoring-only limit framework). Do NOT implement Phase 6.5 until Phases 6.4 / 6.4.1 are verified and approved. Phase 6.1 (Upstox broker margin), Phase 6.2 (analytical capital model) and Phase 6.3 (capital efficiency) remain implemented / pending the owner's review.
