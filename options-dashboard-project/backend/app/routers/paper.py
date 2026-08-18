@@ -15,6 +15,9 @@ from app.schemas import (
     CapitalOut,
     ExecutionOut,
     ExecutionRequestIn,
+    ExitIntentOut,
+    ExitIntentRequestIn,
+    ExitIntentTargetOut,
     ExitOut,
     ExitRequestIn,
     LegCloseIn,
@@ -530,3 +533,178 @@ async def capital(
     """
     user_id, access_token = require_session(session_id)
     return await get_capital_summary(user_id, db, access_token=access_token)
+
+
+# ---- Phase 6.5.0.4: Server-authoritative exit intent -----------------------
+
+
+@router.post("/exit-intent", response_model=ExitIntentOut)
+async def submit_exit_intent(
+    request: ExitIntentRequestIn,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """POST /paper/exit-intent — Server-authoritative exit intent (Phase 6.5.0.4).
+
+    The server independently resolves the exit selector against the
+    authenticated user's current StrategyLegExposure and Position data, then
+    executes through the existing paper engine. The client does NOT dictate
+    which exposure is actually targeted.
+
+    Flow:
+        authenticate user
+        ↓
+        validate selector
+        ↓
+        resolve StrategyLegExposure (server-authoritative)
+        ↓
+        create ExecutionTarget[]
+        ↓
+        create ExecutionIntent
+        ↓
+        ExecutionRouter → PAPER
+        ↓
+        existing paper execution engine
+        ↓
+        transactional state update
+    """
+    from app.services.exit_selector import ExitSelectorError, resolve_server_exit_targets
+    from app.services.execution_intent import (
+        ExecutionIntent,
+        ExecutionMode,
+        ExecutionRouter,
+        ExecutionSource,
+        ExecutionStatus,
+    )
+
+    user_id, access_token = require_session(session_id)
+    await require_market_open(access_token)
+
+    try:
+        # 1. Server-side resolution against authoritative DB state
+        targets = resolve_server_exit_targets(
+            db=db,
+            user_id=user_id,
+            scope=request.scope,
+            strategy_execution_id=request.strategy_execution_id,
+            position_id=request.position_id,
+            exposure_id=request.exposure_id,
+            option_type=request.option_type,
+            action=request.action,
+            quantity_mode=request.quantity_mode,
+            quantity=request.quantity,
+        )
+    except ExitSelectorError as exc:
+        return ExitIntentOut(
+            status="NO_MATCHING_TARGETS" if exc.code == "NO_MATCHING_TARGETS" else "REJECTED",
+            targets_resolved=0,
+            errors=[f"{exc.code}: {exc.message}"],
+        )
+
+    # 2. Create ExecutionIntent from server-resolved targets
+    import secrets as _secrets
+    from datetime import datetime as _dt, timezone as _tz
+    strategy_exec_id = targets[0].strategy_execution_id if len(targets) == 1 else None
+    intent = ExecutionIntent(
+        intent_id=_secrets.token_hex(16),
+        user_id=user_id,
+        execution_mode=ExecutionMode.PAPER,
+        source=ExecutionSource.EXIT_SELECTOR,
+        targets=targets,
+        idempotency_key=request.client_order_id,
+        created_at=_dt.now(_tz.utc).isoformat(),
+        strategy_execution_id=strategy_exec_id,
+    )
+
+    # 3. Resolve market prices for all target positions
+    try:
+        # Build pseudo-legs for the existing market-price resolver
+        from app.routers.paper import resolve_bulk_market_prices
+
+        # Collect unique positions
+        seen_positions: set[int] = set()
+        position_objects: list = []
+        for t in targets:
+            if t.position_id not in seen_positions:
+                pos = db.get(Position, t.position_id)
+                if pos is not None:
+                    position_objects.append(pos)
+                    seen_positions.add(t.position_id)
+
+        prices = await resolve_bulk_market_prices(access_token, position_objects)
+    except PaperExecutionError as exc:
+        return ExitIntentOut(
+            status="FAILED",
+            intent_id=intent.intent_id,
+            targets_resolved=len(targets),
+            targets=[ExitIntentTargetOut(
+                position_id=t.position_id,
+                strategy_leg_exposure_id=t.strategy_leg_exposure_id,
+                strategy_execution_id=t.strategy_execution_id,
+                symbol=t.symbol, expiry=t.expiry, strike=t.strike,
+                option_type=t.option_type, source_action=t.source_action,
+                exit_side=t.exit_side, quantity=t.quantity,
+                remaining_quantity=t.remaining_quantity, lot_size=t.lot_size,
+            ) for t in targets],
+            errors=[f"{exc.code}: {exc.message}"],
+        )
+    except BrokerError as exc:
+        return ExitIntentOut(
+            status="FAILED",
+            intent_id=intent.intent_id,
+            targets_resolved=len(targets),
+            errors=[f"MARKET_DATA_ERROR: {exc.message}"],
+        )
+
+    # 4. Set fill prices on targets and execute via ExecutionRouter
+    priced_targets = []
+    for t in targets:
+        price_key = (t.symbol.upper(), t.expiry, t.strike, t.option_type)
+        price = prices.get(price_key)
+        if price is None:
+            return ExitIntentOut(
+                status="FAILED",
+                intent_id=intent.intent_id,
+                targets_resolved=len(targets),
+                errors=[f"CHAIN_DATA_MISSING: Market data unavailable for {t.symbol} {t.strike:g} {t.option_type.upper()} ({t.expiry})."],
+            )
+        from dataclasses import replace
+        priced_targets.append(replace(t, price_override=price))
+
+    intent.targets = priced_targets
+
+    # 5. Execute through the ExecutionRouter
+    router = ExecutionRouter(db=db)
+    result = await router.execute_intent(intent, access_token=access_token)
+
+    # 6. Build response
+    target_outs = []
+    order_outs = []
+    position_outs = []
+    for r in result.results:
+        if "order" in r and r["order"]:
+            order_outs.append(r["order"])
+        if "position" in r and r["position"]:
+            position_outs.append(r["position"])
+    for t in priced_targets:
+        target_outs.append(ExitIntentTargetOut(
+            position_id=t.position_id,
+            strategy_leg_exposure_id=t.strategy_leg_exposure_id,
+            strategy_execution_id=t.strategy_execution_id,
+            symbol=t.symbol, expiry=t.expiry, strike=t.strike,
+            option_type=t.option_type, source_action=t.source_action,
+            exit_side=t.exit_side, quantity=t.quantity,
+            remaining_quantity=t.remaining_quantity, lot_size=t.lot_size,
+        ))
+
+    return ExitIntentOut(
+        status=result.status.value,
+        intent_id=result.intent_id,
+        duplicated=result.duplicated,
+        targets_resolved=len(targets),
+        targets_executed=result.targets_succeeded,
+        targets=target_outs,
+        orders=order_outs,
+        positions=position_outs,
+        errors=result.errors,
+    )

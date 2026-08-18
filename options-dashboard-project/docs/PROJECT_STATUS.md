@@ -4,9 +4,82 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.5.0.3 — Execution Intent + Execution Router Foundation**
+**Phase 6.5.0.4 — Server-Side Exit Intent Resolution + Paper Exit API**
 
-Status: 🔄 **Implemented / Pending Review** (execution boundary foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: 🔄 **Implemented / Pending Review** (server-authoritative exit flow complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+## Phase 6.5.0.4 implementation
+
+Status: 🔄 Implemented / Pending Review (server-authoritative exit intent resolution + paper exit API — NO live execution, NO UI, NO new persistence)
+
+### What was built
+
+Turns the frontend Exit Selector architecture into a SERVER-AUTHORITATIVE, LEG-AWARE, IDEMPOTENT, PAPER-EXECUTABLE exit flow.
+
+- **Server-Side Exit Selector Resolver** (`backend/app/services/exit_selector.py`): `resolve_server_exit_targets(db, user_id, scope, ...)` — independently resolves the user's exit selector against the authenticated user's current `StrategyLegExposure` and `Position` data. The client does NOT dictate which exposure is targeted.
+  - Scopes: POSITION (one position), STRATEGY (one strategy_execution_id), PORTFOLIO (all user exposures)
+  - Selector filters: option_type (CALL/PUT/CE/PE), action (BUY/SELL — the source strategy-leg action)
+  - Quantity modes: ALL (all remaining), QUANTITY (explicit lot count)
+  - Normalization: CE→CALL, PE→PUT, case-insensitive action/scope/mode
+  - Individual exposure targeting via `exposure_id`
+  - Deterministic ordering: `[option_type, source_action, exposure_id]`
+  - Side inversion: BUY exposure → SELL execution (via `exit_side_for()`)
+  - StrategyLegExposure is the authoritative attribution source
+  - Position remains authoritative for NET portfolio exposure
+  - User identity from authentication, never from request body
+  - No broker-specific fields, no Upstox imports
+
+- **ExitIntentRequestIn** (`backend/app/schemas.py`): request schema with `client_order_id`, `scope`, `strategy_execution_id`, `position_id`, `exposure_id`, `option_type`, `action`, `quantity_mode`, `quantity`
+- **ExitIntentOut** + **ExitIntentTargetOut** (`backend/app/schemas.py`): response schemas exposing status, intent_id, targets, orders, positions, errors
+
+- **POST /paper/exit-intent** (`backend/app/routers/paper.py`): server-authoritative exit intent endpoint that:
+  1. Authenticates user
+  2. Resolves selector against authoritative DB state (StrategyLegExposure + Position)
+  3. Creates ExecutionTarget[] from server-resolved exposures
+  4. Creates ExecutionIntent (Phase 6.5.0.3)
+  5. Resolves market prices for all target positions (existing market-price resolver)
+  6. Sets fill prices on targets
+  7. Executes through ExecutionRouter → PAPER → existing paper execution engine
+  8. Returns structured ExitIntentOut response
+
+### Architecture
+
+```
+    User selector (scope + option_type + action + quantity_mode)
+        ↓
+    POST /paper/exit-intent
+        ↓
+    Server Exit Resolver (resolve_server_exit_targets)
+        ↓
+    StrategyLegExposure (authoritative per-execution/per-leg)
+        ↓
+    ExecutionTarget[] (with side inversion)
+        ↓
+    ExecutionIntent (Phase 6.5.0.3)
+        ↓
+    ExecutionRouter (Phase 6.5.0.3)
+        ↓
+    Market Price Resolver (existing)
+        ↓
+    Existing Paper Execution Engine
+        ↓
+    Position + StrategyLegExposure + Cash + P&L + Journal
+```
+
+### Schema / migration
+
+None. No database changes.
+
+### Automated verification (actual runs)
+
+- Backend: **604/604 tests passed** — 73 new in `tests/test_exit_selector.py` covering: selector normalization (CE→CALL, PE→PUT, action, scope, quantity_mode), side inversion (buy→sell, sell→buy), input validation (missing scope, missing position_id, missing execution_id, missing quantity, invalid quantity), no matching targets (no exposures, wrong option type filter, wrong action filter, closed exposure, zero remaining, nonexistent strategy/position, closed position), position scope (single exposure, multiple exposures, option_type filter, action filter), strategy scope (strategy isolation, selector filter), portfolio scope (all exposures, option_type filter), individual exposure targeting (specific exposure_id), quantity mode (ALL, QUANTITY, exceeds remaining, ambiguous multiple targets, unambiguous single target), user isolation (cross-user position/strategy/portfolio), deterministic ordering (by option_type/action/exposure_id), side inversion integration (buy call→sell, sell call→buy, buy put→sell, sell put→buy), instrument identity preservation, exposure identity preservation, edge cases (partial remaining, multiple strategies same instrument, no broker fields, CE/PE filter), static architecture audit (no broker imports, no broker fields).
+- Frontend: **769/769 tests passed (33 files)** — unchanged (no frontend changes in this phase)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+## Phase 6.5.0.3 implementation
 
 ## Phase 6.5.0.3 implementation
 

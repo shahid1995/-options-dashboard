@@ -176,6 +176,69 @@ class ExitOut(BaseModel):
 # ---- Phase 5.2: bulk paper position exit ------------------------------------
 
 
+class ExitIntentRequestIn(BaseModel):
+    """Server-authoritative exit intent request (Phase 6.5.0.4).
+
+    The selector identifies WHAT exposure should be exited. The server
+    independently resolves this against the authenticated user's current
+    StrategyLegExposure and Position data — the client does NOT get to
+    dictate which exposure is actually targeted.
+
+    ``scope`` identifies the resolution scope:
+    - PORTFOLIO: all matching open exposures of the user
+    - STRATEGY: only exposures within one strategy_execution_id
+    - POSITION: only exposures within one position_id
+
+    ``option_type`` and ``action`` filter the source exposure (NOT the
+    execution side). ``action`` = "BUY" means the original strategy-leg
+    action was BUY; the server will exit with SELL.
+
+    ``exposure_id`` optionally targets a single StrategyLegExposure.
+    """
+
+    client_order_id: str = Field(..., min_length=8, max_length=64)
+    scope: Literal["PORTFOLIO", "STRATEGY", "POSITION"] = "STRATEGY"
+    strategy_execution_id: str | None = None
+    position_id: int | None = None
+    exposure_id: int | None = None
+    option_type: Literal["CALL", "PUT", "call", "put", "CE", "PE", "ce", "pe"] | None = None
+    action: Literal["BUY", "SELL", "buy", "sell"] | None = None
+    quantity_mode: Literal["ALL", "QUANTITY"] = "ALL"
+    quantity: int | None = Field(default=None, ge=1)
+
+
+class ExitIntentTargetOut(BaseModel):
+    """One resolved execution target from the server-side resolver."""
+
+    position_id: int
+    strategy_leg_exposure_id: int | None = None
+    strategy_execution_id: str | None = None
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    source_action: str  # the original strategy-leg action
+    exit_side: str      # the inverse transaction side
+    quantity: int       # lots to exit
+    remaining_quantity: int
+    lot_size: int
+
+
+class ExitIntentOut(BaseModel):
+    """Result of a server-authoritative exit intent resolution + execution."""
+
+    status: str  # SUCCESS | PARTIAL | FAILED | DUPLICATE | DISABLED | REJECTED | NO_MATCHING_TARGETS
+    intent_id: str | None = None
+    duplicated: bool = False
+    targets_resolved: int = 0
+    targets_executed: int = 0
+    targets: list[ExitIntentTargetOut] = []
+    orders: list[OrderOut] = []
+    positions: list[PositionOut] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+
+
 class BulkExitRequestIn(BaseModel):
     """Bulk exit request (idempotent via ``client_order_id``).
 
