@@ -1048,13 +1048,68 @@ def get_open_positions(user_id: str, db: Session) -> list[dict]:
     return _attach_strategy_tags(db, user_id, [_serialize_position(p) for p in positions])
 
 
-def get_order_history(user_id: str, db: Session) -> list[dict]:
-    orders = db.scalars(
-        select(PaperOrder)
-        .where(PaperOrder.user_id == user_id)
-        .order_by(PaperOrder.created_at.desc())
-    ).all()
-    return [_serialize_order(o) for o in orders]
+def get_order_history(
+    user_id: str,
+    db: Session,
+    *,
+    status: str | None = None,
+    symbol: str | None = None,
+    action: str | None = None,
+    option_type: str | None = None,
+    kind: str | None = None,
+    strategy_execution_id: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict]:
+    """Return the user's paper order history with optional server-side filters.
+
+    ``status`` is uppercase (PENDING, FILLED, REJECTED, etc.).
+    ``symbol`` is case-insensitive.
+    ``action`` is lowercase (buy, sell).
+    ``option_type`` is lowercase (call, put).
+    ``kind`` is lowercase (entry, exit).
+    ``strategy_execution_id`` filters to one strategy execution.
+    ``limit`` / ``offset`` bound the result set (default 200 most recent).
+
+    Backward-compatible: when no filters are passed the behaviour is
+    identical to the previous implementation.
+    """
+    stmt = select(PaperOrder).where(PaperOrder.user_id == user_id)
+    if status:
+        stmt = stmt.where(PaperOrder.status == status)
+    if symbol:
+        stmt = stmt.where(PaperOrder.symbol == symbol.upper())
+    if action:
+        stmt = stmt.where(PaperOrder.action == action.lower())
+    if option_type:
+        stmt = stmt.where(PaperOrder.option_type == option_type.lower())
+    if kind:
+        stmt = stmt.where(PaperOrder.kind == kind.lower())
+    if strategy_execution_id:
+        stmt = stmt.where(PaperOrder.execution_id == strategy_execution_id)
+    stmt = stmt.order_by(PaperOrder.created_at.desc()).limit(limit).offset(offset)
+    orders = list(db.scalars(stmt).all())
+    rows = [_serialize_order(o) for o in orders]
+    # Attach strategy_tag in one batched lookup
+    exec_ids = {o.get("execution_id") for o in rows if o.get("execution_id")}
+    if exec_ids:
+        tag_map = dict(
+            db.execute(
+                select(StrategyExecution.execution_id, StrategyExecution.strategy_tag).where(
+                    StrategyExecution.user_id == user_id,
+                    StrategyExecution.execution_id.in_(exec_ids),
+                )
+            ).all()
+        )
+        for o in rows:
+            eid = o.get("execution_id")
+            o["strategy_tag"] = tag_map.get(eid) or "Custom"
+            o["strategy_execution_id"] = eid
+    else:
+        for o in rows:
+            o["strategy_tag"] = "Custom"
+            o["strategy_execution_id"] = o.get("execution_id")
+    return rows
 
 
 def get_portfolio(user_id: str, db: Session) -> PortfolioOut:

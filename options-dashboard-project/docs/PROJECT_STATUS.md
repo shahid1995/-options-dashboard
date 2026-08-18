@@ -881,6 +881,51 @@ No commit. No push. Implementation left in the working tree for the owner's revi
 
 No deployment.
 
+## Phase 6.6.3 — Production-Grade Orders Module & Broker-Ready Order Lifecycle
+
+### Status: Implemented (working tree — pending review)
+
+### What was built
+
+**1. Server-side order filtering** (`backend/app/routers/paper.py`, `paper_execution.py`)
+- Enhanced `GET /paper/orders` with query parameters: `status`, `symbol`, `action`, `option_type`, `kind`, `strategy_execution_id`, `limit`, `offset`
+- Backward-compatible: no parameters returns the same data as before
+- `limit` defaults to 200, max 500; `offset` for pagination
+- Strategy tags attached in one batched lookup
+
+**2. Enhanced OrderOut schema** (`backend/app/schemas.py`)
+- Added `updated_at` field
+- Added `strategy_tag` and `strategy_execution_id` fields (resolved by service layer)
+
+**3. Component-decomposed Orders page** (`frontend/app/orders/page.js`)
+- `OrderStatusBadge`, `OrderSideBadge`, `OrderOptionBadge` — reusable badges
+- `OrderTabs` — tab bar with count badges
+- `OrderFilters` — server-side filter controls (symbol, side, type, kind)
+- `OrderRow` — table row with expand/collapse
+- `OrderDetails` — structured 6-section detail panel (Order, Instrument, Request, Execution, Attribution, Broker)
+- `EmptyState`, `ErrorState` with retry
+- `getPaperOrdersFiltered()` API function added
+
+**4. Backend tests** (`backend/tests/test_orders_api.py`)
+- 22 tests covering: backward compatibility, filters, pagination, strategy tags, user isolation, authentication, no broker leakage, partial execution
+
+**5. Frontend tests** (`frontend/app/orders/Orders.test.js`)
+- 51 tests covering: badges, tabs, filters, order details, row expand/collapse, broker neutrality, quantity representation, null fields
+
+### Files created
+- `backend/tests/test_orders_api.py`
+- `frontend/app/orders/Orders.test.js`
+
+### Files modified
+- `backend/app/schemas.py`, `backend/app/routers/paper.py`, `backend/app/services/paper_execution.py`
+- `frontend/app/orders/page.js`, `frontend/lib/api.js`, `docs/PROJECT_STATUS.md`
+
+### Database changes
+None.
+
+### Git status
+No commit. No push. Working tree.
+
 ## Phase 6.6.0–6.6.2 — Trading Workstation Foundation, Application Shell & Orders Module
 
 ### Status: Implemented (working tree — pending review)

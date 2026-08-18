@@ -79,7 +79,15 @@ export const exitAllPaperPositions = (payload) =>
 
 export const getPaperPositions = () => api.get("/paper/positions").then((r) => r.data);
 
+// ---- Phase 6.6.3: canonical orders endpoint with server-side filtering ----
+// Backward-compatible: no params returns all orders.
+// New params: status, symbol, action, option_type, kind,
+//             strategy_execution_id, limit, offset.
+
 export const getPaperOrders = () => api.get("/paper/orders").then((r) => r.data);
+
+export const getPaperOrdersFiltered = (params = {}) =>
+  api.get("/paper/orders", { params }).then((r) => r.data);
 
 export const getPaperPortfolio = () => api.get("/paper/portfolio").then((r) => r.data);
 

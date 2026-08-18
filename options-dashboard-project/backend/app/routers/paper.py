@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -441,10 +441,39 @@ def positions(
 def orders(
     session_id: str | None = Depends(get_session_id),
     db: Session = Depends(get_db),
+    status: str | None = Query(default=None, description="Filter by status (PENDING, FILLED, REJECTED, etc.)"),
+    symbol: str | None = Query(default=None, description="Filter by symbol (case-insensitive)"),
+    action: str | None = Query(default=None, description="Filter by side (buy, sell)"),
+    option_type: str | None = Query(default=None, description="Filter by option type (call, put)"),
+    kind: str | None = Query(default=None, description="Filter by kind (entry, exit)"),
+    strategy_execution_id: str | None = Query(default=None, description="Filter by strategy execution ID"),
+    limit: int = Query(default=200, ge=1, le=500, description="Max orders to return"),
+    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
 ):
-    """The user's paper order history (fills, exits, status, timestamps)."""
+    """The user's paper order history with optional server-side filters.
+
+    Backward-compatible: no parameters returns the same data as before.
+    ``status`` is uppercase (PENDING, FILLED, REJECTED, etc.).
+    ``symbol`` is case-insensitive.
+    ``action`` is lowercase (buy, sell).
+    ``option_type`` is lowercase (call, put).
+    ``kind`` is lowercase (entry, exit).
+    ``strategy_execution_id`` filters to one strategy execution.
+    ``limit`` / ``offset`` bound the result set.
+    """
     user_id, _access_token = require_session(session_id)
-    return get_order_history(user_id, db)
+    return get_order_history(
+        user_id,
+        db,
+        status=status,
+        symbol=symbol,
+        action=action,
+        option_type=option_type,
+        kind=kind,
+        strategy_execution_id=strategy_execution_id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/portfolio", response_model=PortfolioOut)

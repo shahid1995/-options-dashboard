@@ -96,6 +96,10 @@ class OrderOut(BaseModel):
     realized_pnl: float | None
     rejected_reason: str | None
     created_at: datetime
+    updated_at: datetime
+    # Strategy attribution (resolved by the service layer, not stored on PaperOrder)
+    strategy_tag: str | None = None
+    strategy_execution_id: str | None = None
 
 
 class ExecutionOut(BaseModel):
