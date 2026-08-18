@@ -4,9 +4,67 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation + Upstox Adapter Architecture**
+**Phase 6.5.0.3 — Execution Intent + Execution Router Foundation**
 
-Status: 🔄 **Implemented / Pending Review** (broker-neutral foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: 🔄 **Implemented / Pending Review** (execution boundary foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+## Phase 6.5.0.3 implementation
+
+Status: 🔄 Implemented / Pending Review (execution boundary foundation only — NO live execution, NO Exit API, NO UI, NO new persistence)
+
+### What was built
+
+Establishes the broker-neutral execution boundary between EXIT INTENT / STRATEGY RESOLUTION and PAPER / FUTURE LIVE EXECUTION.
+
+- **ExecutionIntent** (`backend/app/services/execution_intent.py`): broker-neutral domain object representing WHAT the system has been instructed to execute. Carries intent_id, user_id, execution_mode (PAPER | LIVE), source (EXIT_SELECTOR | MANUAL_EXIT | BULK_EXIT), targets[], idempotency_key, strategy_execution_id, reason, metadata, warnings, status. NOT persisted — existing PaperOrder / StrategyExecution / BulkExitRecord provide authoritative persistence.
+- **ExecutionTarget** (frozen dataclass): canonical, broker-neutral execution target carrying position_id (authoritative net portfolio exposure), strategy_leg_exposure_id (authoritative per-execution/per-leg attribution), strategy_execution_id, canonical instrument identity (symbol/expiry/strike/option_type — NO broker-specific instrument_key), source_action (the original strategy-leg action: buy | sell), exit_side (the INVERSE transaction: buy→sell, sell→buy), quantity, remaining_quantity, lot_size, price_override. Frozen/immutable by construction.
+- **ExecutionResult**: canonical result carrying intent_id, status (SUCCESS | PARTIAL | FAILED | DUPLICATE | DISABLED | REJECTED), mode, targets_attempted/succeeded/failed, per-target results, errors, duplicated flag.
+- **ExecutionError / ExecutionErrorCode**: application-level execution routing errors distinct from BrokerError (which belongs below the router). Codes: INVALID_EXECUTION_INTENT, EXECUTION_TARGET_NOT_FOUND, EXECUTION_TARGET_STALE, EXECUTION_QUANTITY_INVALID, EXECUTION_QUANTITY_EXCEEDS_REMAINING, EXECUTION_IDEMPOTENCY_CONFLICT, LIVE_EXECUTION_DISABLED, PAPER_EXECUTION_FAILED, UNKNOWN_EXECUTION_MODE.
+- **Side translation** (§29): `exit_side_for(source_action)` and `source_action_for_exit(exit_side)` — BUY exposure → SELL execution, SELL exposure → BUY execution. StrategyLegExposure.action remains unchanged; the exit side is the inverse.
+- **Exit-intent → execution-intent conversion** (§7): `exit_intent_target_to_execution_target()` converts resolved exit-intent targets into canonical ExecutionTargets with the side inverted. `build_execution_targets_from_exposures()` builds targets from StrategyLegExposure ORM objects.
+- **Stale-target protection** (§33): `validate_targets_still_valid()` revalidates targets against current DB state before execution — checks position exists, belongs to user, is open with sufficient quantity, and StrategyLegExposure (when referenced) is open with sufficient remaining. Returns structured error list; empty = all valid.
+- **ExecutionRouter** (§10): routes ExecutionIntents to the appropriate execution backend.
+  - PAPER: delegates to the existing Paper Execution Engine via `exit_position()` — does NOT duplicate position netting, average price, P&L, cash flow, journal, idempotency, or StrategyLegExposure maintenance. Idempotent replay check runs before stale validation (matching the existing paper engine's pattern).
+  - LIVE: returns `ExecutionStatus.DISABLED` deterministically. Does NOT call BrokerGateway. Does NOT import UpstoxAdapter.
+  - Unknown mode: returns FAILED.
+- **Broker-neutral safety** (§18, §28, §38): ExecutionIntent module does NOT import UpstoxAdapter, app.services.upstox, or app.brokers.adapters. No broker-specific fields (instrument_key, transaction_type, access_token, etc.) in any domain object. Static AST audit tests prove this.
+- **User isolation** (§26): every target is validated against the authenticated user_id. Cross-user targeting is rejected.
+- **No new persistence** (§23, §40): no database table added. ExecutionIntent remains a domain/application object. Existing PaperOrder / StrategyExecution / StrategyLegExposure / BulkExitRecord provide the required persistence.
+- **No financial formula duplication** (§39): no payoff, margin, capital, Greeks, or P&L calculations added.
+
+### Architecture
+
+```
+    EXIT SELECTOR (frontend)
+         ↓
+    EXIT TARGET RESOLVER (frontend resolveExitTargets)
+         ↓
+    EXECUTION INTENT (backend domain — this phase)
+         ↓
+    EXECUTION ROUTER (backend — this phase)
+        ↙          ↘
+     PAPER         LIVE
+       ↓             ↓
+  Existing Paper   DISABLED
+  Execution Engine
+       ↓
+  Position + StrategyLegExposure + Journal + Cash
+```
+
+### Schema / migration
+
+None. No database changes.
+
+### Automated verification (actual runs)
+
+- Backend: **531/531 tests passed** — 95 new in `tests/test_execution_intent.py` covering: ExecutionTarget creation and validation (buy→sell, sell→buy, invalid sides, quantity/remaining validation, instrument identity, no broker fields), ExecutionIntent creation and validation (user_id required, targets required, idempotency key required, deterministic ID, random default key, metadata/reason preservation, no broker fields), side translation (§29), exit-intent → execution-target conversion (normalization, exposure ID, price override, invalid source), build targets from exposures (open/closed/zero, quantity modes, deterministic ordering, sell→buy), stale-target validation (closed position, quantity exceeds, user mismatch, missing position, closed exposure, quantity exceeds exposure, missing exposure, partial failure), ExecutionRouter PAPER routing (successful exit, position update, cash update, realized P&L, journal preservation, failed validation writes nothing, idempotent replay), ExecutionRouter LIVE disabled (deterministic disabled, no position modification, all targets failed), unknown mode, broker boundary safety (AST audit: no Upstox/upstox imports, no broker-specific fields on Intent/Target/Result), user isolation (cross-user rejected, stale validation catches cross-user), quantity safety (exceeds remaining, zero, negative), concurrency (same idempotency key replay, different keys same position), existing behavior preserved (EXIT STRATEGY through router, partial exit preserves remaining, StrategyLegExposure maintained, strategy isolation shared instrument), execution result states.
+- Frontend: **769/769 tests passed (33 files)** — unchanged (no frontend changes in this phase)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
+## Phase 6.5.0.2 implementation
 
 ## Phase 6.5.0 implementation
 
@@ -145,6 +203,7 @@ ChatGPT review: ⏳ pending
 | Phase 6.5.0 — Exit Intent / Selector Foundation | 🔄 Implemented | Pure Exit Intent / Selector domain: EXIT_SCOPE (POSITION/STRATEGY/PORTFOLIO), selector combinations (ALL/CALL/PUT/BUY/SELL/BUY CE/BUY PE/SELL CE/SELL PE/legId), resolveExitTargets with remaining-quantity semantics, quantity safety (AMBIGUOUS_EXIT_QUANTITY, never over remaining), deterministic ordering, user isolation, no execution/network — pending review (schema verdict superseded by 6.5.0.1) |
 | Phase 6.5.0.1 — Strategy Leg Attribution Architecture | 🔄 Implemented | New persistent StrategyLegExposure attribution model (per-execution, per-leg remaining), deterministic dominant-side FIFO exit allocation, position-capacity reconciliation (never over net position, never guessed), strategy-scoped journal-close fix with regression tests, conservative idempotent startup backfill, user isolation, no execution/UI — pending review |
 | Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation | 🔄 Implemented | Canonical broker domain (models/enums/errors/capabilities/protocols), BrokerGateway/Registry, UpstoxAdapter boundary, read-only migration (profile/funds/margin/market status/chain/contracts) behind the adapter, V3 order preparation (payload + response mappers, tested, NOT wired), native-slicing safety (execution_policy + multi-id results), no live execution / no second broker / no DB changes — pending review |
+| Phase 6.5.0.3 — Execution Intent + Execution Router Foundation | 🔄 Implemented | Broker-neutral ExecutionIntent/ExecutionTarget/ExecutionResult domain objects, execution error taxonomy, side inversion (BUY→SELL, SELL→BUY), exit-intent→execution-intent conversion, stale-target protection, ExecutionRouter (PAPER→existing paper engine, LIVE→DISABLED), idempotency, user isolation, no new persistence, no live execution, no broker imports in domain — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
