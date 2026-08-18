@@ -46,7 +46,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from app.services import upstox
+from app.brokers.domain.enums import BROKER_ID_UPSTOX
+from app.brokers.gateway import gateway
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +302,8 @@ async def get_market_status(
 
     if access_token:
         try:
-            body = await upstox.get_market_status(access_token, exchange=exchange)
+            adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
+            body = await adapter.get_market_status(exchange=exchange)
             data = body.get("data") or {}
             upstream = (data.get("status") or "").upper()
             trade_date = data.get("trade_date") or default_trade_date
@@ -331,7 +333,7 @@ async def get_market_status(
                 "orders are blocked.",
                 segment=segment, session_state=session_state,
             )
-        except Exception as exc:  # UpstoxError, network timeouts, ...
+        except Exception as exc:  # canonical BrokerError, network timeouts, ...
             logger.warning(
                 "Upstox market status unavailable (%s); falling back to local calendar", exc
             )

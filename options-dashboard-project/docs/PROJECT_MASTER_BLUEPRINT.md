@@ -183,19 +183,58 @@ Broker adapter
 User-specific market/data context
 ```
 
-Future abstraction:
+Implemented foundation (Phase 6.5.0.2 — see below):
 
 ```text
-BrokerAdapter
-├── Upstox
-├── Zerodha
-├── Angel One
-├── Dhan
-├── Fyers
-└── other supported brokers
+Application (strategy / risk / Greeks / IV / capital / portfolio /
+Exit Intent / StrategyLegExposure — all broker-independent)
+        ↓
+BrokerGateway (app/brokers/gateway.py — one controlled selection point)
+        ↓
+BrokerAdapter (app/brokers/domain/protocols.py — canonical contract)
+        ├── UpstoxAdapter (app/brokers/adapters/upstox — Adapter #1, IMPLEMENTED)
+        ├── Zerodha (future milestone)
+        ├── Angel One (future milestone)
+        ├── Dhan (future milestone)
+        ├── Fyers (future milestone)
+        └── other supported brokers (future)
 ```
 
-The strategy/calculation layer should not depend on a specific broker.
+Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation (implemented,
+tested; pulled forward from the former Phase 12 plan because future Phase
+6.5 execution work needs a broker boundary):
+
+- Canonical broker-neutral domain contracts (``app/brokers/domain/``):
+  enums, error taxonomy (``BrokerError`` / ``BrokerErrorCode``), canonical
+  instrument identity (broker keys stay in per-broker mappings), canonical
+  order request/result (multi broker-order-id capable), a capability model
+  that distinguishes SUPPORTED vs AVAILABLE vs ACCOUNT_DISABLED (never a
+  bare boolean), and the ``BrokerAdapter`` protocol.
+- ``BrokerGateway`` / ``BrokerRegistry``: broker selection happens in ONE
+  controlled location; unknown brokers fail safely with BROKER_UNKNOWN.
+- ``UpstoxAdapter`` (Adapter #1): the existing read-only Upstox integration
+  (profile, funds, margin, market status, option chain, option contracts)
+  now runs behind the adapter/gateway; Upstox-specific concepts
+  (instrument keys, transaction types, product codes, HTTP status/error
+  strings, token handling, V3 payload field names) stay inside the adapter
+  package and the raw client (``app/services/upstox.py``).
+- Upstox V3 ORDER preparation: the canonical order contract, payload
+  builder and response mapper exist and are tested, but NO live broker
+  execution is wired — order methods raise CAPABILITY_UNSUPPORTED.
+- Native-slicing safety by construction: one canonical ``execution_policy``
+  (AUTO / BROKER_NATIVE / PLATFORM_MANAGED / DISABLED) plus a multi-id
+  ``BrokerOrderResult`` — platform chunking and broker-native slicing can
+  never both apply to one order.
+
+Guarantees:
+
+- The strategy/calculation layer does not depend on a specific broker.
+- Paper trading remains fully broker-independent — a user can paper trade
+  without any connected broker. Paper execution is NOT live execution.
+- Credentials stay backend-only; adapters never log, repr or return
+  tokens; frontend-facing diagnostics never receive credentials.
+- A second broker (Zerodha, ...) is a LATER milestone and will register a
+  new adapter in the registry without changing domain code.
 
 ## 9. Dashboard / terminal direction
 
@@ -305,8 +344,14 @@ Planned.
 ### Phase 11 — Automation / alerts
 Planned.
 
-### Phase 12 — Multi-broker architecture
-Planned.
+### Phase 12 — Multi-broker expansion
+Planned (the broker-neutral FOUNDATION was pulled forward and is already
+implemented in Phase 6.5.0.2 — see section 8):
+- second broker adapter (architectural proof test)
+- additional broker adapters
+- persistent multi-broker connections (BrokerConnection credential model)
+- broker account management UI
+- broker-specific capability matrices
 
 ### Phase 13 — Community
 Planned:

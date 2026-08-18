@@ -4,9 +4,9 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.5.0.1 — Strategy Leg Attribution Architecture + Minimal Implementation**
+**Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation + Upstox Adapter Architecture**
 
-Status: 🔄 **Implemented / Pending Review** (attribution foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: 🔄 **Implemented / Pending Review** (broker-neutral foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
 
 ## Phase 6.5.0 implementation
 
@@ -88,6 +88,36 @@ Automated verification (actual runs):
 Manual verification: ⏳ pending (exercise multi-execution same-instrument scenarios end-to-end, then confirm exposure rows reconcile after partial exits/reversals)
 ChatGPT review: ⏳ pending
 
+## Phase 6.5.0.2 implementation
+
+Status: 🔄 Implemented / Pending Review (abstraction foundation only — NO live execution, NO Exit API, NO UI, NO second broker, NO persistent credential vault)
+
+### What was built
+
+A clean broker-neutral domain boundary with the existing read-only Upstox integration migrated behind it — Upstox becomes Adapter #1; a second broker becomes Adapter #2 later without contaminating strategy / risk / capital / portfolio / Exit Intent / paper-trading domains.
+
+- **Broker-neutral domain contracts** (`backend/app/brokers/domain/`): enums (`BrokerId`, `Side`, `OrderType`, `Product`, `Validity`, `OrderStatus`, `InstrumentType`, `OptionType`, `Segment`, `ExecutionPolicy`), error taxonomy (`BrokerError` / `BrokerErrorCode` with AUTH_REQUIRED / TOKEN_EXPIRED / RATE_LIMITED / NETWORK_ERROR / MAINTENANCE / INVALID_INSTRUMENT / INVALID_QUANTITY / INVALID_PRICE / ORDER_REJECTED / ORDER_NOT_FOUND / ORDER_ALREADY_FINAL / ACCOUNT_RESTRICTED / SEGMENT_DISABLED / STATIC_IP_REQUIRED / CAPABILITY_UNSUPPORTED / BROKER_UNKNOWN / UPSTREAM_ERROR), canonical `InstrumentIdentity` (exchange/segment/underlying/symbol/expiry/strike/option_type/instrument_type/lot_size/tick_size — broker keys NEVER the universal ID), canonical `BrokerOrderRequest` / `BrokerOrderResult` (multi broker-order-id capable — one logical order → many broker order ids), `BrokerConnectionContext` (user → broker → account), capability model (`BrokerCapabilities` distinguishing SUPPORTED vs AVAILABLE vs UNSUPPORTED vs AUTH_REQUIRED vs ACCOUNT_DISABLED vs TEMPORARILY_UNAVAILABLE — never a bare boolean), and the `BrokerAdapter` protocol covering auth / account / instruments / market data / orders / trades / portfolio
+- **Broker registry + gateway** (`backend/app/brokers/registry.py`, `gateway.py`): broker selection happens in ONE controlled location (`gateway.create(...)` / `gateway.for_connection(...)`); unknown brokers fail safely with BROKER_UNKNOWN; registration is idempotent; the future Zerodha/Dhan/Angel/Fyers adapters are a one-line registration each
+- **UpstoxAdapter** (`backend/app/brokers/adapters/upstox/`): all Upstox-specific concepts (base URLs, OAuth, tokens, instrument keys, transaction types, product codes, HTTP status/error strings, V3 order field names) stay inside the adapter package + the raw client (`app/services/upstox.py`); `UpstoxError` never escapes — every failure maps to canonical `BrokerError`; chain/contract methods return canonical structures (Upstox payload field names like `call_options` never reach app code)
+- **Read-only migration (behavior-preserving)**: profile, funds, margin, market status, option chain, option contracts now flow through the adapter/gateway in `routers/auth.py`, `routers/chains.py`, `routers/paper.py`, `services/market_status.py`, `services/broker_margin.py`, `services/broker_profile.py`; the Phase 6.1 `MarginProvider` architecture and the Phase 6.4.1 diagnostics architecture continue to work unchanged; the public API contracts (BROKER_* structured codes, capital contract, profile contract) are byte-for-byte identical
+- **Upstox V3 order preparation (NOT wired)**: canonical order contract + pure payload builder (`build_order_request_payload`) + response mapper (`map_order_result`) with tested mappings for BUY/SELL, MARKET/LIMIT/SL/SL-M, validity, AMO/after-market, market protection, disclosed quantity, tags, single/multiple order ids, and canonical order-status mapping; every adapter order/trade/portfolio method raises CAPABILITY_UNSUPPORTED with an explicit "NOT wired" message — no fake live execution
+- **Native-slicing safety by construction**: one canonical `execution_policy` (AUTO / BROKER_NATIVE / PLATFORM_MANAGED / DISABLED) plus multi-id `BrokerOrderResult` — the platform can never accidentally double-slice (platform chunking of a broker-native order is impossible by construction); slicing is never a payload field
+- **Security**: adapters never log, repr or return tokens (repr-safety tested); canonical models/results carry no credential fields; the frontend-facing diagnostics contracts are unchanged and never receive credentials; `disconnect()` only forgets the adapter's own token — the app auth layer owns revocation
+- **Paper trading remains broker-independent**: paper execution needs NO broker connection; paper is not live execution; Exit Intent (6.5.0) and StrategyLegExposure (6.5.0.1) are untouched
+
+### Schema / migration
+
+None. No database changes in this phase (broker abstraction is pure application-layer).
+
+### Automated verification (actual runs this session)
+
+- Backend: **436/436 tests passed** — 59 new in `tests/test_broker_domain.py` + `tests/test_upstox_adapter.py` covering: canonical model field-name neutrality (no instrument_key/transaction_type/is_amo/slice), explicit None vs fabricated zero, multi-id order results, registry/gateway (UPSTOX resolves, unknown fails, deterministic, idempotent registration, connection context attachment), error taxonomy + session codes, Upstox→canonical error mapping (401/403→TOKEN_EXPIRED, 423→MAINTENANCE, 429→RATE_LIMITED, network→NETWORK_ERROR, else UPSTREAM_ERROR), instrument identity neutrality + broker-key isolation, option-type/order-type/side/validity/AMO/market-protection mappings isolated to the mapper, response mapping (single/multi id, rejected/partial/filled), capability states (SUPPORTED vs ACCOUNT_DISABLED vs AUTH_REQUIRED), NOT-wired operations raising CAPABILITY_UNSUPPORTED, token-repr/security guards, and adapter chain/contract key-resolution via the patched raw client
+- Frontend: **769/769 tests passed (33 files)** — unchanged (no frontend changes in this phase)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending
+ChatGPT review: ⏳ pending
+
 ## Overall progress
 
 | Phase | Status | Notes |
@@ -114,12 +144,13 @@ ChatGPT review: ⏳ pending
 | Phase 6.4.1 — Broker Profile & Connection Diagnostics | 🔄 Implemented | Upstox profile verification, safe profile card, connection health (profile/funds/margin/market/chain), account capabilities, user-scoped TTL cache, structured broker errors — pending review |
 | Phase 6.5.0 — Exit Intent / Selector Foundation | 🔄 Implemented | Pure Exit Intent / Selector domain: EXIT_SCOPE (POSITION/STRATEGY/PORTFOLIO), selector combinations (ALL/CALL/PUT/BUY/SELL/BUY CE/BUY PE/SELL CE/SELL PE/legId), resolveExitTargets with remaining-quantity semantics, quantity safety (AMBIGUOUS_EXIT_QUANTITY, never over remaining), deterministic ordering, user isolation, no execution/network — pending review (schema verdict superseded by 6.5.0.1) |
 | Phase 6.5.0.1 — Strategy Leg Attribution Architecture | 🔄 Implemented | New persistent StrategyLegExposure attribution model (per-execution, per-leg remaining), deterministic dominant-side FIFO exit allocation, position-capacity reconciliation (never over net position, never guessed), strategy-scoped journal-close fix with regression tests, conservative idempotent startup backfill, user isolation, no execution/UI — pending review |
+| Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation | 🔄 Implemented | Canonical broker domain (models/enums/errors/capabilities/protocols), BrokerGateway/Registry, UpstoxAdapter boundary, read-only migration (profile/funds/margin/market status/chain/contracts) behind the adapter, V3 order preparation (payload + response mappers, tested, NOT wired), native-slicing safety (execution_policy + multi-id results), no live execution / no second broker / no DB changes — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
 | Phase 10 — Custom trading terminal/dashboard | ⏳ Planned | Not started |
 | Phase 11 — Automation / alerts | ⏳ Planned | Not started |
-| Phase 12 — Multi-broker architecture | ⏳ Planned | Not started |
+| Phase 12 — Multi-broker expansion | ⏳ Planned | Foundation pulled forward + implemented in Phase 6.5.0.2 (broker-neutral contracts, gateway/registry, Upstox adapter). Remaining: second broker (architectural proof test), additional adapters, persistent multi-broker connections, account-management UI, broker capability matrices |
 | Phase 13 — Community | ⏳ Planned | Not started |
 
 ## Latest verified implementation commit
@@ -136,7 +167,7 @@ The Phase 4.2 implementation is committed but was never user-verified or ChatGPT
 
 Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
 
-Phases 6.4, 6.4.1, 6.5.0 and 6.5.0.1 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new). Phase 6.5.0.1: `backend/app/models.py`, `backend/app/db.py`, `backend/app/services/paper_execution.py` (modified), `backend/app/services/leg_exposure.py` + `backend/tests/test_leg_exposure.py` (new) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 / 6.5.0.1 from the Changes panel — FreeBuff does not commit or push.
+Phases 6.4, 6.4.1, 6.5.0, 6.5.0.1 and 6.5.0.2 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new). Phase 6.5.0.1: `backend/app/models.py`, `backend/app/db.py`, `backend/app/services/paper_execution.py` (modified), `backend/app/services/leg_exposure.py` + `backend/tests/test_leg_exposure.py` (new). Phase 6.5.0.2: `backend/app/brokers/` (new — domain contracts, Upstox adapter, registry, gateway), `backend/app/routers/auth.py`, `backend/app/routers/chains.py`, `backend/app/routers/paper.py`, `backend/app/services/market_status.py`, `backend/app/services/broker_margin.py`, `backend/app/services/broker_profile.py` (modified — migrated behind the adapter/gateway), `backend/tests/test_broker_domain.py` + `backend/tests/test_upstox_adapter.py` (new), `docs/PROJECT_MASTER_BLUEPRINT.md` (updated) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 / 6.5.0.1 / 6.5.0.2 from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 

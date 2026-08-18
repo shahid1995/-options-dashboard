@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.brokers.domain.errors import BrokerError, BrokerErrorCode
 from app.services.upstox import UpstoxError
 
 BROKER = "UPSTOX"
@@ -87,6 +88,10 @@ class BrokerProfileError(Exception):
 def classify_upstox_error(exc: UpstoxError) -> tuple[str, str]:
     """Map an Upstox profile failure to (structured code, human message).
 
+    Kept for injected test fetchers and direct compatibility; the live path
+    routes through the adapter, which raises canonical BrokerError mapped by
+    ``classify_broker_error`` below.
+
     The message is written for the customer — the raw provider message is
     never passed through (no stack traces, no internal error text).
     """
@@ -106,6 +111,38 @@ def classify_upstox_error(exc: UpstoxError) -> tuple[str, str]:
             "Upstox rate limit reached — try again shortly.",
         )
     if exc.status_code == 502 and str(exc.message).startswith("Could not reach Upstox"):
+        return (
+            BROKER_NETWORK_ERROR,
+            "Could not reach Upstox — check your network connection.",
+        )
+    return (
+        BROKER_PROFILE_UNAVAILABLE,
+        "Upstox profile temporarily unavailable. Try again in a few minutes.",
+    )
+
+
+def classify_broker_error(exc: BrokerError) -> tuple[str, str]:
+    """Map a canonical BrokerError to (structured code, human message).
+
+    Mirrors ``classify_upstox_error`` so the adapter path (the live path)
+    produces the same structured codes and customer-safe messages.
+    """
+    if exc.code in (BrokerErrorCode.AUTH_REQUIRED, BrokerErrorCode.TOKEN_EXPIRED):
+        return (
+            BROKER_TOKEN_EXPIRED,
+            "Upstox session expired or unauthorized — reconnect your broker.",
+        )
+    if exc.code is BrokerErrorCode.MAINTENANCE:
+        return (
+            BROKER_MAINTENANCE,
+            "Upstox is in its daily maintenance window — try again shortly.",
+        )
+    if exc.code is BrokerErrorCode.RATE_LIMITED:
+        return (
+            BROKER_RATE_LIMITED,
+            "Upstox rate limit reached — try again shortly.",
+        )
+    if exc.code is BrokerErrorCode.NETWORK_ERROR:
         return (
             BROKER_NETWORK_ERROR,
             "Could not reach Upstox — check your network connection.",
@@ -275,6 +312,9 @@ async def get_broker_profile_summary(
     except UpstoxError as exc:
         code, message = classify_upstox_error(exc)
         summary = _unavailable_summary(code, message)
+    except BrokerError as exc:
+        code, message = classify_broker_error(exc)
+        summary = _unavailable_summary(code, message)
     except BrokerProfileError as exc:
         summary = _unavailable_summary(exc.code, exc.message)
 
@@ -283,6 +323,13 @@ async def get_broker_profile_summary(
 
 
 async def _default_fetcher(access_token: str) -> dict:
-    from app.services import upstox
+    """Live path: fetch the raw profile through the broker gateway/adapter.
 
-    return await upstox.get_broker_profile(access_token)
+    The adapter owns the Upstox HTTP call and maps Upstox failures to
+    canonical BrokerError, which the service maps to its structured codes.
+    """
+    from app.brokers.domain.enums import BROKER_ID_UPSTOX
+    from app.brokers.gateway import gateway
+
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
+    return await adapter.get_profile()

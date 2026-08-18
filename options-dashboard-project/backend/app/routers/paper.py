@@ -3,7 +3,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.chains import INSTRUMENT_KEYS, transform_chain
+from app.brokers.domain.enums import BROKER_ID_UPSTOX
+from app.brokers.domain.errors import BrokerError
+from app.brokers.gateway import gateway
 from app.routers.deps import get_session_id
 from app.schemas import (
     AnalyticsOut,
@@ -23,7 +25,7 @@ from app.schemas import (
     ReconcileOut,
     TradeOut,
 )
-from app.services import token_store, upstox
+from app.services import token_store
 from app.services.journal import (
     LegNotFoundError,
     TradeClosedError,
@@ -48,8 +50,6 @@ from app.services.paper_execution import (
     reset_portfolio,
     round_option_price,
 )
-from app.services.upstox import UpstoxError
-
 router = APIRouter()
 
 MARKET_CLOSED_MSG = "Market is closed. Paper order was not executed."
@@ -188,6 +188,7 @@ async def resolve_market_prices(access_token: str, symbol: str, legs) -> dict:
     Returns ``{(expiry, strike, option_type): ltp}``.
     """
     symbol = symbol.upper()
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
     by_expiry: dict[str, list] = {}
     for leg in legs:
         by_expiry.setdefault(leg.expiration_date, []).append(leg)
@@ -195,8 +196,7 @@ async def resolve_market_prices(access_token: str, symbol: str, legs) -> dict:
     prices: dict[tuple, float] = {}
     try:
         for expiry, leg_list in by_expiry.items():
-            raw = await upstox.get_option_chain(access_token, INSTRUMENT_KEYS[symbol], expiry)
-            chain = transform_chain(symbol, expiry, raw)["chain"]
+            chain = (await adapter.get_option_chain(symbol, expiry))["chain"]
             by_strike = {row["strike"]: row for row in chain}
             for leg in leg_list:
                 row = by_strike.get(leg.strike_price)
@@ -213,7 +213,7 @@ async def resolve_market_prices(access_token: str, symbol: str, legs) -> dict:
                 # broker LTP is kept for analytics; only the tradable price
                 # crosses the fill boundary tick-aligned.
                 prices[(expiry, leg.strike_price, leg.option_type)] = round_option_price(ltp)
-    except UpstoxError as exc:
+    except BrokerError as exc:
         raise PaperExecutionError(
             "EXECUTION_FAILED", f"Could not load market data for {symbol}: {exc.message}"
         ) from exc
@@ -232,6 +232,7 @@ async def resolve_bulk_market_prices(access_token: str, positions) -> dict:
 
     Returns ``{(symbol, expiry, strike, option_type): ltp}``.
     """
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
     by_chain: dict[tuple[str, str], list] = {}
     for p in positions:
         by_chain.setdefault((p.symbol.upper(), p.expiry), []).append(p)
@@ -239,8 +240,7 @@ async def resolve_bulk_market_prices(access_token: str, positions) -> dict:
     prices: dict[tuple, float] = {}
     try:
         for (symbol, expiry), leg_list in by_chain.items():
-            raw = await upstox.get_option_chain(access_token, INSTRUMENT_KEYS[symbol], expiry)
-            chain = transform_chain(symbol, expiry, raw)["chain"]
+            chain = (await adapter.get_option_chain(symbol, expiry))["chain"]
             by_strike = {row["strike"]: row for row in chain}
             for p in leg_list:
                 row = by_strike.get(p.strike)
@@ -256,7 +256,7 @@ async def resolve_bulk_market_prices(access_token: str, positions) -> dict:
                 # normalized to the option tick size (NIFTY: ₹0.05), matching
                 # the single-position exit boundary exactly.
                 prices[(symbol, p.expiry, p.strike, p.option_type)] = round_option_price(ltp)
-    except UpstoxError as exc:
+    except BrokerError as exc:
         raise PaperExecutionError(
             "EXECUTION_FAILED", f"Could not load market data: {exc.message}"
         ) from exc

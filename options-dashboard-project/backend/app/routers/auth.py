@@ -3,9 +3,11 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
+from app.brokers.domain.enums import BROKER_ID_UPSTOX
+from app.brokers.domain.errors import BrokerError
+from app.brokers.gateway import gateway
 from app.routers.deps import get_session_id
-from app.services import upstox, token_store
-from app.services.upstox import UpstoxError
+from app.services import token_store
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,9 +19,10 @@ SESSION_COOKIE = "session_id"
 
 @router.get("/login")
 def login():
-    """Redirects the browser to Upstox's login page."""
+    """Redirects the browser to the broker's login page (via the gateway)."""
     state = token_store.create_oauth_state()
-    return RedirectResponse(upstox.get_login_url(state))
+    adapter = gateway.create(BROKER_ID_UPSTOX)
+    return RedirectResponse(adapter.get_authorization_url(state))
 
 
 @router.get("/callback")
@@ -28,7 +31,7 @@ async def callback(
     error: str | None = None,
     state: str | None = None,
 ):
-    """Upstox redirects here after the user logs in on their site."""
+    """The broker redirects here after the user logs in on their site."""
     if error:
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(error)}")
     if not token_store.consume_oauth_state(state):
@@ -37,8 +40,9 @@ async def callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
     try:
-        access_token = await upstox.exchange_code_for_token(code)
-    except UpstoxError as e:
+        adapter = gateway.create(BROKER_ID_UPSTOX)
+        access_token = await adapter.exchange_authorization_code(code)
+    except BrokerError as e:
         logger.error("Token exchange failed: %s", e)
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
     session_id = token_store.set_token(access_token)

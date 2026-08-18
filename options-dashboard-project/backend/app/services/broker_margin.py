@@ -61,8 +61,10 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from app.routers.chains import INSTRUMENT_KEYS
-from app.services import upstox
+from app.brokers.adapters.upstox import mapper as _upstox_mapper
+from app.brokers.domain.enums import BROKER_ID_UPSTOX
+from app.brokers.domain.errors import BrokerError, BrokerErrorCode
+from app.brokers.gateway import gateway
 from app.services.capital import (
     SOURCE_BROKER_REPORTED,
     STATUS_AVAILABLE,
@@ -105,6 +107,10 @@ class BrokerMarginError(Exception):
 def classify_upstox_error(exc: UpstoxError, kind: str = "funds") -> BrokerMarginError:
     """Map an Upstox HTTP failure to a structured broker error code.
 
+    Kept for injected test fetchers and direct compatibility. The live path
+    routes through the adapter, which raises canonical BrokerError mapped by
+    ``classify_broker_error`` below.
+
     ``kind`` is ``funds`` or ``margin`` and only decides the generic fallback
     code (BROKER_FUNDS_UNAVAILABLE vs BROKER_MARGIN_UNAVAILABLE); auth, rate
     limit and the 423 maintenance window always map to their own codes.
@@ -121,6 +127,26 @@ def classify_upstox_error(exc: UpstoxError, kind: str = "funds") -> BrokerMargin
     return BrokerMarginError(fallback, f"Upstox API error ({exc.status_code}): {exc.message}")
 
 
+def classify_broker_error(exc: BrokerError, kind: str = "funds") -> BrokerMarginError:
+    """Map a canonical BrokerError to the structured broker-data error code.
+
+    Mirrors ``classify_upstox_error`` so the adapter path (the live path)
+    produces the exact same structured codes and human messages.
+    """
+    fallback = BROKER_FUNDS_UNAVAILABLE if kind == "funds" else BROKER_MARGIN_UNAVAILABLE
+    if exc.code in (BrokerErrorCode.AUTH_REQUIRED, BrokerErrorCode.TOKEN_EXPIRED):
+        return BrokerMarginError(
+            BROKER_TOKEN_EXPIRED, "Upstox session expired or unauthorized — broker data is unavailable."
+        )
+    if exc.code is BrokerErrorCode.MAINTENANCE:
+        return BrokerMarginError(BROKER_MAINTENANCE, MAINTENANCE_MESSAGE)
+    if exc.code is BrokerErrorCode.RATE_LIMITED:
+        return BrokerMarginError(BROKER_RATE_LIMITED, "Upstox rate limit reached — try again shortly.")
+    if exc.status_code:
+        return BrokerMarginError(fallback, f"Upstox API error ({exc.status_code}): {exc.message}")
+    return BrokerMarginError(fallback, str(exc.message))
+
+
 # ---- Product type (§12) ------------------------------------------------------
 
 # The paper engine simulates HELD positions (no intraday square-off concept),
@@ -135,9 +161,10 @@ def lots_to_contracts(quantity_lots: int, lot_size: int) -> int:
     """Convert Phase 5 LOTS into broker contract quantity (lots × lot_size).
 
     Upstox margin APIs expect contract units: 1 lot of NIFTY (lot_size 65)
-    → 65 contracts. Never pass lots directly to the broker.
+    → 65 contracts. Never pass lots directly to the broker. (Compat wrapper
+    — canonical implementation lives in the Upstox adapter mapper.)
     """
-    return int(quantity_lots) * int(lot_size)
+    return _upstox_mapper.lots_to_contracts(quantity_lots, lot_size)
 
 
 def net_strategy_instruments(orders: list[dict]) -> list[dict]:
@@ -215,17 +242,10 @@ def build_margin_request_instruments(instruments: list[dict], product: str = BRO
 
     Every instrument carries the resolved broker key, the contract quantity
     (lots → contracts), BUY/SELL and the documented product. The full
-    multi-leg strategy set goes in ONE request.
+    multi-leg strategy set goes in ONE request. (Compat wrapper — the
+    Upstox-specific payload lives in the adapter mapper.)
     """
-    return [
-        {
-            "instrument_key": inst["instrument_key"],
-            "quantity": lots_to_contracts(inst["quantity"], inst["lot_size"]),
-            "transaction_type": "BUY" if inst["action"] == "buy" else "SELL",
-            "product": product,
-        }
-        for inst in instruments
-    ]
+    return _upstox_mapper.build_margin_request_instruments(instruments, product=product)
 
 
 def map_funds_payload(data: dict | None) -> dict:
@@ -234,32 +254,10 @@ def map_funds_payload(data: dict | None) -> dict:
     Keeps broker terminology: available_to_trade, cash available, margin
     used, SPAN+exposure, premium present, pledge available. Missing fields
     stay ``None`` — never fabricated 0. The full raw payload is preserved in
-    ``raw`` so future phases never lose broker fields.
+    ``raw``. (Compat wrapper — canonical implementation lives in the Upstox
+    adapter mapper.)
     """
-    data = data or {}
-    available = data.get("available_to_trade") or {}
-    cash = available.get("cash_available_to_trade") or {}
-    margin_used = cash.get("margin_used") or {}
-    pledge = available.get("pledge_available_to_trade") or {}
-    pledge_margin_used = pledge.get("margin_used") or {}
-    pledge_from = pledge.get("margin_from_pledge") or {}
-    unavailable = data.get("unavailable_to_trade") or {}
-    unsettled = (unavailable.get("cash_unavailable_to_trade") or {}).get("unsettled_profit") or {}
-    delivery = margin_used.get("delivery_margin") or {}
-    return {
-        "available_to_trade": available.get("total"),
-        "cash_available_to_trade": cash.get("total"),
-        "margin_used": margin_used.get("total"),
-        "span_exposure": margin_used.get("span_exposure"),
-        "cash_margin_var_elm": margin_used.get("cash_margin_var_elm"),
-        "premium_present": margin_used.get("premium_present"),
-        "delivery_margin": delivery.get("total"),
-        "pledge_available_to_trade": pledge.get("total"),
-        "margin_from_pledge": pledge_from.get("total"),
-        "pledge_margin_used": pledge_margin_used.get("total"),
-        "unsettled_profit": unsettled.get("todays_profit"),
-        "raw": data,
-    }
+    return _upstox_mapper.map_funds_payload(data)
 
 
 def map_margin_payload(data: dict | None) -> dict:
@@ -267,50 +265,24 @@ def map_margin_payload(data: dict | None) -> dict:
 
     ``required_margin`` (the broker's whole-request figure) is authoritative
     and preserved as-is — the platform never sums SPAN + exposure itself.
-    Per-instrument rows are kept separately in ``rows`` so useful raw
-    components (span, exposure, equity, net buy premium, additional, tender)
-    remain available for future phases.
+    Per-instrument rows are kept separately in ``rows``. (Compat wrapper —
+    canonical implementation lives in the Upstox adapter mapper.)
     """
-    data = data or {}
-    inner = data.get("data") or {}
-    rows = inner.get("margins") or []
-    return {
-        "required_margin": inner.get("required_margin"),
-        "final_margin": inner.get("final_margin"),
-        "rows": rows,
-        "raw": data,
-    }
+    return _upstox_mapper.map_margin_payload(data)
 
 
 async def default_instrument_key_resolver(access_token: str, instruments: list[dict]) -> list[dict]:
     """Resolve broker instrument keys from the existing option-chain API.
 
-    Fetches each required expiry's chain ONCE and reads the contract's
-    ``instrument_key`` from ``call_options`` / ``put_options`` — never
-    constructed manually from strike text. Legs whose strike/side is missing
-    from the chain get ``instrument_key: None`` (the provider then returns
-    MISSING_INSTRUMENT_KEY instead of submitting an invalid request).
+    Delegates to the Upstox adapter (``resolve_instrument_keys``), which
+    fetches each required expiry's chain ONCE and reads the contract's
+    Upstox ``instrument_key`` from the raw payload — never constructed from
+    strike text. Legs whose strike/side is missing get ``instrument_key:
+    None`` (the provider then returns MISSING_INSTRUMENT_KEY instead of
+    submitting an invalid request). Compat wrapper kept for direct callers.
     """
-    by_expiry: dict[str, list[dict]] = {}
-    for inst in instruments:
-        by_expiry.setdefault(inst["expiry"], []).append(inst)
-
-    resolved: list[dict] = []
-    for expiry, insts in by_expiry.items():
-        symbol = insts[0]["symbol"]
-        raw = await upstox.get_option_chain(access_token, INSTRUMENT_KEYS[symbol.upper()], expiry)
-        by_strike = {}
-        for item in raw.get("data", []):
-            strike = item.get("strike_price")
-            if strike is not None:
-                by_strike[strike] = item
-        for inst in insts:
-            item = by_strike.get(inst["strike"])
-            side = None
-            if item is not None:
-                side = item.get("call_options" if inst["option_type"] == "call" else "put_options") or {}
-            resolved.append({**inst, "instrument_key": (side or {}).get("instrument_key")})
-    return resolved
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
+    return await adapter.resolve_instrument_keys(instruments)
 
 
 # ---- Caching (§25/§26/§28) ---------------------------------------------------
@@ -370,13 +342,24 @@ class UpstoxMarginProvider(MarginProvider):
         instrument_resolver=None,
         cache: BrokerMarginCache | None = None,
         now=None,
+        adapter=None,
     ):
         self.access_token = access_token
-        self._funds_fetcher = funds_fetcher or upstox.get_funds_and_margin
-        self._margin_fetcher = margin_fetcher or upstox.get_margin_details
-        self._instrument_resolver = instrument_resolver or default_instrument_key_resolver
+        # Injected fetchers (tests / tooling) override the adapter path. When
+        # None, the broker gateway builds an Upstox adapter that performs the
+        # call through the canonical boundary (errors arrive as BrokerError).
+        self._funds_fetcher = funds_fetcher
+        self._margin_fetcher = margin_fetcher
+        self._instrument_resolver = instrument_resolver
+        self._adapter = adapter
         self._cache = cache or BrokerMarginCache()
         self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def _broker_adapter(self):
+        """The canonical Upstox adapter for this provider's session."""
+        if self._adapter is not None:
+            return self._adapter
+        return gateway.create(BROKER_ID_UPSTOX, access_token=self.access_token)
 
     # ---- interface ----------------------------------------------------------
 
@@ -434,7 +417,10 @@ class UpstoxMarginProvider(MarginProvider):
         if cached is not None:
             return cached
         try:
-            body = await self._funds_fetcher(self.access_token)
+            if self._funds_fetcher is not None:
+                body = await self._funds_fetcher(self.access_token)
+            else:
+                body = await self._broker_adapter().get_funds()
             if not isinstance(body, dict):
                 raise BrokerMarginError(BROKER_BAD_RESPONSE, "Upstox funds response was not an object.")
             mapped = map_funds_payload(body.get("data"))
@@ -452,6 +438,8 @@ class UpstoxMarginProvider(MarginProvider):
             }
         except UpstoxError as exc:
             snapshot = self._unavailable_funds(classify_upstox_error(exc, kind="funds"))
+        except BrokerError as exc:
+            snapshot = self._unavailable_funds(classify_broker_error(exc, kind="funds"))
         except BrokerMarginError as exc:
             snapshot = self._unavailable_funds(exc)
         self._cache.set(cache_key, snapshot, self.FUNDS_TTL_SECONDS)
@@ -556,9 +544,17 @@ class UpstoxMarginProvider(MarginProvider):
             return cached
 
         try:
-            resolved = await self._instrument_resolver(self.access_token, instruments)
+            if self._instrument_resolver is not None:
+                resolved = await self._instrument_resolver(self.access_token, instruments)
+            else:
+                resolved = await self._broker_adapter().resolve_instrument_keys(instruments)
         except UpstoxError as exc:
             err = classify_upstox_error(exc, kind="margin")
+            row = self._margin_row_unavailable(strategy, err.code, err.message)
+            self._cache.set(cache_key, row, self.MARGIN_TTL_SECONDS)
+            return row
+        except BrokerError as exc:
+            err = classify_broker_error(exc, kind="margin")
             row = self._margin_row_unavailable(strategy, err.code, err.message)
             self._cache.set(cache_key, row, self.MARGIN_TTL_SECONDS)
             return row
@@ -579,7 +575,10 @@ class UpstoxMarginProvider(MarginProvider):
 
         try:
             payload = build_margin_request_instruments(resolved)
-            body = await self._margin_fetcher(self.access_token, payload)
+            if self._margin_fetcher is not None:
+                body = await self._margin_fetcher(self.access_token, payload)
+            else:
+                body = await self._broker_adapter().get_margin(payload)
             if not isinstance(body, dict):
                 raise BrokerMarginError(BROKER_BAD_RESPONSE, "Upstox margin response was not an object.")
             mapped = map_margin_payload(body)
@@ -602,6 +601,9 @@ class UpstoxMarginProvider(MarginProvider):
             }
         except UpstoxError as exc:
             err = classify_upstox_error(exc, kind="margin")
+            row = self._margin_row_unavailable(strategy, err.code, err.message)
+        except BrokerError as exc:
+            err = classify_broker_error(exc, kind="margin")
             row = self._margin_row_unavailable(strategy, err.code, err.message)
         except BrokerMarginError as exc:
             row = self._margin_row_unavailable(strategy, exc.code, exc.message)

@@ -2,26 +2,22 @@ import asyncio
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from app.brokers.adapters.upstox.mapper import (
+    UPSTOX_INSTRUMENT_KEYS as INSTRUMENT_KEYS,  # compat re-export (adapter mapping)
+)
+from app.brokers.adapters.upstox.mapper import transform_chain  # compat re-export
+from app.brokers.domain.enums import BROKER_ID_UPSTOX
+from app.brokers.domain.errors import BrokerError, BrokerErrorCode
+from app.brokers.gateway import gateway
 from app.routers.deps import get_session_id
-from app.services import upstox, token_store
-from app.services.upstox import UpstoxError
+from app.services import token_store
 
 router = APIRouter()
 
-# Index option chains available via Upstox (NSE + BSE). Keys are the
-# instrument_key values from Upstox's instrument master (BOD) files.
-INSTRUMENT_KEYS = {
-    "NIFTY": "NSE_INDEX|Nifty 50",
-    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
-    # Note: FINNIFTY and MIDCPNIFTY use Upstox's older index names ("Nifty Fin
-    # Service", "NIFTY MID SELECT"), not the current official NSE names.
-    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
-    "MIDCPNIFTY": "NSE_INDEX|NIFTY MID SELECT",
-    "NIFTYNXT50": "NSE_INDEX|Nifty Next 50",
-    "SENSEX": "BSE_INDEX|SENSEX",
-    "BANKEX": "BSE_INDEX|BANKEX",
-    "SENSEX50": "BSE_INDEX|SENSEX50",
-}
+# Index option chains available via Upstox (NSE + BSE). The instrument keys
+# are the canonical mapping table living in the Upstox adapter
+# (app/brokers/adapters/upstox/mapper.py); this re-export keeps the
+# pre-existing import path working.
 
 WS_PUSH_INTERVAL_SECONDS = 3
 
@@ -65,71 +61,27 @@ def validate_expiry_date(expiry_date: str) -> str:
 
 
 async def call_upstox(coro):
-    """Awaits an upstox call, translating auth failures into a 401 that also
-    clears the stored token (Upstox tokens expire daily at 3:30 AM)."""
+    """Awaits a broker-gateway call, translating session failures into a 401
+    that also clears the stored token (broker tokens expire daily at 3:30 AM).
+
+    The coroutine comes from a broker ADAPTER, so failures arrive as
+    canonical BrokerError — never a provider exception.
+    """
     try:
         return await coro
-    except UpstoxError as e:
-        if e.status_code in (401, 403):
+    except BrokerError as e:
+        if e.code in BrokerErrorCode.SESSION_CODES:
             token_store.clear_token()
             raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error ({e.status_code}): {e.message}") from e
-
-
-def transform_chain(symbol: str, expiry_date: str, raw: dict) -> dict:
-    rows = []
-    underlying_spot = None
-
-    for item in raw.get("data", []):
-        strike = item.get("strike_price")
-        if underlying_spot is None:
-            underlying_spot = item.get("underlying_spot_price")
-
-        def leg(side_key):
-            side = item.get(side_key) or {}
-            market = side.get("market_data") or {}
-            greeks = side.get("option_greeks") or {}
-
-            oi = market.get("oi")
-            prev_oi = market.get("prev_oi")
-            chg_oi = (oi - prev_oi) if (oi is not None and prev_oi is not None) else None
-
-            return {
-                "ltp": market.get("ltp"),
-                "oi": oi,
-                "chg_oi": chg_oi,
-                "volume": market.get("volume"),
-                "iv": greeks.get("iv"),
-                "delta": greeks.get("delta"),
-                "theta": greeks.get("theta"),
-                "gamma": greeks.get("gamma"),
-                "vega": greeks.get("vega"),
-                "pop": greeks.get("pop"),
-            }
-
-        rows.append({
-            "strike": strike,
-            "call": leg("call_options"),
-            "put": leg("put_options"),
-        })
-
-    rows.sort(key=lambda r: r["strike"])
-
-    return {
-        "symbol": symbol,
-        "expiry_date": expiry_date,
-        "underlying_spot_price": underlying_spot,
-        "chain": rows,
-    }
 
 
 @router.get("/{symbol}/expiries")
 async def list_expiries(symbol: str, session_id: str | None = Depends(get_session_id)):
     symbol = resolve_symbol(symbol)
     token = require_token(session_id)
-    data = await call_upstox(upstox.get_option_contracts(token, INSTRUMENT_KEYS[symbol]))
-    expiries = sorted({c["expiry"] for c in data.get("data", []) if "expiry" in c})
-    return {"symbol": symbol, "expiries": expiries}
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
+    return await call_upstox(adapter.get_option_contracts(symbol))
 
 
 @router.get("/{symbol}")
@@ -141,13 +93,13 @@ async def get_chain(
     symbol = resolve_symbol(symbol)
     expiry_date = validate_expiry_date(expiry_date)
     token = require_token(session_id)
-    raw = await call_upstox(upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date))
-    return transform_chain(symbol, expiry_date, raw)
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
+    return await call_upstox(adapter.get_option_chain(symbol, expiry_date))
 
 
 @router.websocket("/ws/{symbol}")
 async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(...)):
-    """Pushes the transformed option chain to the client every few seconds.
+    """Pushes the canonical option chain to the client every few seconds.
     Closes with 4401 on auth issues, 4404 for unknown symbols, and 4422 for
     malformed expiry dates so the frontend can fall back to HTTP polling or
     prompt a re-login."""
@@ -172,15 +124,16 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                 await websocket.close(code=4401)
                 return
             try:
-                raw = await upstox.get_option_chain(token, INSTRUMENT_KEYS[symbol], expiry_date)
-            except UpstoxError as e:
-                if e.status_code in (401, 403):
+                adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
+                chain = await adapter.get_option_chain(symbol, expiry_date)
+            except BrokerError as e:
+                if e.code in BrokerErrorCode.SESSION_CODES:
                     token_store.clear_token()
                     await websocket.close(code=4401)
                 else:
                     await websocket.close(code=4502)
                 return
-            await websocket.send_json(transform_chain(symbol, expiry_date, raw))
+            await websocket.send_json(chain)
             await asyncio.sleep(WS_PUSH_INTERVAL_SECONDS)
     except WebSocketDisconnect:
         return
