@@ -66,3 +66,13 @@ def init_db():
     # Existing databases predate the Phase 5.0 journal-linkage columns.
     ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
+    # Phase 6.5.0.1: conservative one-time backfill of strategy-leg
+    # attribution for pre-existing, provably unambiguous executions.
+    # Idempotent — rows already present are never duplicated.
+    from app.services.leg_exposure import backfill_all_exposures
+
+    session = SessionLocal()
+    try:
+        backfill_all_exposures(session)
+    finally:
+        session.close()

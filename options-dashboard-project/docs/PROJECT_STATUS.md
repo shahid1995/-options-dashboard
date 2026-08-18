@@ -4,9 +4,9 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.5.0 — Advanced Open Position Management: Exit Intent / Selector Foundation**
+**Phase 6.5.0.1 — Strategy Leg Attribution Architecture + Minimal Implementation**
 
-Status: 🔄 **Implemented / Pending Review** (pure domain foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: 🔄 **Implemented / Pending Review** (attribution foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
 
 ## Phase 6.5.0 implementation
 
@@ -18,7 +18,7 @@ Implemented (pure domain foundation ONLY — no execution, no new API, no UI, no
 - **`resolveExitTargets(intent, exposures, options)`** — pure target resolution: uses the CURRENT remaining quantity (signed `net_quantity`, never the original order quantity), excludes closed/zero-quantity positions, respects strategy-execution identity (never mixes strategies or users), matches option type and BUY/SELL attribution exactly, supports individual-leg targeting, and returns deterministic ordering ([optionType, side, positionId])
 - **Quantity safety**: ALL may resolve multiple targets; QUANTITY on multiple matches returns a structured `AMBIGUOUS_EXIT_QUANTITY` error (never guessed/silently duplicated); requested quantity > remaining returns `EXIT_QUANTITY_EXCEEDS_REMAINING` (never clamped silently)
 - **Structured errors**: INVALID_INTENT, MISSING_QUANTITY, INVALID_QUANTITY, TARGET_NOT_FOUND, NO_MATCHING_TARGETS, AMBIGUOUS_EXIT_QUANTITY, EXIT_QUANTITY_EXCEEDS_REMAINING
-- **Schema verdict**: the existing netted position model ALREADY preserves sufficient BUY/SELL attribution (position `net_quantity` sign + order-level `action`/`option_type` under `strategy_execution_id`) — **no new persistence model was created**; netted positions remain the authoritative portfolio exposure
+- **Schema verdict (superseded by Phase 6.5.0.1)**: the initial 6.5.0 review concluded the netted position preserved BUY/SELL attribution and no new persistence model was needed. **Phase 6.5.0.1's deeper review overturned this**: the netted `Position` cannot represent per-execution REMAINING leg quantities (one row per instrument, first-opener `strategy_execution_id` only; entry orders store original quantity with no remaining tracking; exits carry no execution id), so a separate persistent `StrategyLegExposure` attribution model was added — see Phase 6.5.0.1 below
 - **User isolation**: optional `options.userId` filter — another user's positions are never mixed, and cross-user POSITION/STRATEGY targeting reports TARGET_NOT_FOUND (never leaks)
 - **No execution changes**: no new exit API, no UI buttons, no market-gate changes, no broker calls, no fill/cash/journal logic — those belong to later Phase 6.5 sub-phases
 
@@ -29,6 +29,63 @@ Automated tests (actual):
 - `npx next build`: passed; all routes generated; no type/lint errors
 
 Manual verification: ⏳ pending (exercise `resolveExitTargets` combinations against a real paper portfolio with BUY CE / SELL CE / BUY PE / SELL PE legs)
+ChatGPT review: ⏳ pending
+
+## Phase 6.5.0.1 implementation
+
+Status: 🔄 Implemented / Pending Review (attribution foundation only — no exit endpoint, no selector execution, no UI, no market-gate changes, no new fill/P&L/cash logic)
+
+### Schema decision
+
+The existing schema CANNOT safely reconstruct current remaining leg quantities after partial exits / repeated partial exits / opposing fills / reversals / multiple strategies sharing one instrument / multiple executions of the same strategy:
+
+- `Position` — one row per instrument with a single **first-opener** `strategy_execution_id`; `net_quantity` is netted across ALL executions trading that instrument (Strategy A BUY 25000 CE × 2 + Strategy B SELL 25000 CE × 1 → `net_quantity = +1`, owned by A).
+- `PaperOrder` — entry orders store ORIGINAL quantity only (no `remaining_quantity`); exit orders carry `execution_id = None`.
+- `strategy_execution_id` cannot be derived from `sign(net_quantity)` (the example above is net LONG while B's leg is a SELL).
+
+**Decision: new persistent `StrategyLegExposure` model (created).** Position remains the authoritative net portfolio exposure; the exposure table adds per-execution, per-leg remaining attribution only.
+
+### Migration decision
+
+- New table `strategy_leg_exposures` — created automatically by `Base.metadata.create_all` on existing databases (no ALTER needed; same mechanism as every prior table).
+- Conservative one-time backfill in `init_db()` (`backfill_all_exposures`): creates rows ONLY for provably unambiguous pre-existing executions (position carries an execution id, EVERY FILLED entry order for the instrument belongs to that same execution, and the instrument was never exited → remaining = original). Shared-instrument / partially-exited / legacy-standalone positions are skipped and left to the safe-skip path. Idempotent (unique per `(user_id, order_id)`).
+
+### Model (minimal)
+
+`strategy_leg_exposures`: id, user_id, execution_id, position_id, order_id (source entry order), symbol, expiry, strike, option_type, action (buy|sell — the executed strategy-leg action, NEVER derived from the position sign), original_quantity, remaining_quantity, status (open|closed), created_at, updated_at. No LTP / average entry / realized P&L / cash / margin — those stay owned by the execution/position/accounting layer.
+
+### Attribution algorithm
+
+- Entry: `execute_strategy` creates one exposure row per FILLED entry order (idempotent — a replayed `client_order_id` never duplicates rows).
+- Exit: `exit_position` (single + bulk — bulk exits run through the same path) reduces the position's **dominant side** — net-long reduces buy-action exposures, net-short reduces sell-action exposures — deterministically **FIFO by exposure id**, each capped at its own remaining.
+- `currentPositionSide` and `strategyLegAction` are independent concepts; the model never derives the latter from the former.
+
+### Reconciliation algorithm
+
+- Invariant: signed sum of exposures' remaining (buy = +, sell = −) == position `net_quantity`.
+- `reconcile_position_exposures(position, exposures)` → OK / MISMATCH.
+- `allocate_exit(exposures, prior_net, qty)` (pure) enforces two caps: never more than the actual position supports (`abs(prior_net)`) → `INSUFFICIENT_POSITION_CAPACITY`; never more than the dominant-side ledger can cover → `INSUFFICIENT_EXPOSURE_CAPACITY`. Ambiguous/stale attribution fails safely — never guessed, never silently duplicated.
+- Positions whose ledger does not reconcile (legacy / mixed legacy+new) simply skip attribution maintenance: the position engine is authoritative and exits are never blocked or altered.
+
+### Journal fix (regression-tested before behavior change)
+
+`_close_journal_legs()` searched matching FILLED entry orders by instrument WITHOUT constraining the strategy execution, so an exit of a netted position shared by multiple executions could close ANOTHER execution's journal legs. Minimum safe correction: when the position carries a `strategy_execution_id`, entry orders are scoped to `PaperOrder.execution_id == position.strategy_execution_id`. Legacy standalone positions (no execution id) keep the historical instrument-wide FIFO behaviour. Regression tests prove: same-execution exits still close their own journal legs; a position owned by execution A exiting over A's quantity NEVER closes execution B's journal legs.
+
+### User isolation
+
+All exposure rows and all maintenance queries are scoped by `user_id` (+ `position_id`); a user's exits never touch another user's exposure rows (tested).
+
+### Scope restrictions honoured
+
+NO new exit endpoint, NO selector execution, NO UI, NO market-gate changes, NO broker calls, NO new fill/P&L/cash logic, NO risk guardrails. Attribution foundation only.
+
+Automated verification (actual runs):
+
+- Backend: **377/377 tests passed** — 24 new in `backend/tests/test_leg_exposure.py` covering one strategy / one leg, one strategy / multiple legs, multiple strategies / same instrument, BUY + SELL same instrument, CE + PE, partial exit, repeated partial exits, reversal, same strategy multiple executions, user isolation, journal attribution (scoped + same-execution regression), position-capacity reconciliation, deterministic FIFO allocation, insufficient current capacity (endpoint + pure), idempotent state updates (duplicate execution + duplicate exit), mixed legacy + new safe-skip, and conservative backfill (creates / skips shared / skips exited / idempotent / user-scoped)
+- Frontend: **769/769 tests passed (33 files)** — unchanged (no frontend changes in this phase)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending (exercise multi-execution same-instrument scenarios end-to-end, then confirm exposure rows reconcile after partial exits/reversals)
 ChatGPT review: ⏳ pending
 
 ## Overall progress
@@ -55,7 +112,8 @@ ChatGPT review: ⏳ pending
 | Phase 6.3 — Capital Efficiency & Return Metrics | 🔄 Implemented | Source-aware return metrics (Premium ROI, Return on Capital/Margin/Risk Capital, Capital Efficiency) with explicit denominators, Strategy Review + Portfolio Analytics + Journal integration — pending review |
 | Phase 6.4 — Capital Allocation / Portfolio Risk Controls | 🔄 Implemented | Capital allocation, risk concentration, strategy/underlying/expiry concentration, configurable monitoring-only limits, portfolio allocation & risk dashboard — pending review |
 | Phase 6.4.1 — Broker Profile & Connection Diagnostics | 🔄 Implemented | Upstox profile verification, safe profile card, connection health (profile/funds/margin/market/chain), account capabilities, user-scoped TTL cache, structured broker errors — pending review |
-| Phase 6.5.0 — Exit Intent / Selector Foundation | 🔄 Implemented | Pure Exit Intent / Selector domain: EXIT_SCOPE (POSITION/STRATEGY/PORTFOLIO), selector combinations (ALL/CALL/PUT/BUY/SELL/BUY CE/BUY PE/SELL CE/SELL PE/legId), resolveExitTargets with remaining-quantity semantics, quantity safety (AMBIGUOUS_EXIT_QUANTITY, never over remaining), deterministic ordering, user isolation, no execution/network — pending review |
+| Phase 6.5.0 — Exit Intent / Selector Foundation | 🔄 Implemented | Pure Exit Intent / Selector domain: EXIT_SCOPE (POSITION/STRATEGY/PORTFOLIO), selector combinations (ALL/CALL/PUT/BUY/SELL/BUY CE/BUY PE/SELL CE/SELL PE/legId), resolveExitTargets with remaining-quantity semantics, quantity safety (AMBIGUOUS_EXIT_QUANTITY, never over remaining), deterministic ordering, user isolation, no execution/network — pending review (schema verdict superseded by 6.5.0.1) |
+| Phase 6.5.0.1 — Strategy Leg Attribution Architecture | 🔄 Implemented | New persistent StrategyLegExposure attribution model (per-execution, per-leg remaining), deterministic dominant-side FIFO exit allocation, position-capacity reconciliation (never over net position, never guessed), strategy-scoped journal-close fix with regression tests, conservative idempotent startup backfill, user isolation, no execution/UI — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -78,7 +136,7 @@ The Phase 4.2 implementation is committed but was never user-verified or ChatGPT
 
 Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
 
-Phases 6.4, 6.4.1 and 6.5.0 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 from the Changes panel — FreeBuff does not commit or push.
+Phases 6.4, 6.4.1, 6.5.0 and 6.5.0.1 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new). Phase 6.5.0.1: `backend/app/models.py`, `backend/app/db.py`, `backend/app/services/paper_execution.py` (modified), `backend/app/services/leg_exposure.py` + `backend/tests/test_leg_exposure.py` (new) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 / 6.5.0.1 from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 

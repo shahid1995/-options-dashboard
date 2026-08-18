@@ -225,6 +225,56 @@ class PaperTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class StrategyLegExposure(Base):
+    """Per-execution strategy-leg attribution (Phase 6.5.0.1).
+
+    The netted ``Position`` remains the AUTHORITATIVE portfolio exposure
+    (one row per instrument, signed ``net_quantity``). Because multiple
+    executions can trade the same instrument, the position alone cannot
+    answer "how much of WHICH execution's leg is still open" — this table
+    preserves exactly that attribution so future strategy-scoped exits can
+    target BUY CE / SELL CE / BUY PE / SELL PE / individual legs without
+    guessing.
+
+    One row per FILLED entry ``PaperOrder`` (unique per ``order_id``).
+    ``action`` is the strategy-leg action as executed — NEVER derived from
+    ``Position.net_quantity``. ``original_quantity`` / ``remaining_quantity``
+    are LOTS.
+
+    Reconciliation invariant: for every position, the signed sum of its
+    exposures' remaining_quantity (buy = +, sell = −) equals the position's
+    net_quantity. Exits reduce the position's dominant side (long →
+    buy-action legs, short → sell-action legs) deterministically FIFO so the
+    invariant holds; when it cannot be maintained, exits fail safely or
+    leave attribution untouched — the position engine is authoritative
+    either way. No LTP / average entry price / realized P&L / cash / margin
+    is duplicated here — those stay owned by the execution / position /
+    accounting layer.
+    """
+
+    __tablename__ = "strategy_leg_exposures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    execution_id: Mapped[str] = mapped_column(String(40), index=True)
+    position_id: Mapped[int] = mapped_column(Integer, index=True)  # netted positions.id
+    order_id: Mapped[int] = mapped_column(Integer)  # source entry PaperOrder.id
+    symbol: Mapped[str] = mapped_column(String(16))
+    expiry: Mapped[str] = mapped_column(String(10))
+    strike: Mapped[float] = mapped_column(Float)
+    option_type: Mapped[str] = mapped_column(String(8))  # call | put
+    action: Mapped[str] = mapped_column(String(8))  # buy | sell (strategy leg action)
+    original_quantity: Mapped[int] = mapped_column(Integer)  # lots
+    remaining_quantity: Mapped[int] = mapped_column(Integer)  # lots still attributed open
+    status: Mapped[str] = mapped_column(String(8), default="open")  # open | closed
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "order_id", name="uq_exposure_source_order"),
+    )
+
+
 class BulkExitRecord(Base):
     """Idempotency record for ONE bulk exit operation (Phase 5.2).
 

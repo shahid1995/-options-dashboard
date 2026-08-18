@@ -495,6 +495,14 @@ def execute_strategy(user_id: str, request, db: Session, prices: dict) -> Execut
         order.position_id = position.id
         orders.append(order)
 
+    # Phase 6.5.0.1: persist per-execution leg attribution (one row per
+    # entry order) so future strategy-scoped exits can distinguish
+    # BUY CE / SELL CE / BUY PE / SELL PE even when several executions
+    # trade the same instrument. Idempotent per (user_id, order_id).
+    from app.services.leg_exposure import create_exposures_for_orders
+
+    create_exposures_for_orders(db, user_id, execution_id, orders, now)
+
     execution.entry_net = round(entry_net, 2)
     trade.entry_net = round(entry_net, 2)
     db.commit()
@@ -569,6 +577,9 @@ def exit_position(
             f"Only {abs(position.net_quantity)} lot(s) available to exit.",
         )
 
+    # Phase 6.5.0.1: the pre-exit net determines which exposure side an exit
+    # reduces (the dominant side of the position that actually shrinks).
+    prior_net_quantity = position.net_quantity
     action = "sell" if position.net_quantity > 0 else "buy"
     new_net, new_avg, realized = apply_fill(
         position.net_quantity, position.average_entry_price,
@@ -620,6 +631,11 @@ def exit_position(
     )
 
     _close_journal_legs(user_id, position, qty, fill_price, db, now)
+    # Phase 6.5.0.1: keep strategy-leg attribution in sync with the fill
+    # (best-effort, never blocks or alters the authoritative exit).
+    from app.services.leg_exposure import maintain_exposure_on_exit
+
+    maintain_exposure_on_exit(db, user_id, position, prior_net_quantity, qty, now)
 
     if position.strategy_execution_id:
         execution = db.scalar(
@@ -665,19 +681,26 @@ def _close_journal_legs(user_id: str, position: Position, exit_qty: int, exit_pr
     scaled to the covered quantity (the leg's original quantity is kept for
     history). This is a journal-view approximation for exotic partial
     netting; documented in PROJECT_STATUS.
+
+    Phase 6.5.0.1: entry orders are scoped to the position's own strategy
+    execution when it has one, so an exit of a netted position shared by
+    multiple executions can NEVER close journal legs belonging to a
+    DIFFERENT execution. Positions without an execution id (legacy
+    standalone) keep the historical instrument-wide FIFO behaviour.
     """
+    filters = [
+        PaperOrder.user_id == user_id,
+        PaperOrder.kind == "entry",
+        PaperOrder.symbol == position.symbol,
+        PaperOrder.expiry == position.expiry,
+        PaperOrder.strike == position.strike,
+        PaperOrder.option_type == position.option_type,
+        PaperOrder.status == "FILLED",
+    ]
+    if position.strategy_execution_id:
+        filters.append(PaperOrder.execution_id == position.strategy_execution_id)
     entry_orders = db.scalars(
-        select(PaperOrder)
-        .where(
-            PaperOrder.user_id == user_id,
-            PaperOrder.kind == "entry",
-            PaperOrder.symbol == position.symbol,
-            PaperOrder.expiry == position.expiry,
-            PaperOrder.strike == position.strike,
-            PaperOrder.option_type == position.option_type,
-            PaperOrder.status == "FILLED",
-        )
-        .order_by(PaperOrder.id.asc())
+        select(PaperOrder).where(*filters).order_by(PaperOrder.id.asc())
     ).all()
 
     remaining = exit_qty
