@@ -11,6 +11,7 @@ import {
   getPaperPortfolio,
   getPaperAnalytics,
   getPaperCapital,
+  getBrokerProfile,
   submitPaperExecution,
   exitPaperPosition,
   exitPaperStrategy,
@@ -32,6 +33,7 @@ import IVAnalyticsPanel from "./IVAnalyticsPanel";
 import AnalyticsPanel from "./AnalyticsPanel";
 import PortfolioAnalyticsPanel from "./PortfolioAnalyticsPanel";
 import CapitalPanel from "./CapitalPanel";
+import BrokerConnectionPanel from "./BrokerConnectionPanel";
 import { BulkExitModal, BulkExitResultBanner } from "./BulkExit";
 import {
   makeLeg,
@@ -157,6 +159,12 @@ export default function PaperTradingPage() {
   // margin, estimated capital, paper capital — source/status classified).
   const [capital, setCapital] = useState(null);
   const [capitalError, setCapitalError] = useState(null);
+  // Phase 6.4.1: broker connection diagnostics — read-only profile card. The
+  // backend owns the broker call (user-scoped, short TTL cache); the page
+  // only mirrors the result and re-fetches on manual refresh. Never polled.
+  const [brokerProfile, setBrokerProfile] = useState(null);
+  const [brokerProfileError, setBrokerProfileError] = useState(null);
+  const [brokerProfileLoading, setBrokerProfileLoading] = useState(false);
   const [paperCash, setPaperCash] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperStartingCapital, setPaperStartingCapital] = useState(DEFAULT_STARTING_CAPITAL);
   const [paperPositions, setPaperPositions] = useState([]);
@@ -284,6 +292,15 @@ export default function PaperTradingPage() {
   const pollKey = [expiry, ...requiredExps].filter(Boolean).join(",");
   const pollTargets = useMemo(() => (pollKey ? pollKey.split(",") : []), [pollKey]);
 
+  // Phase 6.4.1: option-chain diagnostic input — how many of the currently
+  // required chains are loaded (derived from the EXISTING chain cache; the
+  // diagnostics layer never fetches).
+  const optionChainDiagnosticInput = useMemo(() => {
+    const required = pollTargets.filter(Boolean);
+    const loaded = required.filter((exp) => chainCache[exp]?.chain?.length > 0).length;
+    return { required: required.length, loaded };
+  }, [pollTargets, chainCache]);
+
   useEffect(() => {
     if (!loggedIn || pollTargets.length === 0) return;
     let cancelled = false;
@@ -342,6 +359,27 @@ export default function PaperTradingPage() {
       .catch((e) => setJournalError(e.message));
   }, []);
 
+  // Phase 6.4.1: load the broker profile + connection diagnostics (read-only).
+  // The backend verifies the Upstox connection server-side and returns the
+  // normalized safe profile. ``refresh`` bypasses the backend's short
+  // user-scoped TTL cache (manual Refresh Connection). Never polled.
+  const loadBrokerProfile = useCallback(async (refresh = false) => {
+    setBrokerProfileLoading(true);
+    try {
+      const result = await getBrokerProfile(refresh);
+      setBrokerProfile(result);
+      setBrokerProfileError(null);
+    } catch (e) {
+      if (isAuthError(e)) {
+        setSessionExpired(true);
+        return;
+      }
+      setBrokerProfileError(paperErrorMessage(e));
+    } finally {
+      setBrokerProfileLoading(false);
+    }
+  }, []);
+
   // Phase 5.0: load the SERVER-AUTHORITATIVE portfolio (summary + positions).
   // The backend decides positions, cash, realized P&L and order status; the
   // frontend only mirrors what it returns.
@@ -380,7 +418,8 @@ export default function PaperTradingPage() {
     if (!loggedIn) return;
     loadPortfolio();
     loadJournal();
-  }, [loggedIn, loadPortfolio, loadJournal]);
+    loadBrokerProfile();
+  }, [loggedIn, loadPortfolio, loadJournal, loadBrokerProfile]);
 
   // Closed-trade history for the CSV export + per-strategy stats is derived
   // from the backend journal (trades the server actually closed).
@@ -1331,6 +1370,21 @@ export default function PaperTradingPage() {
         capital={capital}
         loading={capital === null && !portfolioError}
         error={capitalError}
+      />
+
+      {/* Phase 6.4.1: broker connection & profile diagnostics (read-only).
+          Consumes the ALREADY-FETCHED capital / market-status / chain state
+          plus its own profile endpoint; the diagnostics layer never
+          duplicates network calls. Manual refresh bypasses the backend
+          user-scoped TTL cache. */}
+      <BrokerConnectionPanel
+        profile={brokerProfile}
+        capital={capital}
+        marketStatus={marketStatus}
+        optionChain={optionChainDiagnosticInput}
+        loading={brokerProfileLoading}
+        error={brokerProfileError}
+        onRefresh={() => loadBrokerProfile(true)}
       />
 
       {/* Phase 5.2: bulk-exit confirmation modal (fixed overlay) */}

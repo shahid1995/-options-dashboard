@@ -624,6 +624,28 @@ class BrokerMarginDetailOut(BaseModel):
     expires_at: str | None = None
 
 
+class BrokerProfileOut(BaseModel):
+    """GET /paper/broker/profile — broker connection diagnostics (Phase 6.4.1).
+
+    Read-only: verifies the authenticated customer's Upstox connection and
+    returns the NORMALIZED safe profile only (user name, email, user id,
+    exchanges, products, order types, POA/DDPI...). Credentials are never
+    returned. ``profile`` is ``None`` when the broker profile is unavailable
+    — paper account values are never substituted. ``cached`` marks a
+    user-scoped cache hit (stale profile data is never presented as
+    real-time); a manual refresh bypasses the cache.
+    """
+
+    status: Literal["available", "unavailable"]
+    source: str = "BROKER_REPORTED"
+    broker: str = "UPSTOX"
+    profile: dict | None = None
+    generated_at: str | None = None
+    cached: bool = False
+    error: str | None = None  # structured code: BROKER_TOKEN_EXPIRED, ...
+    message: str | None = None  # human-readable, never a raw provider error
+
+
 class CapitalOut(BaseModel):
     """GET /paper/capital — server-authoritative capital summary.
 

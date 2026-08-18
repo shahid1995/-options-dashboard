@@ -7,6 +7,7 @@ from app.routers.chains import INSTRUMENT_KEYS, transform_chain
 from app.routers.deps import get_session_id
 from app.schemas import (
     AnalyticsOut,
+    BrokerProfileOut,
     BulkExitOut,
     BulkExitRequestIn,
     CapitalOut,
@@ -76,6 +77,29 @@ async def require_market_open(access_token: str) -> None:
         return
     detail = MARKET_UNKNOWN_MSG if status.status == "unknown" else MARKET_CLOSED_MSG
     raise HTTPException(status_code=409, detail=detail)
+
+
+@router.get("/broker/profile", response_model=BrokerProfileOut)
+async def broker_profile(
+    session_id: str | None = Depends(get_session_id),
+    refresh: bool = False,
+):
+    """GET /paper/broker/profile — broker connection diagnostics (Phase 6.4.1).
+
+    Read-only: verifies the authenticated customer's Upstox connection via
+    the broker's profile endpoint (server-side, reusing the existing session
+    and Upstox HTTP client) and returns the NORMALIZED safe profile. No
+    mutation; user-scoped; never returns credentials or raw broker payloads.
+    ``refresh=true`` bypasses the short user-scoped TTL cache (manual
+    refresh). Profile is NOT tick data — the page never polls it.
+
+    Always available regardless of market status: connection diagnostics
+    must work even while the market is closed.
+    """
+    from app.services.broker_profile import get_broker_profile_summary
+
+    user_id, access_token = require_session(session_id)
+    return await get_broker_profile_summary(user_id, access_token, refresh=refresh)
 
 
 @router.get("/market-status", response_model=MarketStatusOut)

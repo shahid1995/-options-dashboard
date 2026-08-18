@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, api } from "./api";
+import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, getBrokerProfile, api } from "./api";
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", "http://localhost:8000");
@@ -71,6 +71,25 @@ describe("paper journal api", () => {
       params: { date_from: "2026-08-01", strategy: "Long Call" },
     });
     expect(result.performance.total_completed_trades).toBe(3);
+    spy.mockRestore();
+  });
+});
+
+describe("broker profile api (Phase 6.4.1)", () => {
+  it("gets the broker profile from /paper/broker/profile", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({
+      data: { status: "available", source: "BROKER_REPORTED", profile: { user_id: "UCC12345" } },
+    });
+    const result = await getBrokerProfile();
+    expect(spy).toHaveBeenCalledWith("/paper/broker/profile", { params: {} });
+    expect(result.profile.user_id).toBe("UCC12345");
+    spy.mockRestore();
+  });
+
+  it("passes refresh=true to bypass the backend user-scoped cache", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { status: "available" } });
+    await getBrokerProfile(true);
+    expect(spy).toHaveBeenCalledWith("/paper/broker/profile", { params: { refresh: true } });
     spy.mockRestore();
   });
 });

@@ -132,6 +132,26 @@ async def get_market_status(access_token: str, exchange: str = "NSE_FO") -> dict
     )
 
 
+async def get_broker_profile(access_token: str) -> dict:
+    """Read-only Upstox user profile (Phase 6.4.1).
+
+    ``GET /v2/user/profile`` returns the authenticated customer's profile:
+    ``data.user_name``, ``data.email``, ``data.user_id``, ``data.user_type``,
+    ``data.is_active``, ``data.exchanges``, ``data.products``,
+    ``data.order_types``, ``data.poa``, ``data.ddpi``. Raises
+    :class:`UpstoxError` on failure. The raw payload is normalized by
+    ``app.services.broker_profile`` — credentials are never exposed.
+    """
+    return await _request(
+        "GET",
+        "/user/profile",
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
 async def get_funds_and_margin(access_token: str) -> dict:
     """Read-only account funds & margin (Phase 6.1).
 

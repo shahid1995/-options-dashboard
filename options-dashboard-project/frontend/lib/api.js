@@ -101,6 +101,17 @@ export const getPaperAnalytics = (params) =>
 
 export const getPaperCapital = () => api.get("/paper/capital").then((r) => r.data);
 
+// ---- Phase 6.4.1: broker profile & connection diagnostics ----
+// Read-only: verifies the authenticated Upstox connection and returns the
+// NORMALIZED safe profile (never credentials). The backend serves a short
+// user-scoped cache; pass refresh=true to bypass it (manual refresh). This
+// is NOT polled — profile is not tick data.
+
+export const getBrokerProfile = (refresh = false) =>
+  api
+    .get("/paper/broker/profile", { params: refresh ? { refresh: true } : {} })
+    .then((r) => r.data);
+
 export const chainWsUrl = (symbol, expiryDate) => {
   const base = process.env.NEXT_PUBLIC_API_URL || "";
   const wsBase = base.replace(/^http/, "ws");

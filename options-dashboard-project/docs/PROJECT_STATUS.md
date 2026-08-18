@@ -1,10 +1,10 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-17_
+_Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.4 — Capital Allocation & Portfolio Risk Controls**
+**Phase 6.4.1 — Broker Profile & Connection Diagnostics**
 
 Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
 
@@ -31,6 +31,7 @@ Status: 🔄 **Implemented / Pending Review** (implementation complete — autom
 | Phase 6.2 — Analytical Margin Model | 🔄 Implemented | Frontend analytical capital model — premium/risk bases, scenario capital, Strategy Review CAPITAL section, broker-vs-estimate separation — pending review |
 | Phase 6.3 — Capital Efficiency & Return Metrics | 🔄 Implemented | Source-aware return metrics (Premium ROI, Return on Capital/Margin/Risk Capital, Capital Efficiency) with explicit denominators, Strategy Review + Portfolio Analytics + Journal integration — pending review |
 | Phase 6.4 — Capital Allocation / Portfolio Risk Controls | 🔄 Implemented | Capital allocation, risk concentration, strategy/underlying/expiry concentration, configurable monitoring-only limits, portfolio allocation & risk dashboard — pending review |
+| Phase 6.4.1 — Broker Profile & Connection Diagnostics | 🔄 Implemented | Upstox profile verification, safe profile card, connection health (profile/funds/margin/market/chain), account capabilities, user-scoped TTL cache, structured broker errors — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -53,7 +54,7 @@ The Phase 4.2 implementation is committed but was never user-verified or ChatGPT
 
 Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
 
-Phase 6.4 is implemented in the current working tree (uncommitted): `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` and `frontend/app/paper/PortfolioAnalyticsPanel.test.js` (modified), and this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phase 6.4 from the Changes panel — FreeBuff does not commit or push.
+Phases 6.4 and 6.4.1 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified), and this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 
@@ -548,9 +549,96 @@ No commit. No push. Implementation left in the working tree for the owner's revi
 
 No deployment.
 
+## Phase 6.4.1 implementation
+
+Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+Implemented (READ-ONLY broker connection/profile diagnostics — NOT a trading feature; no execution changes, no signals, no polling, no new auth flow):
+
+### Upstox profile API
+
+- `get_broker_profile(access_token)` in `backend/app/services/upstox.py` reuses the EXISTING Upstox HTTP client and `UpstoxError` handling for `GET /v2/user/profile` (Bearer token, server-side only). No new authentication flow; users never paste tokens into the website.
+
+### Profile fields
+
+- `backend/app/services/broker_profile.py` normalizes the profile to a SAFE allow-list contract: `user_name`, `email`, `user_id`, `broker`, `user_type`, `account_type` (Upstox's profile API does not report it → null, never fabricated), `is_active`, `exchanges`, `products`, `order_types`, `poa`, `ddpi`. Missing optional fields are null; the raw broker payload is never returned; `assert_no_secrets` guards the contract against credential fields.
+
+### Backend endpoint
+
+- `GET /paper/broker/profile` (`app/routers/paper.py`, response model `BrokerProfileOut`): authenticated session required, user-scoped, server-side broker call, structured error response, no mutation, always available regardless of market status. `?refresh=true` bypasses the short TTL cache (manual refresh).
+
+### Connection diagnostics
+
+- `frontend/lib/brokerDiagnostics.js` (pure/derived layer — NO network calls; receives already-fetched results): CONNECTION HEALTH items PROFILE / FUNDS / MARGIN / MARKET STATUS / OPTION CHAIN, each with `AVAILABLE | UNAVAILABLE | PARTIAL | UNKNOWN`, plus overall `CONNECTED | PARTIAL | DISCONNECTED` (§13). The broker profile call is the primary connection verification — never "connected" merely from a session cookie; margin down ≠ broker disconnected (PARTIAL, not DISCONNECTED).
+
+### Capabilities
+
+- `brokerCapabilities(profile)` derives ACCOUNT CAPABILITIES only from reported data (NFO segment, options products, MARKET/LIMIT/SL order types, POA, DDPI) with explicit state words (ENABLED/PERMITTED/AUTHORIZED vs DISABLED/NOT PERMITTED/NOT AUTHORIZED) — nothing is inferred that the API does not report; NFO is never hard-coded enabled.
+
+### Cache
+
+- Backend user-scoped TTL cache (key `profile:{user_id}`, 300 s): one user's profile is never served to another user (§18); cached responses carry `cached: true` and the ORIGINAL `generated_at` — stale data is never presented as real-time (§29); manual Refresh bypasses the cache. Profile is not tick data — the frontend never polls.
+
+### Security
+
+- Credentials (access_token, refresh_token, api_key, api_secret, client_secret, authorization codes) are never returned by the API nor rendered by the UI; regression tests assert their absence on both sides. Broker error messages are human-readable — never raw provider errors or stack traces.
+
+### Error handling
+
+- Structured codes (§9): `BROKER_AUTH_REQUIRED`, `BROKER_TOKEN_EXPIRED` (401/403 → UI shows BROKER SESSION EXPIRED + [Reconnect Broker]), `BROKER_RATE_LIMITED` (429), `BROKER_MAINTENANCE` (423), `BROKER_BAD_RESPONSE` (malformed payload), `BROKER_NETWORK_ERROR`, `BROKER_PROFILE_UNAVAILABLE` (generic).
+
+### User isolation
+
+- All fetches/cache entries are scoped by the authenticated session; endpoint tests verify two sessions never cross-contaminate (broker profile of user A is never served to user B).
+
+### UI
+
+- **BrokerConnectionPanel** (`frontend/app/paper/BrokerConnectionPanel.js`) rendered under the Capital panel on `/paper`: BROKER CONNECTION chip (🟢 UPSTOX CONNECTED / 🟡 PARTIAL / 🔴 DISCONNECTED), user / account / status / Last verified (+ CACHED marker), CONNECTION HEALTH rows, ACCOUNT CAPABILITIES chips, expandable PROFILE DETAILS, [Refresh Connection]. Unavailable state shows the structured reason (never "Unknown User"); expired session shows BROKER SESSION EXPIRED + [Reconnect Broker]. The panel consumes the ALREADY-FETCHED capital / market-status / chain state — no duplicated network calls (§22/§23/§24/§25).
+
+### Files changed
+
+- `backend/app/services/upstox.py` (profile fetch)
+- `backend/app/routers/paper.py` (GET /paper/broker/profile)
+- `backend/app/schemas.py` (BrokerProfileOut)
+- `frontend/lib/api.js` (getBrokerProfile(refresh))
+- `frontend/app/paper/page.js` (profile state + panel wiring)
+- `docs/PROJECT_STATUS.md` (this update)
+
+### Files created
+
+- `backend/app/services/broker_profile.py` (normalize + structured errors + user-scoped TTL cache)
+- `backend/tests/test_broker_profile.py` (backend test matrix)
+- `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (pure diagnostics)
+- `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (UI card)
+
+### Tests
+
+- Frontend: 714/714 tests passed (32 files) — new: 23 diagnostics unit tests + 11 panel render tests + 2 API helper tests
+- Backend: 353/353 tests passed — 28 new (14-item matrix at service + endpoint level)
+- `npx next build`: passed; all 6 routes generated; no type/lint errors
+
+### Manual verification required
+
+- Authenticated Upstox user profile appears with matching name/account/status; exchanges/capabilities match the broker response; Refresh updates Last Verified; Funds/Margin diagnostics match the Phase 6.1 capital panel state; Market-status diagnostic matches the current segment; Option-chain diagnostic matches loaded chain state; expired/invalid broker session shows disconnected/expired state; no sensitive credentials visible anywhere.
+- Phase 6.1 / 6.2 / 6.3 / 6.4 manual verification remain pending (owner).
+
+### Known limitations
+
+- Profile caching is in-memory per backend process (restart clears it — same single-user MVP trade-off as the token store).
+- `account_type` stays null because Upstox's profile API does not report it (never fabricated).
+- Option-chain diagnostic is UNKNOWN until an expiry is actually required (no invented chain state).
+
+### Git
+
+No commit. No push. Implementation left in the working tree for the owner's review.
+
+### Deployment
+
+No deployment.
+
 ## Next phase objective — Phase 6.5
 
-Phase 6.4 (Capital Allocation / Portfolio Risk Controls) is implemented and pending review. The next milestone is **Phase 6.5 — Portfolio Risk Controls / Optional Execution Guardrails** (optional, explicitly configured execution guardrails built on the Phase 6.4 monitoring-only limit framework). Do NOT implement Phase 6.5 until Phase 6.4 is verified and approved. Phase 6.1 (Upstox broker margin), Phase 6.2 (analytical capital model) and Phase 6.3 (capital efficiency) remain implemented / pending the owner's review.
+Phases 6.4 (Capital Allocation / Portfolio Risk Controls) and 6.4.1 (Broker Profile & Connection Diagnostics) are implemented and pending review. The next milestone is **Phase 6.5 — Portfolio Risk Controls / Optional Execution Guardrails** (optional, explicitly configured execution guardrails built on the Phase 6.4 monitoring-only limit framework). Do NOT implement Phase 6.5 until Phases 6.4 / 6.4.1 are verified and approved. Phase 6.1 (Upstox broker margin), Phase 6.2 (analytical capital model) and Phase 6.3 (capital efficiency) remain implemented / pending the owner's review.
 
 ## Permanent project constraints
 
@@ -576,4 +664,6 @@ Phase 6.4 (Capital Allocation / Portfolio Risk Controls) is implemented and pend
 
 **User:** Manually verify Phase 6.3 — Portfolio Analytics shows the "Capital efficiency · since inception" cards with explicit denominators (Premium ROI ÷ premium outlay, Return on Capital ÷ estimated capital, Return on Margin ÷ broker-reported margin; N/A when a denominator is genuinely unavailable — never substituted, never 0%); completed journal rows show a Premium ROI column; Strategy Review shows RETURNS (AT MAX PROFIT · PROJECTED) with Return on Capital and Return on Risk Capital (N/A + UNLIMITED_RISK for unlimited structures); no percentage is ever shown without its denominator. Then ChatGPT reviews the working-tree diff. Phase 6.3 remains in the working tree — the project owner commits it from the Changes panel (FreeBuff does not commit or push).
 
-Also pending: **User:** Manually verify Phase 6.2 (Strategy Review CAPITAL section shows Estimated Capital with ESTIMATED · PREMIUM BASIS / RISK BASIS · DEFINED LOSS and Broker Margin as BROKER REPORTED · live refresh not performed in builder; both values stay independent). Also pending Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges during market hours; funds maintenance window shows UNAVAILABLE; duplicate loads reuse the cached broker snapshot) and the Phase 6.0 market-hours verification. Only after Phase 6.3 is approved does Phase 6.4 (Capital Allocation / Portfolio Risk Controls) begin.
+Also pending: **User:** Manually verify Phase 6.2 (Strategy Review CAPITAL section shows Estimated Capital with ESTIMATED · PREMIUM BASIS / RISK BASIS · DEFINED LOSS and Broker Margin as BROKER REPORTED · live refresh not performed in builder; both values stay independent). Also pending Phase 6.1 (capital panel shows live Broker Available Funds / Broker Margin Used and per-strategy Broker Margin with BROKER REPORTED badges during market hours; funds maintenance window shows UNAVAILABLE; duplicate loads reuse the cached broker snapshot) and the Phase 6.0 market-hours verification.
+
+Also pending: **User:** Manually verify Phase 6.4.1 (the Broker Connection card shows the authenticated Upstox profile with matching name/account/status; CONNECTION HEALTH rows match the live capital panel's funds/margin, the market-status badge and the loaded option chain; Refresh Connection updates Last Verified; an expired/invalid broker session shows BROKER SESSION EXPIRED with Reconnect Broker; no credential values are visible anywhere).
