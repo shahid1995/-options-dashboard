@@ -4,9 +4,32 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.4.1 — Broker Profile & Connection Diagnostics**
+**Phase 6.5.0 — Advanced Open Position Management: Exit Intent / Selector Foundation**
 
-Status: 🔄 **Implemented / Pending Review** (implementation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: 🔄 **Implemented / Pending Review** (pure domain foundation complete — automated verification passed, manual verification pending, ChatGPT review pending)
+
+## Phase 6.5.0 implementation
+
+Status: 🔄 Implemented / Pending Review (foundation only — later Phase 6.5 sub-phases build on it)
+
+Implemented (pure domain foundation ONLY — no execution, no new API, no UI, no market-gate changes):
+
+- **Exit Intent / Selector domain** (`frontend/lib/calculations/exitIntent.js`): `EXIT_SCOPE` (POSITION / STRATEGY / PORTFOLIO), `EXIT_QUANTITY_MODE` (ALL / QUANTITY), and a normalized `ExitSelector` with optional `optionType` (CALL | PUT, accepts CE/PE), optional `action` (BUY | SELL) and optional `legId` — supporting ALL, CALL/CE, PUT/PE, BUY SIDE, SELL SIDE, BUY CE, BUY PE, SELL CE, SELL PE and individual-leg targeting
+- **`resolveExitTargets(intent, exposures, options)`** — pure target resolution: uses the CURRENT remaining quantity (signed `net_quantity`, never the original order quantity), excludes closed/zero-quantity positions, respects strategy-execution identity (never mixes strategies or users), matches option type and BUY/SELL attribution exactly, supports individual-leg targeting, and returns deterministic ordering ([optionType, side, positionId])
+- **Quantity safety**: ALL may resolve multiple targets; QUANTITY on multiple matches returns a structured `AMBIGUOUS_EXIT_QUANTITY` error (never guessed/silently duplicated); requested quantity > remaining returns `EXIT_QUANTITY_EXCEEDS_REMAINING` (never clamped silently)
+- **Structured errors**: INVALID_INTENT, MISSING_QUANTITY, INVALID_QUANTITY, TARGET_NOT_FOUND, NO_MATCHING_TARGETS, AMBIGUOUS_EXIT_QUANTITY, EXIT_QUANTITY_EXCEEDS_REMAINING
+- **Schema verdict**: the existing netted position model ALREADY preserves sufficient BUY/SELL attribution (position `net_quantity` sign + order-level `action`/`option_type` under `strategy_execution_id`) — **no new persistence model was created**; netted positions remain the authoritative portfolio exposure
+- **User isolation**: optional `options.userId` filter — another user's positions are never mixed, and cross-user POSITION/STRATEGY targeting reports TARGET_NOT_FOUND (never leaks)
+- **No execution changes**: no new exit API, no UI buttons, no market-gate changes, no broker calls, no fill/cash/journal logic — those belong to later Phase 6.5 sub-phases
+
+Automated tests (actual):
+
+- Frontend: **769/769 tests passed (33 files)** — 55 new tests in `frontend/lib/calculations/exitIntent.test.js` covering ALL/CALL/PUT/BUY/SELL/BUY CALL/BUY PUT/SELL CALL/SELL PUT/legId, partial remaining quantity, zero-quantity/closed exclusion, missing strategy, mixed strategies, deterministic ordering, explicit quantity over remaining, ambiguous explicit quantity, user isolation, exposure mapping (backend + frontend shapes), selector normalization/labels, NaN/Infinity safety, input immutability, and a static audit proving the module makes no fetch/axios/WebSocket/import calls
+- Backend: **353/353 tests passed** (unchanged — no backend changes)
+- `npx next build`: passed; all routes generated; no type/lint errors
+
+Manual verification: ⏳ pending (exercise `resolveExitTargets` combinations against a real paper portfolio with BUY CE / SELL CE / BUY PE / SELL PE legs)
+ChatGPT review: ⏳ pending
 
 ## Overall progress
 
@@ -32,6 +55,7 @@ Status: 🔄 **Implemented / Pending Review** (implementation complete — autom
 | Phase 6.3 — Capital Efficiency & Return Metrics | 🔄 Implemented | Source-aware return metrics (Premium ROI, Return on Capital/Margin/Risk Capital, Capital Efficiency) with explicit denominators, Strategy Review + Portfolio Analytics + Journal integration — pending review |
 | Phase 6.4 — Capital Allocation / Portfolio Risk Controls | 🔄 Implemented | Capital allocation, risk concentration, strategy/underlying/expiry concentration, configurable monitoring-only limits, portfolio allocation & risk dashboard — pending review |
 | Phase 6.4.1 — Broker Profile & Connection Diagnostics | 🔄 Implemented | Upstox profile verification, safe profile card, connection health (profile/funds/margin/market/chain), account capabilities, user-scoped TTL cache, structured broker errors — pending review |
+| Phase 6.5.0 — Exit Intent / Selector Foundation | 🔄 Implemented | Pure Exit Intent / Selector domain: EXIT_SCOPE (POSITION/STRATEGY/PORTFOLIO), selector combinations (ALL/CALL/PUT/BUY/SELL/BUY CE/BUY PE/SELL CE/SELL PE/legId), resolveExitTargets with remaining-quantity semantics, quantity safety (AMBIGUOUS_EXIT_QUANTITY, never over remaining), deterministic ordering, user isolation, no execution/network — pending review |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -54,7 +78,7 @@ The Phase 4.2 implementation is committed but was never user-verified or ChatGPT
 
 Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
 
-Phases 6.4 and 6.4.1 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified), and this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 from the Changes panel — FreeBuff does not commit or push.
+Phases 6.4, 6.4.1 and 6.5.0 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 from the Changes panel — FreeBuff does not commit or push.
 
 ## Phase 5.2.1 implementation
 
