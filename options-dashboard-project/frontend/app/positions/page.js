@@ -570,9 +570,13 @@ export default function PositionsPage() {
     setLoading(true);
     setError(null);
 
-    const params = {};
+    // Always send limit to ensure the enriched endpoint is used.
+    // Without any params, the backend falls back to get_open_positions()
+    // for backward compatibility, which only returns open positions.
+    const params = { limit: 500 };
     if (activeTab === "open") params.status = "open";
     else if (activeTab === "closed") params.status = "closed";
+    // For "all" tab: no status param → get_positions_enriched returns all
     if (filters.symbol) params.symbol = filters.symbol;
     if (filters.option_type) params.option_type = filters.option_type;
     if (filters.strategy_execution_id) params.strategy_execution_id = filters.strategy_execution_id;
@@ -604,11 +608,11 @@ export default function PositionsPage() {
     fetchPositions();
   }, [loggedIn, fetchPositions]);
 
-  // Compute counts for all tabs by fetching with no status filter
+  // Compute counts for all tabs by fetching with limit (forces enriched path)
   const [allPositions, setAllPositions] = useState(null);
   useEffect(() => {
     if (!loggedIn) return;
-    getPaperPositionsFiltered({})
+    getPaperPositionsFiltered({ limit: 500 })
       .then((data) => setAllPositions(data))
       .catch(() => {});
   }, [loggedIn]);

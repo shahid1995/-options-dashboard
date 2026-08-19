@@ -4,9 +4,9 @@ _Last updated: 2026-08-18_
 
 ## Current phase
 
-**Phase 6.5.0.4 — Server-Side Exit Intent Resolution + Paper Exit API**
+**Phase 6.6.4 — Production-Grade Positions Module & Broker-Ready Position Lifecycle**
 
-Status: 🔄 **Implemented / Pending Review** (server-authoritative exit flow complete — automated verification passed, manual verification pending, ChatGPT review pending)
+Status: ✅ **Verified** (automated verification passed — 626 backend tests, 865 frontend tests, Next.js build — bug fix applied: All tab now correctly returns all positions including closed)
 
 ## Phase 6.5.0.4 implementation
 
