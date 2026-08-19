@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState, useMemo, useCallback } from "react";
-import { getPaperPositionsFiltered } from "@/lib/api";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { getPaperPositionsFiltered, previewExitIntent, confirmExitIntent } from "@/lib/api";
 import { C, fmtIN, SessionExpired, useIsMobile } from "@/lib/ui";
 import { isAuthError } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
@@ -216,7 +216,7 @@ function DetailItem({ label, value, color, mono }) {
 
 // ---- Position details (structured) ----
 
-export function PositionDetails({ position }) {
+export function PositionDetails({ position, onExit }) {
   const absQty = Math.abs(position.net_quantity || 0);
   const lots = position.lot_size ? Math.floor(absQty) : null;
   const legs = position.strategy_leg_exposures || [];
@@ -410,13 +410,323 @@ export function PositionDetails({ position }) {
         <DetailItem label="Broker" value="Paper" color={C.gold} />
         <DetailItem label="Broker Position ID" value="N/A" color={C.faint} />
       </DetailSection>
+
+      {/* Exit Button */}
+      {position.status === "open" && (
+        <div style={{ marginTop: 8 }}>
+          <button data-testid="exit-button"
+            onClick={(e) => { e.stopPropagation(); onExit?.(); }}
+            style={{ fontSize: 11, fontWeight: 700, padding: "6px 14px", borderRadius: 6,
+              border: "none", background: C.gold, color: "#0B0E14", cursor: "pointer" }}>
+            Exit Position
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Exit Flow (Phase 6.6.5) ----
+
+function ExitFlow({ position, onClose, onExited }) {
+  const [step, setStep] = useState("select"); // select | preview | confirming | result
+  const [selector, setSelector] = useState({
+    scope: "POSITION",
+    option_type: "",
+    action: "",
+    quantity_mode: "ALL",
+    quantity: "",
+  });
+  const [preview, setPreview] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const canPreview = selector.quantity_mode === "ALL" ||
+    (selector.quantity_mode === "QUANTITY" && Number(selector.quantity) > 0);
+
+  const handlePreview = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = {
+        client_order_id: `exit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        scope: selector.scope,
+        quantity_mode: selector.quantity_mode,
+      };
+      if (selector.scope === "POSITION") payload.position_id = position.id;
+      if (selector.scope === "STRATEGY" && position.strategy_execution_id) {
+        payload.strategy_execution_id = position.strategy_execution_id;
+      }
+      if (selector.option_type) payload.option_type = selector.option_type;
+      if (selector.action) payload.action = selector.action;
+      if (selector.quantity_mode === "QUANTITY") payload.quantity = Number(selector.quantity);
+
+      const data = await previewExitIntent(payload);
+      if (data.status === "PREVIEW" && data.targets.length > 0) {
+        setPreview(data);
+        setStep("preview");
+      } else {
+        setError(data.errors?.[0] || "No matching exposure found.");
+      }
+    } catch (e) {
+      setError(e.message || "Preview failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirm = async () => {
+    setLoading(true);
+    setError(null);
+    setStep("confirming");
+    try {
+      // Re-use the same client_order_id for idempotency
+      const payload = {
+        client_order_id: preview.targets[0]
+          ? `exit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+          : `exit-${Date.now()}`,
+        scope: selector.scope,
+        quantity_mode: selector.quantity_mode,
+      };
+      if (selector.scope === "POSITION") payload.position_id = position.id;
+      if (selector.scope === "STRATEGY" && position.strategy_execution_id) {
+        payload.strategy_execution_id = position.strategy_execution_id;
+      }
+      if (selector.option_type) payload.option_type = selector.option_type;
+      if (selector.action) payload.action = selector.action;
+      if (selector.quantity_mode === "QUANTITY") payload.quantity = Number(selector.quantity);
+
+      const data = await confirmExitIntent(payload);
+      setResult(data);
+      setStep("result");
+      if (data.status === "SUCCESS") onExited?.();
+    } catch (e) {
+      setError(e.message || "Exit failed.");
+      setStep("preview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const badge = (text, color, bg) => (
+    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.5, padding: "2px 6px",
+      borderRadius: 3, color, background: bg }}>{text}</span>
+  );
+
+  return (
+    <div data-testid="exit-flow" style={{ background: C.surface2, border: `1px solid ${C.border}`,
+      borderRadius: 8, padding: 12, marginTop: 8 }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: 0.5 }}>
+          EXIT {position.symbol} {position.strike ? fmtIN(position.strike) : ""} {position.option_type === "call" ? "CE" : "PE"}
+        </div>
+        <button onClick={onClose} style={{ fontSize: 11, color: C.muted, background: "none",
+          border: "none", cursor: "pointer" }}>✕ Close</button>
+      </div>
+
+      {/* PAPER mode indicator */}
+      <div style={{ marginBottom: 8 }}>
+        {badge("PAPER", C.gold, "rgba(201,161,90,0.15)")}
+        <span style={{ fontSize: 10, color: C.faint, marginLeft: 6 }}>
+          Simulated — no broker orders
+        </span>
+      </div>
+
+      {/* Step: Select */}
+      {step === "select" && (
+        <div>
+          {/* Scope */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>SCOPE</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {["POSITION", "STRATEGY"].map((s) => (
+                <button key={s} onClick={() => setSelector({ ...selector, scope: s })}
+                  style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
+                    border: `1px solid ${selector.scope === s ? C.gold : C.border}`,
+                    background: selector.scope === s ? "rgba(201,161,90,0.1)" : "transparent",
+                    color: selector.scope === s ? C.gold : C.muted, cursor: "pointer" }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Option Type */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>OPTION TYPE</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {[{ v: "", l: "ALL" }, { v: "CALL", l: "CE" }, { v: "PUT", l: "PE" }].map(({ v, l }) => (
+                <button key={v} onClick={() => setSelector({ ...selector, option_type: v })}
+                  style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
+                    border: `1px solid ${selector.option_type === v ? C.gold : C.border}`,
+                    background: selector.option_type === v ? "rgba(201,161,90,0.1)" : "transparent",
+                    color: selector.option_type === v ? C.gold : C.muted, cursor: "pointer" }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Action */}
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>SOURCE ACTION</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              {[{ v: "", l: "ALL" }, { v: "BUY", l: "BUY" }, { v: "SELL", l: "SELL" }].map(({ v, l }) => (
+                <button key={v} onClick={() => setSelector({ ...selector, action: v })}
+                  style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
+                    border: `1px solid ${selector.action === v ? C.gold : C.border}`,
+                    background: selector.action === v ? "rgba(201,161,90,0.1)" : "transparent",
+                    color: selector.action === v ? C.gold : C.muted, cursor: "pointer" }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Quantity */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>QUANTITY</div>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <button onClick={() => setSelector({ ...selector, quantity_mode: "ALL" })}
+                style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
+                  border: `1px solid ${selector.quantity_mode === "ALL" ? C.gold : C.border}`,
+                  background: selector.quantity_mode === "ALL" ? "rgba(201,161,90,0.1)" : "transparent",
+                  color: selector.quantity_mode === "ALL" ? C.gold : C.muted, cursor: "pointer" }}>
+                ALL
+              </button>
+              <button onClick={() => setSelector({ ...selector, quantity_mode: "QUANTITY" })}
+                style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
+                  border: `1px solid ${selector.quantity_mode === "QUANTITY" ? C.gold : C.border}`,
+                  background: selector.quantity_mode === "QUANTITY" ? "rgba(201,161,90,0.1)" : "transparent",
+                  color: selector.quantity_mode === "QUANTITY" ? C.gold : C.muted, cursor: "pointer" }}>
+                QTY
+              </button>
+              {selector.quantity_mode === "QUANTITY" && (
+                <input type="number" min={1} value={selector.quantity}
+                  onChange={(e) => setSelector({ ...selector, quantity: e.target.value })}
+                  placeholder="lots"
+                  style={{ width: 60, fontSize: 11, padding: "4px 6px", borderRadius: 4,
+                    background: C.surface, color: C.text, border: `1px solid ${C.border}` }} />
+              )}
+            </div>
+          </div>
+
+          {/* Preview button */}
+          <button onClick={handlePreview} disabled={!canPreview || loading}
+            style={{ width: "100%", fontSize: 11, fontWeight: 700, padding: "8px 0",
+              borderRadius: 6, border: "none", cursor: canPreview && !loading ? "pointer" : "default",
+              background: canPreview ? C.gold : C.surface2,
+              color: canPreview ? "#0B0E14" : C.muted, opacity: canPreview ? 1 : 0.5 }}>
+            {loading ? "Resolving…" : "Preview Exit"}
+          </button>
+        </div>
+      )}
+
+      {/* Step: Preview */}
+      {step === "preview" && preview && (
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.gold, letterSpacing: 0.5, marginBottom: 8 }}>
+            EXIT PREVIEW
+          </div>
+          {preview.targets.map((t, i) => (
+            <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`,
+              borderRadius: 6, padding: 10, marginBottom: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px", fontSize: 11 }}>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>INSTRUMENT</span><br />
+                  <span style={{ fontWeight: 600 }}>{t.symbol} {fmtIN(t.strike)} {t.option_type === "call" ? "CE" : "PE"}</span></div>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>STRATEGY</span><br />
+                  <span style={{ color: C.gold }}>{position.strategy_tag || "Custom"}</span></div>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>SOURCE</span><br />
+                  <span style={{ fontWeight: 700, color: t.source_action === "buy" ? C.green : C.red }}>
+                    {t.source_action?.toUpperCase()} {t.option_type === "call" ? "CE" : "PE"}
+                  </span></div>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>EXECUTION</span><br />
+                  <span style={{ fontWeight: 700, color: t.exit_side === "buy" ? C.green : C.red }}>
+                    {t.exit_side?.toUpperCase()} {t.option_type === "call" ? "CE" : "PE"}
+                  </span></div>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>EXIT QTY</span><br />
+                  <span style={{ fontWeight: 600 }}>{t.quantity} lot{t.quantity !== 1 ? "s" : ""}</span></div>
+                <div><span style={{ color: C.faint, fontSize: 9 }}>REMAINING AFTER</span><br />
+                  <span style={{ fontWeight: 600 }}>{t.remaining_quantity - t.quantity} lot{(t.remaining_quantity - t.quantity) !== 1 ? "s" : ""}</span></div>
+              </div>
+            </div>
+          ))}
+
+          {preview.warnings?.length > 0 && (
+            <div style={{ fontSize: 10, color: C.gold, marginBottom: 8 }}>
+              {preview.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setStep("select")}
+              style={{ flex: 1, fontSize: 11, fontWeight: 700, padding: "8px 0", borderRadius: 6,
+                border: `1px solid ${C.border}`, background: C.surface2, color: C.muted, cursor: "pointer" }}>
+              Back
+            </button>
+            <button onClick={handleConfirm} disabled={loading}
+              style={{ flex: 1, fontSize: 11, fontWeight: 800, padding: "8px 0", borderRadius: 6,
+                border: "none", background: C.gold, color: "#0B0E14", cursor: loading ? "default" : "pointer",
+                opacity: loading ? 0.6 : 1 }}>
+              {loading ? "Executing…" : "Confirm Exit"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step: Confirming */}
+      {step === "confirming" && (
+        <div style={{ textAlign: "center", padding: 20, color: C.muted, fontSize: 12 }}>
+          Executing exit…
+        </div>
+      )}
+
+      {/* Step: Result */}
+      {step === "result" && result && (
+        <div>
+          <div style={{ textAlign: "center", marginBottom: 10 }}>
+            {result.status === "SUCCESS" && badge("EXIT SUCCESSFUL", C.green, "rgba(76,175,125,0.15)")}
+            {result.status === "DUPLICATE" && badge("ALREADY EXECUTED", C.gold, "rgba(201,161,90,0.15)")}
+            {result.status === "FAILED" && badge("EXIT FAILED", C.red, "rgba(225,82,82,0.15)")}
+            {result.status === "REJECTED" && badge("EXIT REJECTED", C.red, "rgba(225,82,82,0.15)")}
+          </div>
+          {result.orders?.length > 0 && (
+            <div style={{ fontSize: 11, marginBottom: 8 }}>
+              <span style={{ color: C.faint }}>Order:</span>{" "}
+              <span style={{ fontWeight: 600 }}>
+                {result.orders[0].action?.toUpperCase()} {result.orders[0].filled_quantity} @ {fmtIN(result.orders[0].fill_price, 2)}
+              </span>
+            </div>
+          )}
+          {result.errors?.length > 0 && (
+            <div style={{ fontSize: 10, color: C.red, marginBottom: 8 }}>
+              {result.errors.map((e, i) => <div key={i}>{e}</div>)}
+            </div>
+          )}
+          <button onClick={onClose}
+            style={{ width: "100%", fontSize: 11, fontWeight: 700, padding: "8px 0", borderRadius: 6,
+              border: `1px solid ${C.border}`, background: C.surface2, color: C.gold, cursor: "pointer" }}>
+            Close
+          </button>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div style={{ fontSize: 10, color: C.red, marginTop: 8, padding: 6, borderRadius: 4,
+          background: "rgba(225,82,82,0.08)" }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 }
 
 // ---- Position row ----
 
-export function PositionRow({ position, isExpanded, onToggle, isMobile }) {
+export function PositionRow({ position, isExpanded, onToggle, isMobile, onExit }) {
   const absQty = Math.abs(position.net_quantity || 0);
   const lots = position.lot_size > 0 ? Math.floor(absQty) : null;
 
@@ -494,7 +804,7 @@ export function PositionRow({ position, isExpanded, onToggle, isMobile }) {
               borderBottom: `1px solid ${C.border}`,
             }}
           >
-            <PositionDetails position={position} />
+            <PositionDetails position={position} onExit={() => onExit?.(position)} />
           </td>
         </tr>
       )}
@@ -563,8 +873,14 @@ export default function PositionsPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("open");
   const [expandedRow, setExpandedRow] = useState(null);
+  const [exitPosition, setExitPosition] = useState(null);
   const [filters, setFilters] = useState({ symbol: "", option_type: "", strategy_execution_id: "" });
   const isMobile = useIsMobile();
+
+  const handleExit = useCallback((pos) => {
+    setExitPosition(pos);
+    setExpandedRow(pos.id);
+  }, []);
 
   const fetchPositions = useCallback(() => {
     setLoading(true);
@@ -738,13 +1054,32 @@ export default function PositionsPage() {
             </thead>
             <tbody>
               {positions.map((pos, i) => (
-                <PositionRow
-                  key={pos.id || i}
-                  position={pos}
-                  isExpanded={expandedRow === pos.id}
-                  onToggle={() => setExpandedRow(expandedRow === pos.id ? null : pos.id)}
-                  isMobile={isMobile}
-                />
+                <React.Fragment key={pos.id || i}>
+                  <PositionRow
+                    position={pos}
+                    isExpanded={expandedRow === pos.id}
+                    onToggle={() => {
+                      if (exitPosition?.id === pos.id) setExitPosition(null);
+                      setExpandedRow(expandedRow === pos.id ? null : pos.id);
+                    }}
+                    isMobile={isMobile}
+                    onExit={handleExit}
+                  />
+                  {expandedRow === pos.id && exitPosition?.id === pos.id && (
+                    <tr>
+                      <td colSpan={isMobile ? 5 : 10} style={{ padding: "0 16px 12px" }}>
+                        <ExitFlow
+                          position={pos}
+                          onClose={() => setExitPosition(null)}
+                          onExited={() => {
+                            setExitPosition(null);
+                            fetchPositions();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>

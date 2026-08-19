@@ -228,6 +228,19 @@ class ExitIntentTargetOut(BaseModel):
     lot_size: int
 
 
+class ExitIntentPreviewOut(BaseModel):
+    """Server-authoritative exit preview (Phase 6.6.5).
+
+    Resolves targets WITHOUT mutating any state. The frontend uses this
+    to display the confirmation dialog before the user confirms.
+    """
+
+    status: str  # PREVIEW | NO_MATCHING_TARGETS | REJECTED
+    targets: list[ExitIntentTargetOut] = []
+    errors: list[str] = []
+    warnings: list[str] = []
+
+
 class ExitIntentOut(BaseModel):
     """Result of a server-authoritative exit intent resolution + execution."""
 

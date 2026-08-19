@@ -537,7 +537,9 @@ def find_exit_replay(user_id: str, position: Position, client_order_id: str, db:
 
 
 def exit_position(
-    user_id: str, position_id: int, request, db: Session, fill_price: float, *, commit: bool = True
+    user_id: str, position_id: int, request, db: Session, fill_price: float,
+    *, commit: bool = True, exit_side: str | None = None,
+    target_exposure_id: int | None = None,
 ) -> ExitOut:
     """Exit (partially or fully) a paper position at the authoritative price.
 
@@ -552,6 +554,15 @@ def exit_position(
     ``commit=False`` lets the Phase 5.2 bulk-exit engine run many exits and
     commit ONCE, so a bulk operation is one atomic transaction; the
     single-position path keeps committing per request (unchanged).
+
+    ``exit_side``: when provided (Phase 6.6.5), overrides the automatic
+    side derivation from position.net_quantity. Required for leg-aware
+    exits where the exit transaction must match a specific exposure
+    (e.g. BUY CE exposure → SELL CE exit, even on a net-long position).
+
+    ``target_exposure_id``: when provided (Phase 6.6.5), the exposure
+    maintenance step will reduce THIS specific StrategyLegExposure
+    instead of using FIFO across the dominant side.
     """
     now = _now()
 
@@ -580,8 +591,13 @@ def exit_position(
 
     # Phase 6.5.0.1: the pre-exit net determines which exposure side an exit
     # reduces (the dominant side of the position that actually shrinks).
+    # Phase 6.6.5: when exit_side is explicitly provided (leg-aware exit),
+    # use it instead of deriving from position.net_quantity.
     prior_net_quantity = position.net_quantity
-    action = "sell" if position.net_quantity > 0 else "buy"
+    if exit_side and exit_side in ("buy", "sell"):
+        action = exit_side
+    else:
+        action = "sell" if position.net_quantity > 0 else "buy"
     new_net, new_avg, realized = apply_fill(
         position.net_quantity, position.average_entry_price,
         action, qty, fill_price, position.lot_size,
@@ -634,9 +650,13 @@ def exit_position(
     _close_journal_legs(user_id, position, qty, fill_price, db, now)
     # Phase 6.5.0.1: keep strategy-leg attribution in sync with the fill
     # (best-effort, never blocks or alters the authoritative exit).
+    # Phase 6.6.5: pass target_exposure_id for leg-aware targeted allocation.
     from app.services.leg_exposure import maintain_exposure_on_exit
 
-    maintain_exposure_on_exit(db, user_id, position, prior_net_quantity, qty, now)
+    maintain_exposure_on_exit(
+        db, user_id, position, prior_net_quantity, qty, now,
+        target_exposure_id=target_exposure_id,
+    )
 
     if position.strategy_execution_id:
         execution = db.scalar(
