@@ -205,12 +205,10 @@ class TestResolveFixedStrike:
         assert strike == 25000
         assert warnings == []
 
-    def test_unlisted_strike_clamps(self):
+    def test_unlisted_raises_strike_unavailable(self):
         strikes = [24800, 24900, 25000, 25100, 25200]
-        strike, warnings = resolve_fixed_strike(strikes, 25050)
-        assert strike == 25000  # nearest
-        assert len(warnings) == 1
-        assert "not listed" in warnings[0]
+        with pytest.raises(ValueError, match="STRIKE_UNAVAILABLE"):
+            resolve_fixed_strike(strikes, 25050)
 
     def test_none_strike_raises(self):
         with pytest.raises(ValueError, match="numeric value"):
@@ -457,6 +455,17 @@ class TestResolveDeltaTarget:
         with pytest.raises(ValueError, match="Target delta"):
             resolve_delta_target([_chain_row(25000)], "call", None)
 
+    def test_invalid_option_type_raises(self):
+        """Only 'call' and 'put' are accepted.  Invalid values must produce
+        INVALID_OPTION_TYPE, not silently treated as 'put'."""
+        rows = [_chain_row(25000, call_delta=0.50)]
+        with pytest.raises(ValueError, match="INVALID_OPTION_TYPE"):
+            resolve_delta_target(rows, "ce", 0.30)
+        with pytest.raises(ValueError, match="INVALID_OPTION_TYPE"):
+            resolve_delta_target(rows, "CE", 0.30)
+        with pytest.raises(ValueError, match="INVALID_OPTION_TYPE"):
+            resolve_delta_target(rows, "", 0.30)
+
 
 # ============================================================================
 # 9. Expiry resolution
@@ -468,10 +477,9 @@ class TestResolveExpiryFixed:
         assert exp == "2026-08-27"
         assert w == []
 
-    def test_unlisted_picks_nearest(self):
-        exp, w = resolve_expiry_fixed(NIFTY_EXPIRIES, "2026-08-24")
-        assert exp in NIFTY_EXPIRIES
-        assert any("not listed" in x for x in w)
+    def test_unlisted_raises_expiry_unavailable(self):
+        with pytest.raises(ValueError, match="EXPIRY_UNAVAILABLE"):
+            resolve_expiry_fixed(NIFTY_EXPIRIES, "2099-01-01")
 
     def test_empty_expiries_raises(self):
         with pytest.raises(ValueError, match="No expiries"):
@@ -544,6 +552,22 @@ class TestResolveExpiryDTERange:
             edte = (ed - date.today()).days
             if 1 <= edte <= 30:
                 assert edte <= dte
+
+    def test_deterministic_selection(self):
+        """DTE-range selection is deterministic: same inputs always produce
+        the same output.  The highest-DTE rule is a simple, repeatable
+        heuristic — no randomness, no external dependencies.
+
+        Today = Aug 19, 2026 → DTEs: Sep 3 = 15, Sep 10 = 22, Sep 17 = 29.
+        With dte_min=10, dte_max=30, all three qualify; the highest DTE
+        (Sep 17) is always selected."""
+        expiries = ["2026-09-03", "2026-09-10", "2026-09-17"]
+        results = [
+            resolve_expiry_dte_range(expiries, dte_min=10, dte_max=30)[0]
+            for _ in range(10)
+        ]
+        assert len(set(results)) == 1, f"Non-deterministic: {results}"
+        assert results[0] == "2026-09-17"
 
     def test_no_match_picks_nearest(self):
         exp, w = resolve_expiry_dte_range(NIFTY_EXPIRIES, dte_min=200, dte_max=300)
@@ -737,10 +761,22 @@ class TestResolveLegIntegration:
         assert not result.ok
         assert any("no strikes" in e for e in result.errors)
 
-    def test_missing_expiry_clamps_to_nearest(self):
-        """When a fixed expiry is not listed (e.g. expired), clamp to nearest
-        available with a warning — do not error, because expired expiries
-        are common in saved templates."""
+    def test_fixed_strike_unavailable_blocks(self):
+        """When a fixed strike is not listed, the resolver must block with
+        STRIKE_UNAVAILABLE — the chain's listed strikes are authoritative."""
+        formula = LegFormula(
+            action="buy", option_type="call", quantity=1, lot_size=65,
+            strike_mode=StrikeMode.FIXED, strike=26000.0,
+            expiry_mode=ExpiryMode.FIXED, expiry="2026-08-27",
+        )
+        chain = _chain_response(NIFTY_STRIKES, NIFTY_SPOT)
+        result = resolve_leg(formula, chain, available_expiries=NIFTY_EXPIRIES)
+        assert not result.ok
+        assert any("STRIKE_UNAVAILABLE" in e for e in result.errors)
+
+    def test_missing_expiry_blocks(self):
+        """When a fixed expiry is not listed, the resolver must block with
+        EXPIRY_UNAVAILABLE — the broker-provided expiry list is authoritative."""
         formula = LegFormula(
             action="buy", option_type="call", quantity=1, lot_size=65,
             strike_mode=StrikeMode.ATM,
@@ -748,8 +784,8 @@ class TestResolveLegIntegration:
         )
         chain = _chain_response(NIFTY_STRIKES, NIFTY_SPOT)
         result = resolve_leg(formula, chain, available_expiries=NIFTY_EXPIRIES)
-        assert result.ok  # resolves with warning, not error
-        assert any("not listed" in w for w in result.leg.warnings)
+        assert not result.ok
+        assert any("EXPIRY_UNAVAILABLE" in e for e in result.errors)
 
 
 # ============================================================================

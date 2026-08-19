@@ -194,21 +194,24 @@ def resolve_atm(strikes: list[float], spot: float) -> float:
 def resolve_fixed_strike(strikes: list[float], target: float) -> tuple[float, list[str]]:
     """Validate and return a fixed strike.
 
-    Returns ``(strike, warnings)``.  When the exact strike is not in the
-    chain, the nearest available strike is returned with a warning.
+    The chain's listed strikes are authoritative.  If the exact requested
+    strike is not in the chain, a blocking ``STRIKE_UNAVAILABLE`` error is
+    raised — the resolver does NOT silently clamp to the nearest strike.
+
+    Dynamic modes (atm, atm_offset, spot_offset, etc.) may continue
+    normalising to the nearest listed strike because they express a
+    *relative* intent that inherently resolves to the closest available.
     """
-    warnings: list[str] = []
     if target is None:
         raise ValueError("Fixed strike requires a numeric value.")
     if not strikes:
         raise ValueError("Cannot validate fixed strike: chain has no strikes.")
-    idx = nearest_strike_index(strikes, target)
-    resolved = strikes[idx]
-    if resolved != target:
-        warnings.append(
-            f"Strike {target:g} is not listed; clamped to nearest {resolved:g}."
-        )
-    return resolved, warnings
+    if target in strikes:
+        return target, []
+    raise ValueError(
+        f"STRIKE_UNAVAILABLE: Strike {target:g} is not listed. "
+        f"Available: {', '.join(f'{s:g}' for s in strikes)}"
+    )
 
 
 def resolve_atm_offset_steps(
@@ -323,8 +326,13 @@ def resolve_delta_target(
         raise ValueError("Cannot resolve delta target: chain has no rows.")
     if target_delta is None:
         raise ValueError("Target delta is required.")
+    if option_type not in ("call", "put"):
+        raise ValueError(
+            f"INVALID_OPTION_TYPE: option_type must be 'call' or 'put', "
+            f"got '{option_type}'."
+        )
 
-    side = "call" if option_type == "call" else "put"
+    side = option_type
     candidates: list[dict] = []
 
     for row in chain_rows:
@@ -381,25 +389,22 @@ def resolve_delta_target(
 def resolve_expiry_fixed(
     available_expiries: list[str], target_expiry: str,
 ) -> tuple[str, list[str]]:
-    """Return *target_expiry* if it's in the available set, or the nearest
-    listed expiry with a warning.
+    """Return *target_expiry* if it's in the available set.
+
+    The broker-provided expiry list is authoritative.  If the requested
+    expiry is not listed, a blocking ``EXPIRY_UNAVAILABLE`` error is
+    raised — the resolver does NOT silently clamp to the nearest expiry.
     """
-    warnings: list[str] = []
     if not available_expiries:
-        raise ValueError("No expiries are available for this symbol.")
+        raise ValueError(
+            "EXPIRY_UNAVAILABLE: No expiries are available for this symbol."
+        )
     if target_expiry in available_expiries:
-        return target_expiry, warnings
-    # Find nearest
-    idx = nearest_strike_index(
-        [float(e.replace("-", "")) for e in sorted(available_expiries)],
-        float(target_expiry.replace("-", "")),
+        return target_expiry, []
+    raise ValueError(
+        f"EXPIRY_UNAVAILABLE: Expiry {target_expiry} is not listed. "
+        f"Available: {', '.join(sorted(available_expiries))}"
     )
-    resolved = sorted(available_expiries)[idx]
-    warnings.append(
-        f"Expiry {target_expiry} is not listed; "
-        f"using nearest available {resolved}."
-    )
-    return resolved, warnings
 
 
 def resolve_expiry_current_week(available_expiries: list[str]) -> tuple[str, list[str]]:
@@ -477,8 +482,11 @@ def resolve_expiry_dte_range(
 ) -> tuple[str, list[str]]:
     """Expiry whose days-to-expiry falls in ``[dte_min, dte_max]``.
 
-    When multiple expiries qualify, the one with the most time remaining
-    (highest DTE) is selected.
+    When multiple expiries qualify, the one with the **highest DTE** (most
+    time remaining) is selected.  This is a deterministic, simple heuristic
+    that works well for 6.8A when no expiry-level liquidity data (OI,
+    volume) is available.  Future phases may enhance selection with
+    liquidity-weighted ranking.
     """
     if not available_expiries:
         raise ValueError("No expiries are available.")
