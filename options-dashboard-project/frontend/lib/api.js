@@ -99,6 +99,14 @@ export const getPaperReconcile = () => api.get("/paper/reconcile").then((r) => r
 export const resetPaperPortfolio = () =>
   api.post("/paper/portfolio/reset").then((r) => r.data);
 
+// ---- Phase 6.6.5: Exit preview + confirmation ----
+
+export const previewExitIntent = (payload) =>
+  api.post("/paper/exit-intent/preview", payload).then((r) => r.data);
+
+export const confirmExitIntent = (payload) =>
+  api.post("/paper/exit-intent", payload).then((r) => r.data);
+
 // ---- Phase 5.1: portfolio & journal analytics ----
 // ONE authoritative analytics response (summary + performance + equity curve
 // + drawdown + strategy performance + positions + journal).

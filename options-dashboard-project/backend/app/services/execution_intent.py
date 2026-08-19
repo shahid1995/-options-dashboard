@@ -573,6 +573,8 @@ class ExecutionRouter:
                     self._db,
                     fill_price,
                     commit=True,
+                    exit_side=target.exit_side,
+                    target_exposure_id=target.strategy_leg_exposure_id,
                 )
                 result.results.append({
                     "target_index": i,

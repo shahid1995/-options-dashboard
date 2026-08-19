@@ -16,6 +16,7 @@ from app.schemas import (
     ExecutionOut,
     ExecutionRequestIn,
     ExitIntentOut,
+    ExitIntentPreviewOut,
     ExitIntentRequestIn,
     ExitIntentTargetOut,
     ExitOut,
@@ -587,7 +588,73 @@ async def capital(
     return await get_capital_summary(user_id, db, access_token=access_token)
 
 
-# ---- Phase 6.5.0.4: Server-authoritative exit intent -----------------------
+# ---- Phase 6.6.5: Exit preview + Phase 6.5.0.4: exit intent -------------
+
+
+@router.post("/exit-intent/preview", response_model=ExitIntentPreviewOut)
+def preview_exit_intent(
+    request: ExitIntentRequestIn,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """POST /paper/exit-intent/preview — Server-authoritative exit preview (Phase 6.6.5).
+
+    Resolves the exit selector against the authenticated user's current
+    StrategyLegExposure and Position data and returns the resolved targets
+    WITHOUT mutating any state. The frontend uses this to display the
+    confirmation dialog before the user confirms the exit.
+
+    Does NOT:
+    - create orders
+    - mutate positions
+    - change cash or P&L
+    - update journal
+    - resolve market prices (price_override is None in preview)
+    """
+    from app.services.exit_selector import ExitSelectorError, resolve_server_exit_targets
+
+    user_id, _access_token = require_session(session_id)
+
+    try:
+        targets = resolve_server_exit_targets(
+            db=db,
+            user_id=user_id,
+            scope=request.scope,
+            strategy_execution_id=request.strategy_execution_id,
+            position_id=request.position_id,
+            exposure_id=request.exposure_id,
+            option_type=request.option_type,
+            action=request.action,
+            quantity_mode=request.quantity_mode,
+            quantity=request.quantity,
+        )
+    except ExitSelectorError as exc:
+        return ExitIntentPreviewOut(
+            status="NO_MATCHING_TARGETS" if exc.code == "NO_MATCHING_TARGETS" else "REJECTED",
+            errors=[f"{exc.code}: {exc.message}"],
+        )
+
+    # Build preview targets with full details (no mutation)
+    target_outs = []
+    for t in targets:
+        target_outs.append(ExitIntentTargetOut(
+            position_id=t.position_id,
+            strategy_leg_exposure_id=t.strategy_leg_exposure_id,
+            strategy_execution_id=t.strategy_execution_id,
+            symbol=t.symbol, expiry=t.expiry, strike=t.strike,
+            option_type=t.option_type, source_action=t.source_action,
+            exit_side=t.exit_side, quantity=t.quantity,
+            remaining_quantity=t.remaining_quantity, lot_size=t.lot_size,
+        ))
+
+    warnings = []
+    warnings.append("Preview only — no execution has occurred. Market prices will be resolved at execution time.")
+
+    return ExitIntentPreviewOut(
+        status="PREVIEW",
+        targets=target_outs,
+        warnings=warnings,
+    )
 
 
 @router.post("/exit-intent", response_model=ExitIntentOut)

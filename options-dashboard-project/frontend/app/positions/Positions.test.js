@@ -396,3 +396,132 @@ describe("Edge cases", () => {
     expect(html).toContain("POSITION");
   });
 });
+
+// ---- Phase 6.6.5 PR #9 review: ExitFlow idempotency regression test ----
+
+describe("ExitFlow idempotency", () => {
+  it("uses a single stable clientOrderId for both preview and confirm", () => {
+    // Read the ExitFlow source and verify it does NOT generate a new
+    // client_order_id in handleConfirm. The idempotency key must be
+    // generated once (useState lazy initializer) and reused in both
+    // handlePreview and handleConfirm.
+
+    // This is a source-code-level regression test: we read the component
+    // source and verify the pattern, because renderToStaticMarkup cannot
+    // exercise hooks/async callbacks.
+    const fs = require("fs");
+    const path = require("path");
+    const source = fs.readFileSync(
+      path.join(__dirname, "page.js"),
+      "utf-8"
+    );
+
+    // Find the ExitFlow function body (from function declaration to next export/function)
+    const exitFlowStart = source.indexOf("export function ExitFlow(");
+    expect(exitFlowStart).toBeGreaterThan(-1);
+    const exitFlowEnd = source.indexOf("\nexport function ", exitFlowStart + 10);
+    const exitFlowBody = source.slice(exitFlowStart, exitFlowEnd > -1 ? exitFlowEnd : source.length);
+
+    // 1. Verify clientOrderId is generated via useState lazy initializer (once)
+    expect(exitFlowBody).toContain("const [clientOrderId] = useState(");
+    expect(exitFlowBody).toMatch(/useState\(\(\)\s*=>\s*`exit-/);
+
+    // 2. Verify handlePreview uses clientOrderId (not a new generation)
+    const previewStart = exitFlowBody.indexOf("handlePreview");
+    const confirmStart = exitFlowBody.indexOf("handleConfirm");
+    const previewBlock = exitFlowBody.slice(previewStart, confirmStart);
+    expect(previewBlock).toContain("client_order_id: clientOrderId");
+
+    // 3. Verify handleConfirm uses clientOrderId (NOT a new Date.now() generation)
+    const confirmBlock = exitFlowBody.slice(confirmStart);
+    expect(confirmBlock).toContain("client_order_id: clientOrderId");
+
+    // 4. Critical: handleConfirm must NOT contain Date.now() or Math.random()
+    //    for client_order_id generation (the old bug pattern)
+    expect(confirmBlock).not.toMatch(
+      /client_order_id:\s*`(exit-\$\{Date\.now)/
+    );
+
+    // 5. Verify no second useState for clientOrderId exists
+    const allClientOrderIdUsages = exitFlowBody.match(/clientOrderId/g);
+    expect(allClientOrderIdUsages).not.toBeNull();
+    // Should appear in: useState declaration, handlePreview, handleConfirm
+    expect(allClientOrderIdUsages.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("ExitFlow is exported for testing", () => {
+    // Verify ExitFlow is exported from page.js
+    const fs = require("fs");
+    const path = require("path");
+    const source = fs.readFileSync(
+      path.join(__dirname, "page.js"),
+      "utf-8"
+    );
+    expect(source).toContain("export function ExitFlow(");
+  });
+});
+
+describe("ExitFlow strategy selector", () => {
+  it("derives strategy options from position.strategy_leg_exposures", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const source = fs.readFileSync(
+      path.join(__dirname, "page.js"),
+      "utf-8"
+    );
+
+    const exitFlowStart = source.indexOf("export function ExitFlow(");
+    const exitFlowEnd = source.indexOf("\nexport function ", exitFlowStart + 10);
+    const exitFlowBody = source.slice(exitFlowStart, exitFlowEnd > -1 ? exitFlowEnd : source.length);
+
+    // Verify strategyOptions useMemo derives from position.strategy_leg_exposures
+    expect(exitFlowBody).toContain("strategy_leg_exposures");
+    expect(exitFlowBody).toContain("strategyOptions");
+
+    // Verify the strategy selector UI appears when scope is STRATEGY
+    expect(exitFlowBody).toContain("selector.scope === \"STRATEGY\"");
+    expect(exitFlowBody).toContain("strategyOptions.length");
+  });
+
+  it("does not hardcode position.strategy_execution_id in STRATEGY scope", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const source = fs.readFileSync(
+      path.join(__dirname, "page.js"),
+      "utf-8"
+    );
+
+    const exitFlowStart = source.indexOf("export function ExitFlow(");
+    const exitFlowEnd = source.indexOf("\nexport function ", exitFlowStart + 10);
+    const exitFlowBody = source.slice(exitFlowStart, exitFlowEnd > -1 ? exitFlowEnd : source.length);
+
+    // The STRATEGY scope payload should use selector.strategy_execution_id
+    // (user-selected), NOT position.strategy_execution_id (legacy first-opener)
+    // Find the payload construction in handlePreview
+    const previewStart = exitFlowBody.indexOf("handlePreview");
+    const confirmStart = exitFlowBody.indexOf("handleConfirm");
+    const previewBlock = exitFlowBody.slice(previewStart, confirmStart);
+
+    // Should reference selector.strategy_execution_id, not position.strategy_execution_id
+    expect(previewBlock).toContain("selector.strategy_execution_id");
+  });
+});
+
+describe("ExitFlow quantity display", () => {
+  it("shows contract count when lot_size is available", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const source = fs.readFileSync(
+      path.join(__dirname, "page.js"),
+      "utf-8"
+    );
+
+    const exitFlowStart = source.indexOf("export function ExitFlow(");
+    const exitFlowEnd = source.indexOf("\nexport function ", exitFlowStart + 10);
+    const exitFlowBody = source.slice(exitFlowStart, exitFlowEnd > -1 ? exitFlowEnd : source.length);
+
+    // Verify contract count display: quantity * lot_size
+    expect(exitFlowBody).toContain("contracts");
+    expect(exitFlowBody).toContain("contracts/lot");
+  });
+});

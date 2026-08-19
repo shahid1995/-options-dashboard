@@ -221,6 +221,7 @@ def apply_exit_allocations(db: Session, allocations: list[tuple[StrategyLegExpos
         if exposure.remaining_quantity == 0:
             exposure.status = "closed"
         exposure.updated_at = now
+    db.flush()
 
 
 def maintain_exposure_on_exit(
@@ -230,6 +231,8 @@ def maintain_exposure_on_exit(
     prior_net_quantity: int,
     quantity: int,
     now: datetime,
+    *,
+    target_exposure_id: int | None = None,
 ) -> bool:
     """Best-effort attribution maintenance after an exit fill.
 
@@ -237,6 +240,12 @@ def maintain_exposure_on_exit(
     exposure ledger does not reconcile (legacy / mixed data) or the
     allocation is impossible — in every case the exit itself is already
     authoritative and never blocked or altered.
+
+    ``target_exposure_id``: when provided (Phase 6.6.5), reduces THIS
+    specific StrategyLegExposure instead of FIFO across the dominant side.
+    This ensures a leg-aware exit targets the exact exposure the user
+    selected (e.g. Strategy B's BUY CE), not the first available exposure
+    on the dominant side (which might belong to Strategy A).
     """
     exposures = exposures_for_position(db, user_id, position.id)
     if not exposures:
@@ -247,6 +256,24 @@ def maintain_exposure_on_exit(
     signed = reconcile_position_exposures(position, exposures)["signed_exposure_sum"]
     if signed != prior_net_quantity:
         return False
+
+    # Phase 6.6.5: targeted exposure allocation when target_exposure_id is provided.
+    if target_exposure_id is not None:
+        target = None
+        for e in exposures:
+            if e.id == target_exposure_id:
+                target = e
+                break
+        if target is None or target.user_id != user_id:
+            return False
+        if target.status != "open" or target.remaining_quantity <= 0:
+            return False
+        if quantity > target.remaining_quantity:
+            return False
+        # Direct allocation: reduce the specific exposure.
+        apply_exit_allocations(db, [(target, quantity)], now)
+        return True
+
     try:
         allocations = allocate_exit(exposures, prior_net_quantity, quantity)
     except LegExposureError:

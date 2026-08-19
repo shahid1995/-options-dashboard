@@ -936,6 +936,66 @@ None. No database changes.
 - Exit controls are not wired in this phase (future Phase 6.6.5+)
 - Strategy filter dropdown is not yet dynamically populated from the backend
 
+### Phase 6.6.5 — Unified Position & Strategy Exit Workspace
+
+**Status: Implemented (working tree — pending review)**
+
+**What was built:**
+
+1. **Leg-aware exit execution** (`backend/app/services/paper_execution.py`):
+   - `exit_position()` now accepts optional `exit_side` parameter — when provided, uses it instead of deriving from `Position.net_quantity`
+   - `exit_position()` now accepts optional `target_exposure_id` — when provided, reduces THAT specific StrategyLegExposure instead of FIFO across dominant side
+   - PaperOrder correctly records the exit_side (not the net-derived side)
+
+2. **Targeted exposure allocation** (`backend/app/services/leg_exposure.py`):
+   - `maintain_exposure_on_exit()` accepts `target_exposure_id` — directly reduces the specified exposure
+   - Added `db.flush()` to `apply_exit_allocations()` for visibility within transactions
+   - FIFO fallback preserved when no target_exposure_id is provided
+
+3. **ExecutionRouter leg-aware routing** (`backend/app/services/execution_intent.py`):
+   - `_execute_paper()` now passes `exit_side` and `target_exposure_id` from ExecutionTarget to exit_position()
+   - Ensures the server-resolved exit_side flows through to the actual paper execution
+
+4. **Exit Preview endpoint** (`POST /paper/exit-intent/preview`):
+   - Server-authoritative preview that resolves targets WITHOUT mutating state
+   - Returns resolved targets with source_action, exit_side, quantity, remaining_quantity
+   - Warns that market prices will be resolved at execution time
+   - Does NOT create orders, positions, cash changes, or journal entries
+
+5. **Exit Preview schema** (`backend/app/schemas.py`):
+   - Added `ExitIntentPreviewOut` with status, targets, errors, warnings
+
+6. **Frontend Exit Workflow** (`frontend/app/positions/page.js`):
+   - ExitFlow component: selector (scope, option_type, action, quantity) → preview → confirm → result
+   - Exit button in position detail panel
+   - Preview shows instrument, strategy, source action, exit side, quantity, remaining after
+   - Confirmation flow with structured result display
+   - PAPER mode indicator
+   - Loading, error, empty states
+
+7. **Frontend API** (`frontend/lib/api.js`):
+   - `previewExitIntent(payload)` — POST /paper/exit-intent/preview
+   - `confirmExitIntent(payload)` — POST /paper/exit-intent
+
+**Critical defect fixed:**
+- Previously, `exit_position()` derived the transaction side from `Position.net_quantity`, ignoring the target's `exit_side`. This meant a user targeting Strategy B's SELL CE exposure on a net-long position would get a SELL execution instead of the correct BUY.
+- Previously, `maintain_exposure_on_exit()` used FIFO across the dominant side, meaning targeting Strategy B's exposure could reduce Strategy A's exposure instead.
+- Both issues are now fixed with targeted exposure allocation.
+
+**Shared-instrument test:**
+- Strategy A: BUY CE × 2, Strategy B: BUY CE × 5 (same instrument)
+- Exit Strategy B / BUY CE / ALL → B=0, A=2, Net=+2 ✅
+- Strategy A: BUY CE × 2, Strategy B: SELL CE × 1 (same instrument, net=+1)
+- Exit Strategy B / SELL CE / ALL → BUY CE execution, B=0, A=2, Net=+2 ✅
+
+**BACKWARD COMPATIBILITY:**
+- Legacy `POST /paper/positions/{id}/exit` unchanged (no exit_side param → auto-derives)
+- Legacy `POST /paper/positions/exit-all` unchanged
+- Legacy `POST /paper/executions/{id}/exit-all` unchanged
+- `POST /paper/exit-intent` unchanged (already passes exit_side from targets)
+
+**LIVE execution remains DISABLED.**
+
 ### Phase 6.6.4.y — Positions Endpoint Routing Correction
 
 **Problem**: The "All" tab on the Positions page sent `{ limit: 500 }` with no `status` param. The backend router condition `if any([status, symbol, option_type, strategy_execution_id])` did NOT include `limit`, so the request fell through to the legacy `get_open_positions()` path — returning only open positions instead of all.
