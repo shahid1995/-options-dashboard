@@ -775,10 +775,11 @@ class LegValuationOut(BaseModel):
     action: str  # buy | sell
     remaining_quantity: int  # lots
     lot_size: int
+    entry_price: float | None = None  # authoritative per-leg entry (PaperOrder.fill_price)
     current_price: float | None = None
     market_value: float | None = None
     live_pnl: float | None = None
-    price_status: str = "unavailable"  # available | unavailable
+    price_status: str = "unavailable"  # available | stale | unavailable
 
 
 class StrategyValuationOut(BaseModel):
@@ -809,7 +810,7 @@ class PositionValuationOut(BaseModel):
     market_value: float | None = None
     live_pnl: float | None = None
     live_pnl_pct: float | None = None
-    price_status: str = "unavailable"  # available | unavailable
+    price_status: str = "unavailable"  # available | stale | unavailable
     strategies: list[StrategyValuationOut] = Field(default_factory=list)
 
 

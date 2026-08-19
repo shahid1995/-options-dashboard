@@ -866,6 +866,7 @@ async def positions_valuation(
             "action": lv.action,
             "remaining_quantity": lv.remaining_quantity,
             "lot_size": lv.lot_size,
+            "entry_price": lv.entry_price,
             "current_price": lv.current_price,
             "market_value": lv.market_value,
             "live_pnl": lv.live_pnl,

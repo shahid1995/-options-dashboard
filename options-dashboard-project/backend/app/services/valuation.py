@@ -11,20 +11,67 @@ Architecture:
   as zero.
 - Strategy-level and leg-level aggregation is deterministic.
 - Quantities are LOTS; rupee exposure scales by ``lot_size``.
+
+Data quality levels:
+- ``available``: LTP resolved from broker; quote_timestamp within
+  STALE_THRESHOLD_SECONDS of current time (or timestamp unavailable).
+- ``stale``: LTP resolved but quote_timestamp is older than
+  STALE_THRESHOLD_SECONDS — price may be outdated.
+- ``unavailable``: LTP not resolved (missing from chain, broker error,
+  or chain fetch failed).
+
+Per-leg entry price:
+- Each StrategyLegExposure references a source PaperOrder via ``order_id``.
+- The leg's authoritative entry price is ``PaperOrder.fill_price``.
+- When the source order cannot be joined (missing, not FILLED, etc.),
+  leg-level P&L is returned as ``None`` / unavailable — never fabricated
+  from the position's average entry price.
+
+P&L percentage (position-level):
+- Live P&L % = Live P&L / Entry Value × 100
+- Entry Value = Average Entry Price × abs(net_quantity) × lot_size
+- This is NOT Live P&L / Market Value.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Position, StrategyExecution, StrategyLegExposure
+from app.models import PaperOrder, Position, StrategyExecution, StrategyLegExposure
 from app.brokers.domain.enums import BROKER_ID_UPSTOX
 from app.brokers.gateway import gateway
 from app.services.paper_execution import unrealized_pnl
+
+# ---------------------------------------------------------------------------
+# Stale-price threshold
+# ---------------------------------------------------------------------------
+# Quotes whose ``quote_timestamp`` is older than this are classified as
+# ``stale`` rather than ``available``.  The threshold is deliberately
+# conservative: option premiums can move quickly, but intra-minute noise
+# does not make a quote stale.
+STALE_THRESHOLD_SECONDS: int = 300  # 5 minutes
+
+
+def _is_stale(quote_timestamp: str | None, now: datetime) -> bool:
+    """Return True when the quote is older than STALE_THRESHOLD_SECONDS.
+
+    If no timestamp is provided, returns False (we cannot determine
+    staleness — treat as ``available`` rather than ``stale``).
+    """
+    if not quote_timestamp:
+        return False
+    try:
+        qt = datetime.fromisoformat(quote_timestamp)
+        # Ensure timezone-aware for comparison
+        if qt.tzinfo is None:
+            qt = qt.replace(tzinfo=timezone.utc)
+        return (now - qt) > timedelta(seconds=STALE_THRESHOLD_SECONDS)
+    except (ValueError, TypeError):
+        return False
 
 
 @dataclass
@@ -36,10 +83,11 @@ class LegValuation:
     action: str  # buy | sell
     remaining_quantity: int  # lots
     lot_size: int
+    entry_price: float | None = None  # authoritative per-leg entry (PaperOrder.fill_price)
     current_price: float | None = None
     market_value: float | None = None  # LTP × remaining_qty × lot_size
     live_pnl: float | None = None
-    price_status: str = "unavailable"  # available | unavailable
+    price_status: str = "unavailable"  # available | stale | unavailable
 
 
 @dataclass
@@ -71,9 +119,11 @@ class PositionValuation:
     # Live valuation
     current_price: float | None = None
     market_value: float | None = None  # LTP × |net_quantity| × lot_size
-    live_pnl: float | None = None  # (LTP − avg_entry) × qty × lot_size (long)
-    live_pnl_pct: float | None = None  # live_pnl / (avg_entry × qty × lot_size) × 100
-    price_status: str = "unavailable"  # available | unavailable
+    live_pnl: float | None = None
+    # Live P&L % = live_pnl / entry_value × 100
+    # where entry_value = average_entry_price × abs(net_quantity) × lot_size
+    live_pnl_pct: float | None = None
+    price_status: str = "unavailable"  # available | stale | unavailable
     # Strategy aggregation
     strategies: list[StrategyValuation] = field(default_factory=list)
 
@@ -116,10 +166,13 @@ def compute_leg_pnl(
     action: str,
     remaining_quantity: int,
     current_price: float,
-    avg_entry_price: float,
+    entry_price: float,
     lot_size: int,
 ) -> float | None:
     """Compute live P&L for a single strategy leg.
+
+    Uses the per-leg entry price (from the source PaperOrder.fill_price),
+    NOT the position-level average entry price.
 
     A BUY leg is long (+), a SELL leg is short (−).
     """
@@ -127,7 +180,43 @@ def compute_leg_pnl(
         return None
     # Build a synthetic net_quantity: buy = +qty, sell = -qty
     signed_qty = remaining_quantity if action == "buy" else -remaining_quantity
-    return unrealized_pnl(signed_qty, avg_entry_price, current_price, lot_size)
+    return unrealized_pnl(signed_qty, entry_price, current_price, lot_size)
+
+
+def _resolve_entry_prices(
+    db: Session,
+    user_id: str,
+    exposure_rows: list[StrategyLegExposure],
+) -> dict[int, float | None]:
+    """Resolve authoritative entry price for each StrategyLegExposure.
+
+    Joins StrategyLegExposure.order_id → PaperOrder.fill_price.
+    Returns {exposure_id: fill_price | None}.
+
+    Only FILLED orders with a non-null fill_price are considered
+    authoritative. All others return None (caller treats as unavailable).
+    """
+    order_ids = list({exp.order_id for exp in exposure_rows if exp.order_id})
+    if not order_ids:
+        return {}
+
+    orders = list(
+        db.scalars(
+            select(PaperOrder).where(
+                PaperOrder.user_id == user_id,
+                PaperOrder.id.in_(order_ids),
+            )
+        ).all()
+    )
+    # Build order_id → fill_price for FILLED orders only.
+    price_map: dict[int, float | None] = {}
+    for o in orders:
+        if o.status == "FILLED" and o.fill_price is not None:
+            price_map[o.id] = o.fill_price
+        else:
+            price_map[o.id] = None
+
+    return {exp.id: price_map.get(exp.order_id) for exp in exposure_rows}
 
 
 async def resolve_live_valuation(
@@ -142,7 +231,8 @@ async def resolve_live_valuation(
     1. Fetch open positions (if not provided).
     2. Group by (symbol, expiry) and resolve LTP from the broker adapter.
     3. Compute per-position P&L, market value, P&L %.
-    4. Aggregate strategy-level and leg-level P&L from StrategyLegExposure.
+    4. Aggregate strategy-level and leg-level P&L from StrategyLegExposure
+       using authoritative per-leg entry prices (PaperOrder.fill_price).
 
     Returns (position_valuations, summary).
     """
@@ -176,9 +266,10 @@ async def resolve_live_valuation(
     for p in positions:
         by_chain.setdefault((p.symbol.upper(), p.expiry), []).append(p)
 
-    # Resolve LTP via the existing broker adapter.
+    # Resolve LTP + quote_timestamp via the existing broker adapter.
     adapter = gateway.create(BROKER_ID_UPSTOX, access_token=access_token)
-    ltp_map: dict[tuple[str, str, float, str], float | None] = {}  # (sym, exp, strike, type) → LTP
+    # (sym, exp, strike, type) → (LTP, quote_timestamp | None)
+    price_data: dict[tuple[str, str, float, str], tuple[float | None, str | None]] = {}
     chain_errors: list[str] = []
 
     try:
@@ -191,28 +282,25 @@ async def resolve_live_valuation(
                     row = by_strike.get(p.strike)
                     side = row.get(p.option_type) if row else None
                     ltp = side.get("ltp") if side else None
+                    qts = side.get("quote_timestamp") if side else None
                     key = (p.symbol.upper(), p.expiry, p.strike, p.option_type)
-                    if ltp is not None and ltp > 0:
-                        ltp_map[key] = ltp
-                    else:
-                        ltp_map[key] = None
+                    price_data[key] = (ltp if ltp is not None and ltp > 0 else None, qts)
+                    if ltp is None or ltp <= 0:
                         chain_errors.append(
                             f"{p.symbol} {p.strike:g} {p.option_type.upper()} ({p.expiry})"
                         )
             except Exception as exc:
-                # Mark all positions in this chain as unavailable.
                 for p in pos_list:
                     key = (p.symbol.upper(), p.expiry, p.strike, p.option_type)
-                    ltp_map[key] = None
+                    price_data[key] = (None, None)
                 chain_errors.append(f"Chain fetch failed for {symbol} {expiry}: {exc}")
     except Exception:
-        # Broker completely unavailable — all prices unavailable.
         for p in positions:
             key = (p.symbol.upper(), p.expiry, p.strike, p.option_type)
-            ltp_map[key] = None
+            price_data[key] = (None, None)
         chain_errors.append("Broker unavailable — all market data unavailable")
 
-    # Fetch strategy tags and leg exposures in batch.
+    # Fetch strategy tags in batch.
     exec_ids = {p.strategy_execution_id for p in positions if p.strategy_execution_id}
     tags: dict[str, str] = {}
     if exec_ids:
@@ -224,6 +312,7 @@ async def resolve_live_valuation(
         ).all()
         tags = {r[0]: r[1] or "Custom" for r in rows}
 
+    # Fetch leg exposures in batch.
     position_ids = [p.id for p in positions]
     exposure_rows = list(
         db.scalars(
@@ -239,6 +328,9 @@ async def resolve_live_valuation(
     for exp in exposure_rows:
         exposures_by_pos.setdefault(exp.position_id, []).append(exp)
 
+    # Resolve authoritative per-leg entry prices via PaperOrder.fill_price.
+    leg_entry_prices = _resolve_entry_prices(db, user_id, exposure_rows)
+
     # Build per-position valuations.
     result: list[PositionValuation] = []
     total_live = 0.0
@@ -251,22 +343,31 @@ async def resolve_live_valuation(
 
     for p in positions:
         key = (p.symbol.upper(), p.expiry, p.strike, p.option_type)
-        ltp = ltp_map.get(key)
+        ltp, qts = price_data.get(key, (None, None))
         side = "LONG" if p.net_quantity > 0 else "SHORT" if p.net_quantity < 0 else "CLOSED"
-        price_status = "available" if ltp is not None and ltp > 0 else "unavailable"
 
+        # Determine position-level price_status including staleness.
+        if ltp is None or ltp <= 0:
+            price_status = "unavailable"
+        elif _is_stale(qts, now):
+            price_status = "stale"
+        else:
+            price_status = "available"
+
+        has_ltp = ltp is not None and ltp > 0
         mv = None
         pnl = None
         pnl_pct = None
 
-        if ltp is not None and ltp > 0:
+        if has_ltp:
             pnl, mv = compute_position_pnl(
                 p.net_quantity, p.average_entry_price, ltp, p.lot_size
             )
-            # P&L %: P&L / (avg_entry × |qty| × lot_size) × 100
-            invested = abs(p.average_entry_price * p.net_quantity * p.lot_size)
-            if invested > 0:
-                pnl_pct = round(pnl / invested * 100, 2)
+            # P&L %: live_pnl / entry_value × 100
+            # entry_value = average_entry_price × abs(net_quantity) × lot_size
+            entry_value = abs(p.average_entry_price * p.net_quantity * p.lot_size)
+            if entry_value > 0:
+                pnl_pct = round(pnl / entry_value * 100, 2)
             has_any_price = True
             with_price += 1
         else:
@@ -275,7 +376,7 @@ async def resolve_live_valuation(
 
         total_realized += p.realized_pnl
 
-        # Strategy-level aggregation.
+        # Strategy-level aggregation with per-leg entry prices.
         legs_for_pos = exposures_by_pos.get(p.id, [])
         strat_map: dict[str | None, StrategyValuation] = {}
         for leg in legs_for_pos:
@@ -288,19 +389,19 @@ async def resolve_live_valuation(
                 )
             sv = strat_map[eid]
 
-            # Leg P&L: use the position's average entry as the leg entry price.
-            # (The backend stores position-level avg entry; per-leg avg entry
-            # is not tracked separately.)
+            # Leg P&L: use the authoritative per-leg entry price from
+            # PaperOrder.fill_price, NOT the position average entry.
+            leg_entry = leg_entry_prices.get(leg.id)
             leg_pnl = None
             leg_mv = None
             leg_price_status = "unavailable"
-            if ltp is not None and ltp > 0:
+            if has_ltp and leg_entry is not None:
                 leg_pnl = compute_leg_pnl(
                     leg.action, leg.remaining_quantity, ltp,
-                    p.average_entry_price, p.lot_size,
+                    leg_entry, p.lot_size,
                 )
                 leg_mv = round(ltp * leg.remaining_quantity * p.lot_size, 2)
-                leg_price_status = "available"
+                leg_price_status = "stale" if _is_stale(qts, now) else "available"
 
             lv = LegValuation(
                 exposure_id=leg.id,
@@ -308,7 +409,8 @@ async def resolve_live_valuation(
                 action=leg.action,
                 remaining_quantity=leg.remaining_quantity,
                 lot_size=p.lot_size,
-                current_price=ltp if ltp is not None and ltp > 0 else None,
+                entry_price=leg_entry,
+                current_price=ltp if has_ltp else None,
                 market_value=leg_mv,
                 live_pnl=leg_pnl,
                 price_status=leg_price_status,
@@ -319,17 +421,25 @@ async def resolve_live_valuation(
         for sv in strat_map.values():
             strat_pnl = 0.0
             strat_mv = 0.0
-            all_available = True
+            leg_statuses = [lv.price_status for lv in sv.legs]
             for lv in sv.legs:
                 if lv.live_pnl is not None:
                     strat_pnl += lv.live_pnl
                 if lv.market_value is not None:
                     strat_mv += lv.market_value
-                if lv.price_status != "available":
-                    all_available = False
+            # Strategy status: available only if ALL legs are available.
+            # stale if ANY leg is stale and none is unavailable.
+            # unavailable if ANY leg is unavailable.
+            if all(s == "available" for s in leg_statuses) and sv.legs:
+                sv.price_status = "available"
+            elif any(s == "unavailable" for s in leg_statuses):
+                sv.price_status = "unavailable"
+            elif any(s == "stale" for s in leg_statuses):
+                sv.price_status = "stale"
+            else:
+                sv.price_status = "unavailable"
             sv.live_pnl = round(strat_pnl, 2) if any(lv.live_pnl is not None for lv in sv.legs) else None
             sv.market_value = round(strat_mv, 2) if any(lv.market_value is not None for lv in sv.legs) else None
-            sv.price_status = "available" if all_available and sv.legs else ("unavailable" if not all_available else "unavailable")
 
         strategies = list(strat_map.values())
 
@@ -349,7 +459,7 @@ async def resolve_live_valuation(
             average_entry_price=p.average_entry_price,
             lot_size=p.lot_size,
             realized_pnl=p.realized_pnl,
-            current_price=ltp if ltp is not None and ltp > 0 else None,
+            current_price=ltp if has_ltp else None,
             market_value=mv,
             live_pnl=round(pnl, 2) if pnl is not None else None,
             live_pnl_pct=pnl_pct,
