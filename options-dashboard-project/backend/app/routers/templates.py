@@ -60,6 +60,15 @@ def _template_out(template: StrategyTemplate) -> dict:
                 "quantity": leg.quantity,
                 "lot_size": leg.lot_size,
                 "price": leg.price,
+                # Phase 6.8B: dynamic formula fields
+                "strike_mode": getattr(leg, "strike_mode", "fixed"),
+                "strike_offset": getattr(leg, "strike_offset", None),
+                "strike_offset_pct": getattr(leg, "strike_offset_pct", None),
+                "target_delta": getattr(leg, "target_delta", None),
+                "expiry_mode": getattr(leg, "expiry_mode", "fixed"),
+                "expiry_dte_min": getattr(leg, "expiry_dte_min", None),
+                "expiry_dte_max": getattr(leg, "expiry_dte_max", None),
+                "formula_version": getattr(leg, "formula_version", 1),
             }
             for leg in sorted(template.legs, key=lambda l: l.position)
         ],
@@ -125,6 +134,15 @@ def create_template(
             quantity=leg_in.quantity,
             lot_size=leg_in.lot_size,
             price=leg_in.price,
+            # Phase 6.8B: dynamic formula fields
+            strike_mode=leg_in.strike_mode,
+            strike_offset=leg_in.strike_offset,
+            strike_offset_pct=leg_in.strike_offset_pct,
+            target_delta=leg_in.target_delta,
+            expiry_mode=leg_in.expiry_mode,
+            expiry_dte_min=leg_in.expiry_dte_min,
+            expiry_dte_max=leg_in.expiry_dte_max,
+            formula_version=leg_in.formula_version,
         )
         db.add(leg)
 
@@ -202,6 +220,15 @@ def update_template(
                 quantity=leg_in.quantity,
                 lot_size=leg_in.lot_size,
                 price=leg_in.price,
+                # Phase 6.8B: dynamic formula fields
+                strike_mode=leg_in.strike_mode,
+                strike_offset=leg_in.strike_offset,
+                strike_offset_pct=leg_in.strike_offset_pct,
+                target_delta=leg_in.target_delta,
+                expiry_mode=leg_in.expiry_mode,
+                expiry_dte_min=leg_in.expiry_dte_min,
+                expiry_dte_max=leg_in.expiry_dte_max,
+                formula_version=leg_in.formula_version,
             )
             db.add(leg)
 
@@ -261,6 +288,15 @@ def duplicate_template(
             quantity=leg.quantity,
             lot_size=leg.lot_size,
             price=leg.price,
+            # Phase 6.8B: copy all formula fields
+            strike_mode=getattr(leg, "strike_mode", "fixed"),
+            strike_offset=getattr(leg, "strike_offset", None),
+            strike_offset_pct=getattr(leg, "strike_offset_pct", None),
+            target_delta=getattr(leg, "target_delta", None),
+            expiry_mode=getattr(leg, "expiry_mode", "fixed"),
+            expiry_dte_min=getattr(leg, "expiry_dte_min", None),
+            expiry_dte_max=getattr(leg, "expiry_dte_max", None),
+            formula_version=getattr(leg, "formula_version", 1),
         )
         db.add(new_leg)
 

@@ -343,14 +343,25 @@ class StrategyTemplate(Base):
 
 
 class StrategyTemplateLeg(Base):
-    """One leg of a user-created strategy template (Phase 6.7).
+    """One leg of a user-created strategy template (Phase 6.7 / 6.8B).
 
-    Each leg stores the fixed-leg definition: side, option type, strike,
-    expiry, quantity, and lot size. ``position`` preserves the user's
-    intended ordering.
+    Each leg stores the strike/expiry definition for a strategy leg.
 
-    ``strike`` is stored as a fixed numeric value (V1). Future extensions
-    (ATM, spot, delta) will add a ``strike_mode`` discriminator column.
+    V1 (Phase 6.7 — fixed-leg templates):
+        ``strike_mode = "fixed"``, ``strike`` is the absolute strike.
+        ``expiry_mode = "fixed"``, ``expiry`` is the YYYY-MM-DD date.
+        ``formula_version = 1``.
+
+    V2 (Phase 6.8B — dynamic formula templates):
+        ``strike_mode`` selects the strike resolution algorithm.
+        ``expiry_mode`` selects the expiry resolution algorithm.
+        ``formula_version = 2``.
+
+    ``strike`` and ``expiry`` remain stored even for V2 legs — they hold
+    the last-resolved or preview value and serve as backward-compatible
+    display fields, but they are NOT authoritative formula input when
+    ``strike_mode != "fixed"`` or ``expiry_mode != "fixed"``.
+
     ``price`` is informational only — never used for execution; the
     authoritative fill price is resolved from the live option chain at
     execution time.
@@ -363,11 +374,20 @@ class StrategyTemplateLeg(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)  # ordering
     action: Mapped[str] = mapped_column(String(8))  # buy | sell
     option_type: Mapped[str] = mapped_column(String(8))  # call | put
-    strike: Mapped[float] = mapped_column(Float)  # fixed strike
-    expiry: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    strike: Mapped[float] = mapped_column(Float)  # fixed strike (V1) or last-resolved (V2)
+    expiry: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD (V1) or last-resolved (V2)
     quantity: Mapped[int] = mapped_column(Integer, default=1)  # lots
     lot_size: Mapped[int] = mapped_column(Integer, default=50)  # contracts per lot
     price: Mapped[float | None] = mapped_column(Float, nullable=True)  # informational only
+    # Phase 6.8B: dynamic formula fields
+    strike_mode: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed | atm | atm_offset_steps | atm_offset | spot_offset | delta
+    strike_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)  # atm_offset_steps: integer step offset
+    strike_offset_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # percentage offset (reserved for future use)
+    target_delta: Mapped[float | None] = mapped_column(Float, nullable=True)  # delta mode: target delta value
+    expiry_mode: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed | current_week | next_week | monthly | dte_range
+    expiry_dte_min: Mapped[int | None] = mapped_column(Integer, nullable=True)  # dte_range mode: minimum days-to-expiry
+    expiry_dte_max: Mapped[int | None] = mapped_column(Integer, nullable=True)  # dte_range mode: maximum days-to-expiry
+    formula_version: Mapped[int] = mapped_column(Integer, default=1)  # 1 = legacy fixed, 2 = dynamic formula
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     template: Mapped["StrategyTemplate"] = relationship(back_populates="legs")

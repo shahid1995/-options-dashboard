@@ -64,7 +64,17 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     # Phase 6.7: strategy_templates and strategy_template_legs tables are
-    # created by create_all above; no ensure_column migrations needed.
+    # created by create_all above.
+    # Phase 6.8B: add V2 dynamic formula columns to strategy_template_legs.
+    # All nullable with defaults — idempotent and safe on existing V1 rows.
+    ensure_column(engine, "strategy_template_legs", "strike_mode", "VARCHAR(20) DEFAULT 'fixed'")
+    ensure_column(engine, "strategy_template_legs", "strike_offset", "INTEGER NULL")
+    ensure_column(engine, "strategy_template_legs", "strike_offset_pct", "FLOAT NULL")
+    ensure_column(engine, "strategy_template_legs", "target_delta", "FLOAT NULL")
+    ensure_column(engine, "strategy_template_legs", "expiry_mode", "VARCHAR(20) DEFAULT 'fixed'")
+    ensure_column(engine, "strategy_template_legs", "expiry_dte_min", "INTEGER NULL")
+    ensure_column(engine, "strategy_template_legs", "expiry_dte_max", "INTEGER NULL")
+    ensure_column(engine, "strategy_template_legs", "formula_version", "INTEGER DEFAULT 1")
     # Existing databases predate the Phase 5.0 journal-linkage columns.
     ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
