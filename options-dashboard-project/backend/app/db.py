@@ -63,6 +63,8 @@ def init_db():
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    # Phase 6.7: strategy_templates and strategy_template_legs tables are
+    # created by create_all above; no ensure_column migrations needed.
     # Existing databases predate the Phase 5.0 journal-linkage columns.
     ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")

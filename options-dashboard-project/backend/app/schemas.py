@@ -764,6 +764,63 @@ class CapitalOut(BaseModel):
     status: str  # available | partial | unavailable
 
 
+# ---- Phase 6.7: custom strategy templates ----------------------------------
+
+
+class StrategyTemplateLegIn(BaseModel):
+    """One leg of a user-created strategy template."""
+
+    action: Literal["buy", "sell"]
+    option_type: Literal["call", "put"]
+    strike: float = Field(..., gt=0)
+    expiry: str = Field(..., min_length=1)
+    quantity: int = Field(..., ge=1)
+    lot_size: int = Field(..., ge=1)
+    price: float | None = Field(default=None, ge=0)  # informational only
+    position: int = Field(default=0)  # ordering
+
+
+class StrategyTemplateCreateIn(BaseModel):
+    """Create a new strategy template."""
+
+    name: str = Field(..., min_length=1, max_length=128)
+    symbol: str = Field(default="NIFTY", min_length=1)
+    legs: list[StrategyTemplateLegIn] = Field(..., min_length=1)
+
+
+class StrategyTemplateUpdateIn(BaseModel):
+    """Update an existing strategy template (partial update)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    symbol: str | None = Field(default=None, min_length=1)
+    legs: list[StrategyTemplateLegIn] | None = None
+
+
+class StrategyTemplateLegOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    position: int
+    action: str
+    option_type: str
+    strike: float
+    expiry: str
+    quantity: int
+    lot_size: int
+    price: float | None = None
+
+
+class StrategyTemplateOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    symbol: str
+    legs: list[StrategyTemplateLegOut]
+    created_at: datetime
+    updated_at: datetime
+
+
 # ---- Phase 6.6.6: live position valuation ----------------------------------
 
 
