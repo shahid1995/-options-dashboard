@@ -26,6 +26,7 @@ from app.schemas import (
     OrderFillIn,
     PortfolioOut,
     PositionOut,
+    PositionValuationResponseOut,
     ReconcileOut,
     TradeOut,
 )
@@ -827,3 +828,91 @@ async def submit_exit_intent(
         positions=position_outs,
         errors=result.errors,
     )
+
+
+# ---- Phase 6.6.6: live position valuation -----------------------------------
+
+
+@router.get("/positions/valuation", response_model=PositionValuationResponseOut)
+async def positions_valuation(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """GET /paper/positions/valuation — server-authoritative live valuation.
+
+    Resolves current LTP for every open position via the broker adapter and
+    computes live/unrealized P&L, market value, and P&L %. Strategy-level
+    and leg-level aggregation is included when StrategyLegExposure exists.
+
+    Always available regardless of market status (read-only).
+    Missing/stale LTP is explicit (None), never zero.
+    LIVE execution is NOT triggered.
+    """
+    from app.services.valuation import resolve_live_valuation
+
+    user_id, access_token = require_session(session_id)
+    positions, summary = await resolve_live_valuation(db, user_id, access_token)
+
+    from app.services.valuation import (
+        LegValuation,
+        PositionValuation,
+        StrategyValuation,
+    )
+
+    def _lv_out(lv: LegValuation) -> dict:
+        return {
+            "exposure_id": lv.exposure_id,
+            "execution_id": lv.execution_id,
+            "action": lv.action,
+            "remaining_quantity": lv.remaining_quantity,
+            "lot_size": lv.lot_size,
+            "entry_price": lv.entry_price,
+            "current_price": lv.current_price,
+            "market_value": lv.market_value,
+            "live_pnl": lv.live_pnl,
+            "price_status": lv.price_status,
+        }
+
+    def _sv_out(sv: StrategyValuation) -> dict:
+        return {
+            "execution_id": sv.execution_id,
+            "strategy_tag": sv.strategy_tag,
+            "live_pnl": sv.live_pnl,
+            "market_value": sv.market_value,
+            "legs": [_lv_out(lv) for lv in sv.legs],
+            "price_status": sv.price_status,
+        }
+
+    position_outs = []
+    for pv in positions:
+        position_outs.append({
+            "position_id": pv.position_id,
+            "symbol": pv.symbol,
+            "expiry": pv.expiry,
+            "strike": pv.strike,
+            "option_type": pv.option_type,
+            "side": pv.side,
+            "net_quantity": pv.net_quantity,
+            "average_entry_price": pv.average_entry_price,
+            "lot_size": pv.lot_size,
+            "realized_pnl": pv.realized_pnl,
+            "current_price": pv.current_price,
+            "market_value": pv.market_value,
+            "live_pnl": pv.live_pnl,
+            "live_pnl_pct": pv.live_pnl_pct,
+            "price_status": pv.price_status,
+            "strategies": [_sv_out(sv) for sv in pv.strategies],
+        })
+
+    summary_out = {
+        "total_live_pnl": summary.total_live_pnl,
+        "total_market_value": summary.total_market_value,
+        "total_realized_pnl": summary.total_realized_pnl,
+        "open_position_count": summary.open_position_count,
+        "positions_with_price": summary.positions_with_price,
+        "positions_unavailable": summary.positions_unavailable,
+        "generated_at": summary.generated_at,
+        "status": summary.status,
+    }
+
+    return PositionValuationResponseOut(positions=position_outs, summary=summary_out)

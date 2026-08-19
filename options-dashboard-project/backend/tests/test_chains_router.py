@@ -190,6 +190,7 @@ def test_chain_handles_missing_oi_and_sides(client, logged_in, monkeypatch):
         "oi": None,
         "chg_oi": None,
         "volume": None,
+        "quote_timestamp": None,
         "iv": None,
         "delta": None,
         "theta": None,

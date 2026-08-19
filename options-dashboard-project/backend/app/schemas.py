@@ -762,3 +762,73 @@ class CapitalOut(BaseModel):
     strategies: list[CapitalStrategyOut]
     generated_at: str
     status: str  # available | partial | unavailable
+
+
+# ---- Phase 6.6.6: live position valuation ----------------------------------
+
+
+class LegValuationOut(BaseModel):
+    """One StrategyLegExposure's live valuation."""
+
+    exposure_id: int
+    execution_id: str
+    action: str  # buy | sell
+    remaining_quantity: int  # lots
+    lot_size: int
+    entry_price: float | None = None  # authoritative per-leg entry (PaperOrder.fill_price)
+    current_price: float | None = None
+    market_value: float | None = None
+    live_pnl: float | None = None
+    price_status: str = "unavailable"  # available | stale | unavailable
+
+
+class StrategyValuationOut(BaseModel):
+    """Aggregated live valuation for one strategy execution within a position."""
+
+    execution_id: str | None = None
+    strategy_tag: str = "Custom"
+    live_pnl: float | None = None
+    market_value: float | None = None
+    legs: list[LegValuationOut] = Field(default_factory=list)
+    price_status: str = "unavailable"
+
+
+class PositionValuationOut(BaseModel):
+    """One open position's complete live valuation."""
+
+    position_id: int
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    side: str  # LONG | SHORT
+    net_quantity: int
+    average_entry_price: float
+    lot_size: int
+    realized_pnl: float
+    current_price: float | None = None
+    market_value: float | None = None
+    live_pnl: float | None = None
+    live_pnl_pct: float | None = None
+    price_status: str = "unavailable"  # available | stale | unavailable
+    strategies: list[StrategyValuationOut] = Field(default_factory=list)
+
+
+class ValuationSummaryOut(BaseModel):
+    """Aggregate portfolio valuation across all open positions."""
+
+    total_live_pnl: float | None = None
+    total_market_value: float | None = None
+    total_realized_pnl: float = 0.0
+    open_position_count: int = 0
+    positions_with_price: int = 0
+    positions_unavailable: int = 0
+    generated_at: str = ""
+    status: str = "available"  # available | partial | unavailable
+
+
+class PositionValuationResponseOut(BaseModel):
+    """GET /paper/positions/valuation response."""
+
+    positions: list[PositionValuationOut]
+    summary: ValuationSummaryOut

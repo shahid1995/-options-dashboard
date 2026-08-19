@@ -107,6 +107,11 @@ export const previewExitIntent = (payload) =>
 export const confirmExitIntent = (payload) =>
   api.post("/paper/exit-intent", payload).then((r) => r.data);
 
+// ---- Phase 6.6.6: live position valuation ----
+
+export const getPositionsValuation = () =>
+  api.get("/paper/positions/valuation").then((r) => r.data);
+
 // ---- Phase 5.1: portfolio & journal analytics ----
 // ONE authoritative analytics response (summary + performance + equity curve
 // + drawdown + strategy performance + positions + journal).

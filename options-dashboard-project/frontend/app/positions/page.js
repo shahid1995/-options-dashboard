@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
-import { getPaperPositionsFiltered, previewExitIntent, confirmExitIntent } from "@/lib/api";
+import { getPaperPositionsFiltered, previewExitIntent, confirmExitIntent, getPositionsValuation } from "@/lib/api";
 import { C, fmtIN, SessionExpired, useIsMobile } from "@/lib/ui";
 import { isAuthError } from "@/lib/api";
 import { captureSessionFromUrl } from "@/lib/session";
@@ -216,13 +216,14 @@ function DetailItem({ label, value, color, mono }) {
 
 // ---- Position details (structured) ----
 
-export function PositionDetails({ position, onExit }) {
+export function PositionDetails({ position, onExit, valuation }) {
   const absQty = Math.abs(position.net_quantity || 0);
   const lots = position.lot_size ? Math.floor(absQty) : null;
   const legs = position.strategy_leg_exposures || [];
   const orders = position.orders || [];
   const entryOrders = orders.filter((o) => o.kind === "entry" && o.status === "FILLED");
   const exitOrders = orders.filter((o) => o.kind === "exit" && o.status === "FILLED");
+  const v = valuation || null;
 
   return (
     <div style={{ fontSize: 12, maxWidth: 900 }}>
@@ -250,15 +251,33 @@ export function PositionDetails({ position, onExit }) {
       <DetailSection title="PRICING">
         <DetailItem label="Quantity" value={`${absQty} lots`} />
         {position.lot_size > 0 && (
-          <DetailItem label="Lot Size" value={`${position.lot_size} contracts/lot`} />
+          <DetailItem
+            label="Contracts"
+            value={`${absQty * position.lot_size} (${position.lot_size}/lot)`}
+          />
         )}
         <DetailItem
           label="Avg Entry"
           value={position.average_entry_price ? fmtIN(position.average_entry_price, 2) : "\u2014"}
           color={position.average_entry_price ? C.text : C.muted}
         />
-        <DetailItem label="Current Price" value="N/A" color={C.faint} />
-        <DetailItem label="Price Source" value="unavailable" color={C.faint} />
+        <DetailItem
+          label="Current LTP"
+          value={v?.current_price ? fmtIN(v.current_price, 2) : (v?.price_status === "unavailable" ? "Unavailable" : "\u2014")}
+          color={v?.current_price ? C.gold : C.faint}
+        />
+        {v?.market_value != null && (
+          <DetailItem
+            label="Market Value"
+            value={fmtIN(v.market_value, 2)}
+            color={C.text}
+          />
+        )}
+        <DetailItem
+          label="Price Source"
+          value={v?.price_status === "available" ? "LIVE" : "unavailable"}
+          color={v?.price_status === "available" ? C.green : C.faint}
+        />
       </DetailSection>
 
       {/* Section D: P&L */}
@@ -268,7 +287,26 @@ export function PositionDetails({ position, onExit }) {
           value={`${position.realized_pnl >= 0 ? "+" : ""}${fmtIN(position.realized_pnl, 2)}`}
           color={position.realized_pnl >= 0 ? C.green : C.red}
         />
-        <DetailItem label="Unrealized P&L" value="N/A" color={C.faint} />
+        <DetailItem
+          label="Live P&L"
+          value={v?.live_pnl != null ? `${v.live_pnl >= 0 ? "+" : ""}${fmtIN(v.live_pnl, 2)}` : (v?.price_status === "unavailable" ? "Unavailable" : "\u2014")}
+          color={v?.live_pnl != null ? (v.live_pnl >= 0 ? C.green : C.red) : C.faint}
+        />
+        {v?.live_pnl_pct != null && (
+          <DetailItem
+            label="Live P&L %"
+            value={`${v.live_pnl_pct >= 0 ? "+" : ""}${v.live_pnl_pct.toFixed(2)}%`}
+            color={v.live_pnl_pct >= 0 ? C.green : C.red}
+          />
+        )}
+        <DetailItem
+          label="Total P&L"
+          value={(() => {
+            const total = position.realized_pnl + (v?.live_pnl || 0);
+            return v?.live_pnl != null ? `${total >= 0 ? "+" : ""}${fmtIN(total, 2)}` : "\u2014";
+          })()}
+          color={v?.live_pnl != null ? ((position.realized_pnl + (v.live_pnl || 0)) >= 0 ? C.green : C.red) : C.faint}
+        />
       </DetailSection>
 
       {/* Section E: Strategy Attribution */}
@@ -290,34 +328,59 @@ export function PositionDetails({ position, onExit }) {
                   <th style={{ padding: "3px 6px", textAlign: "left" }}>ACTION</th>
                   <th style={{ padding: "3px 6px", textAlign: "left" }}>ORIGINAL</th>
                   <th style={{ padding: "3px 6px", textAlign: "left" }}>REMAINING</th>
+                  {v?.strategies?.length > 0 && <th style={{ padding: "3px 6px", textAlign: "left" }}>LEG P&L</th>}
                   <th style={{ padding: "3px 6px", textAlign: "left" }}>STATUS</th>
                 </tr>
               </thead>
               <tbody>
-                {legs.map((leg) => (
-                  <tr key={leg.id} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "3px 6px" }}>
-                      <span style={{ fontWeight: 700, color: leg.action === "buy" ? C.green : C.red }}>
-                        {leg.action?.toUpperCase() || "\u2014"}
-                      </span>
-                    </td>
-                    <td style={{ padding: "3px 6px" }}>{leg.original_quantity}</td>
-                    <td style={{ padding: "3px 6px" }}>{leg.remaining_quantity}</td>
-                    <td style={{ padding: "3px 6px" }}>
-                      <span
-                        style={{
-                          fontSize: 9, fontWeight: 600, padding: "1px 4px", borderRadius: 3,
-                          background: leg.status === "open" ? "rgba(76,175,125,0.1)" : "rgba(136,146,166,0.1)",
-                          color: leg.status === "open" ? C.green : C.muted,
-                        }}
-                      >
-                        {leg.status?.toUpperCase() || "\u2014"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {legs.map((leg) => {
+                  const legVal = v?.strategies?.flatMap(s => s.legs || []).find(lv => lv.exposure_id === leg.id);
+                  return (
+                    <tr key={leg.id} style={{ borderTop: `1px solid ${C.border}` }}>
+                      <td style={{ padding: "3px 6px" }}>
+                        <span style={{ fontWeight: 700, color: leg.action === "buy" ? C.green : C.red }}>
+                          {leg.action?.toUpperCase() || "\u2014"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "3px 6px" }}>{leg.original_quantity}</td>
+                      <td style={{ padding: "3px 6px" }}>{leg.remaining_quantity}</td>
+                      {v?.strategies?.length > 0 && (
+                        <td style={{ padding: "3px 6px", color: legVal?.live_pnl != null ? (legVal.live_pnl >= 0 ? C.green : C.red) : C.faint, fontSize: 10 }}>
+                          {legVal?.live_pnl != null ? `${legVal.live_pnl >= 0 ? "+" : ""}${fmtIN(legVal.live_pnl, 2)}` : "\u2014"}
+                        </td>
+                      )}
+                      <td style={{ padding: "3px 6px" }}>
+                        <span
+                          style={{
+                            fontSize: 9, fontWeight: 600, padding: "1px 4px", borderRadius: 3,
+                            background: leg.status === "open" ? "rgba(76,175,125,0.1)" : "rgba(136,146,166,0.1)",
+                            color: leg.status === "open" ? C.green : C.muted,
+                          }}
+                        >
+                          {leg.status?.toUpperCase() || "\u2014"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            {/* Strategy-level P&L aggregation */}
+            {v?.strategies?.length > 0 && (
+              <div style={{ marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {v.strategies.map((sv, si) => (
+                  <div key={si} style={{ fontSize: 10, display: "flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ color: C.faint }}>{sv.strategy_tag}:</span>
+                    <span style={{ fontWeight: 600, color: sv.live_pnl != null ? (sv.live_pnl >= 0 ? C.green : C.red) : C.faint }}>
+                      {sv.live_pnl != null ? `${sv.live_pnl >= 0 ? "+" : ""}${fmtIN(sv.live_pnl, 2)}` : "\u2014"}
+                    </span>
+                    {sv.market_value != null && (
+                      <span style={{ color: C.faint }}>({fmtIN(sv.market_value, 2)})</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </DetailSection>
@@ -787,9 +850,10 @@ export function ExitFlow({ position, onClose, onExited }) {
 
 // ---- Position row ----
 
-export function PositionRow({ position, isExpanded, onToggle, isMobile, onExit }) {
+export function PositionRow({ position, valuation, isExpanded, onToggle, isMobile, onExit }) {
   const absQty = Math.abs(position.net_quantity || 0);
   const lots = position.lot_size > 0 ? Math.floor(absQty) : null;
+  const v = valuation || null;
 
   return (
     <>
@@ -831,6 +895,16 @@ export function PositionRow({ position, isExpanded, onToggle, isMobile, onExit }
           </span>
         </td>
         <td style={cellStyle(isMobile)}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: v?.current_price ? C.gold : C.faint }}>
+            {v?.current_price ? fmtIN(v.current_price, 2) : "\u2014"}
+          </span>
+        </td>
+        <td style={cellStyle(isMobile)}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: v?.live_pnl != null ? (v.live_pnl >= 0 ? C.green : C.red) : C.faint }}>
+            {v?.live_pnl != null ? `${v.live_pnl >= 0 ? "+" : ""}${fmtIN(v.live_pnl, 2)}` : "\u2014"}
+          </span>
+        </td>
+        <td style={cellStyle(isMobile)}>
           <span
             style={{
               fontSize: 12, fontWeight: 600,
@@ -858,14 +932,14 @@ export function PositionRow({ position, isExpanded, onToggle, isMobile, onExit }
       {isExpanded && (
         <tr>
           <td
-            colSpan={isMobile ? 5 : 10}
+            colSpan={isMobile ? 5 : 12}
             style={{
               padding: "12px 16px",
               background: "rgba(201,161,90,0.03)",
               borderBottom: `1px solid ${C.border}`,
             }}
           >
-            <PositionDetails position={position} onExit={() => onExit?.(position)} />
+            <PositionDetails position={position} valuation={valuation} onExit={() => onExit?.(position)} />
           </td>
         </tr>
       )}
@@ -935,8 +1009,19 @@ export default function PositionsPage() {
   const [activeTab, setActiveTab] = useState("open");
   const [expandedRow, setExpandedRow] = useState(null);
   const [exitPosition, setExitPosition] = useState(null);
+  const [valuation, setValuation] = useState(null);
   const [filters, setFilters] = useState({ symbol: "", option_type: "", strategy_execution_id: "" });
   const isMobile = useIsMobile();
+
+  // Build a map from position_id → valuation for quick lookup
+  const valuationMap = useMemo(() => {
+    if (!valuation?.positions) return {};
+    const m = {};
+    for (const pv of valuation.positions) {
+      m[pv.position_id] = pv;
+    }
+    return m;
+  }, [valuation]);
 
   const handleExit = useCallback((pos) => {
     setExitPosition(pos);
@@ -985,6 +1070,21 @@ export default function PositionsPage() {
     fetchPositions();
   }, [loggedIn, fetchPositions]);
 
+  // Fetch live valuation (server-authoritative LTP + P&L)
+  const fetchValuation = useCallback(() => {
+    getPositionsValuation()
+      .then((data) => setValuation(data))
+      .catch(() => setValuation(null));
+  }, []);
+
+  useEffect(() => {
+    if (!loggedIn) return;
+    fetchValuation();
+    // Re-fetch valuation periodically (every 60s) during market hours
+    const iv = setInterval(fetchValuation, 60000);
+    return () => clearInterval(iv);
+  }, [loggedIn, fetchValuation]);
+
   // Compute counts for all tabs by fetching all positions via enriched path.
   const [allPositions, setAllPositions] = useState(null);
   useEffect(() => {
@@ -1012,8 +1112,10 @@ export default function PositionsPage() {
     const longCount = openPositions.filter((p) => p.net_quantity > 0).length;
     const shortCount = openPositions.filter((p) => p.net_quantity < 0).length;
     const realized = src.reduce((sum, p) => sum + (p.realized_pnl || 0), 0);
-    return { openCount: openPositions.length, longCount, shortCount, realized };
-  }, [positions]);
+    const livePnl = valuation?.summary?.total_live_pnl;
+    const totalMv = valuation?.summary?.total_market_value;
+    return { openCount: openPositions.length, longCount, shortCount, realized, livePnl, totalMv };
+  }, [positions, valuation]);
 
   if (loggedIn === null) {
     return (
@@ -1064,6 +1166,25 @@ export default function PositionsPage() {
               {summary.realized >= 0 ? "+" : ""}{fmtIN(summary.realized, 2)}
             </span>
           </span>
+          {summary.livePnl != null && (
+            <span>
+              Live P&L:{" "}
+              <span
+                style={{
+                  fontWeight: 600,
+                  color: summary.livePnl >= 0 ? C.green : C.red,
+                }}
+              >
+                {summary.livePnl >= 0 ? "+" : ""}{fmtIN(summary.livePnl, 2)}
+              </span>
+            </span>
+          )}
+          {summary.totalMv != null && (
+            <span>
+              Market Value:{" "}
+              <span style={{ fontWeight: 600 }}>{fmtIN(summary.totalMv, 2)}</span>
+            </span>
+          )}
         </div>
       )}
 
@@ -1108,6 +1229,8 @@ export default function PositionsPage() {
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>TYPE</th>
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>QTY</th>
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>AVG ENTRY</th>
+                <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>LTP</th>
+                <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>LIVE P&L</th>
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>REALIZED P&L</th>
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>STRATEGY</th>
                 <th style={{ ...cellStyle(isMobile), textAlign: "left" }}>STATUS</th>
@@ -1118,6 +1241,7 @@ export default function PositionsPage() {
                 <React.Fragment key={pos.id || i}>
                   <PositionRow
                     position={pos}
+                    valuation={valuationMap[pos.id]}
                     isExpanded={expandedRow === pos.id}
                     onToggle={() => {
                       if (exitPosition?.id === pos.id) setExitPosition(null);

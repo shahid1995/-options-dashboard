@@ -341,6 +341,7 @@ def transform_chain(symbol: str, expiry_date: str, raw: dict) -> dict:
                 "oi": oi,
                 "chg_oi": chg_oi,
                 "volume": market.get("volume"),
+                "quote_timestamp": market.get("last_trade_time") or market.get("last_update_time"),
                 "iv": greeks.get("iv"),
                 "delta": greeks.get("delta"),
                 "theta": greeks.get("theta"),
