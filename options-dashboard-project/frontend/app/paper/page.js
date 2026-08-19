@@ -73,6 +73,20 @@ import {
 import { nseCalendarStatus, priceModeLabel, sessionStateLabel, MARKET_STATUS_LABELS, MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG } from "@/lib/marketStatus";
 import { formatOptionPrice, NIFTY_OPTION_TICK_SIZE, roundOptionPrice } from "@/lib/pricing";
 import { loadJSON, saveJSON } from "@/lib/storage";
+import {
+  getStrategyTemplates,
+  createStrategyTemplate,
+  updateStrategyTemplate,
+  duplicateStrategyTemplate,
+  deleteStrategyTemplate,
+} from "@/lib/api";
+import {
+  templateToFrontendLegs,
+  frontendLegsToTemplatePayload,
+  frontendLegsToUpdatePayload,
+  legSummary,
+  legCountLabel,
+} from "@/lib/templates";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
   ComposedChart, Bar, Line, Area, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
@@ -82,7 +96,7 @@ const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
 const JOURNAL_PAGE_SIZE = 10;
 const DRAFTS_KEY = "options_dashboard_drafts_v1";
-const SAVED_KEY = "options_dashboard_saved_v1";
+// SAVED_KEY removed in Phase 6.7 — replaced by backend-backed My Strategies
 
 const LEG_COLORS = [C.green, C.red, "#5B9BD5", "#B48AD9", "#E0A33A", "#5AC8C8", "#F283B4", "#7FBF7F"];
 
@@ -141,7 +155,14 @@ export default function PaperTradingPage() {
   const [builderTab, setBuilderTab] = useState("ready");
   const [showAddLeg, setShowAddLeg] = useState(false);
   const [drafts, setDrafts] = useState([]);
-  const [savedStrategies, setSavedStrategies] = useState([]);
+  const [myTemplates, setMyTemplates] = useState([]);
+  const [myTemplatesLoading, setMyTemplatesLoading] = useState(false);
+  const [myTemplatesError, setMyTemplatesError] = useState(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [editingTemplateId, setEditingTemplateId] = useState(null);
+  const [renameDialogTemplateId, setRenameDialogTemplateId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState(null);
   const [fundsOpen, setFundsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [spotChg, setSpotChg] = useState(null);
@@ -341,16 +362,29 @@ export default function PaperTradingPage() {
   // Draft portfolios + saved strategies (localStorage)
   useEffect(() => {
     setDrafts(loadJSON(DRAFTS_KEY, []));
-    setSavedStrategies(loadJSON(SAVED_KEY, []));
   }, []);
 
   useEffect(() => {
     saveJSON(DRAFTS_KEY, drafts);
   }, [drafts]);
 
+  // Phase 6.7: load user's saved strategy templates from backend
+  const loadMyTemplates = useCallback(async () => {
+    setMyTemplatesLoading(true);
+    setMyTemplatesError(null);
+    try {
+      const data = await getStrategyTemplates();
+      setMyTemplates(data);
+    } catch (e) {
+      setMyTemplatesError(e.response?.data?.detail || e.message || "Failed to load templates");
+    } finally {
+      setMyTemplatesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    saveJSON(SAVED_KEY, savedStrategies);
-  }, [savedStrategies]);
+    if (loggedIn) loadMyTemplates();
+  }, [loggedIn, loadMyTemplates]);
 
   // Load the DB-backed paper journal (account, stats, trade log).
   const loadJournal = useCallback(() => {
@@ -1110,10 +1144,92 @@ export default function PaperTradingPage() {
     }
   };
 
-  const toggleSaved = (id) =>
-    setSavedStrategies((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  // ---- Phase 6.7: My Strategies CRUD ----
 
-  const savedList = STRATEGIES.filter((s) => savedStrategies.includes(s.id));
+  const loadTemplateIntoBuilder = (template) => {
+    setLegs(templateToFrontendLegs(template));
+    setStrategyName(template.name);
+    setStrategyId(newStrategyId());
+    setStrategyCreatedAt(new Date().toISOString());
+    setStrategySource("template");
+    setReviewOpen(false);
+    resetAdjustments();
+    setShowAddLeg(false);
+    // Switch symbol if the template uses a different one
+    if (template.symbol && template.symbol !== symbol) {
+      setSymbol(template.symbol);
+    }
+    // Load the expiry from the first leg if available
+    const firstExpiry = template.legs?.[0]?.expiry;
+    if (firstExpiry && firstExpiry !== expiry) {
+      setExpiry(firstExpiry);
+      if (!chainCache[firstExpiry]) loadChain(firstExpiry);
+    }
+  };
+
+  const saveAsTemplate = async () => {
+    if (legs.length === 0) return;
+    const suggested = strategyName ?? `My Strategy`;
+    const name = window.prompt("Save as strategy template:", suggested);
+    if (name === null || !name.trim()) return;
+    try {
+      const payload = frontendLegsToTemplatePayload(name.trim(), symbol, legs);
+      await createStrategyTemplate(payload);
+      await loadMyTemplates();
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message || "Failed to save template";
+      if (e.response?.status === 409) {
+        window.alert("A template with this name already exists. Please choose a different name.");
+      } else {
+        window.alert(msg);
+      }
+    }
+  };
+
+  const renameTemplate = async (templateId) => {
+    if (!renameValue.trim()) return;
+    try {
+      await updateStrategyTemplate(templateId, { name: renameValue.trim() });
+      setRenameDialogTemplateId(null);
+      setRenameValue("");
+      await loadMyTemplates();
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message || "Failed to rename";
+      if (e.response?.status === 409) {
+        window.alert("A template with this name already exists.");
+      } else {
+        window.alert(msg);
+      }
+    }
+  };
+
+  const duplicateTemplate = async (templateId, currentName) => {
+    const newName = window.prompt("Duplicate as:", `${currentName} (copy)`);
+    if (newName === null || !newName.trim()) return;
+    try {
+      await duplicateStrategyTemplate(templateId, newName.trim());
+      await loadMyTemplates();
+    } catch (e) {
+      const msg = e.response?.data?.detail || e.message || "Failed to duplicate";
+      if (e.response?.status === 409) {
+        window.alert("A template with this name already exists.");
+      } else {
+        window.alert(msg);
+      }
+    }
+  };
+
+  const confirmDeleteTemplate = async (templateId) => {
+    try {
+      await deleteStrategyTemplate(templateId);
+      setDeleteConfirmId(null);
+      await loadMyTemplates();
+    } catch (e) {
+      window.alert(e.response?.data?.detail || e.message || "Failed to delete");
+    }
+  };
+
+  const savedList = [];
 
   // ---- Zone C rows: DB journal (source of truth) + any local-only closed
   // trades that never synced (deduped by tradeId). ----
@@ -1677,6 +1793,24 @@ export default function PaperTradingPage() {
                   Add to Drafts
                 </button>
                 <button
+                  onClick={saveAsTemplate}
+                  disabled={legs.length === 0}
+                  title={legs.length === 0 ? "Add legs first" : "Save as a reusable strategy template"}
+                  style={{
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    color: legs.length === 0 ? C.faint : C.gold,
+                    background: C.surface2,
+                    border: `1px solid ${legs.length === 0 ? C.border : C.gold}`,
+                    borderRadius: 8,
+                    padding: "8px 6px",
+                    cursor: legs.length === 0 ? "not-allowed" : "pointer",
+                    opacity: legs.length === 0 ? 0.5 : 1,
+                  }}
+                >
+                  Save Template
+                </button>
+                <button
                   onClick={openReview}
                   disabled={orderInFlight || reviewOpen}
                   title={
@@ -1730,7 +1864,7 @@ export default function PaperTradingPage() {
                 {[
                   ["ready", "Ready-made"],
                   ["positions", "Positions"],
-                  ["saved", "Saved Strategies"],
+                  ["saved", "My Strategies"],,
                   ["drafts", "Draft Portfolios"],
                 ].map(([key, label]) => (
                   <button key={key} onClick={() => setBuilderTab(key)} style={tabBtn(builderTab === key)}>
@@ -1783,16 +1917,7 @@ export default function PaperTradingPage() {
                           <ShapeIcon shape={s.shape} />
                         </div>
                         <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text, lineHeight: 1.25 }}>{s.name}</span>
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSaved(s.id);
-                          }}
-                          title={savedStrategies.includes(s.id) ? "Remove from saved" : "Save strategy"}
-                          style={{ position: "absolute", top: 6, right: 8, fontSize: 13, color: savedStrategies.includes(s.id) ? C.gold : C.faint, cursor: "pointer" }}
-                        >
-                          {savedStrategies.includes(s.id) ? "★" : "☆"}
-                        </span>
+                        
                       </button>
                     ))}
                   </div>
@@ -1834,53 +1959,124 @@ export default function PaperTradingPage() {
                   </div>
                 ))}
 
-              {/* Bookmarked ready-made strategies */}
-              {builderTab === "saved" &&
-                (savedList.length === 0 ? (
-                  <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0", lineHeight: 1.5 }}>
-                    Nothing saved yet. Tap the ☆ on any ready-made strategy card to bookmark it here.
+              {/* Phase 6.7: My Strategies (backend-backed templates) */}
+              {builderTab === "saved" && (
+                <>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                    <button
+                      onClick={saveAsTemplate}
+                      disabled={legs.length === 0}
+                      title={legs.length === 0 ? "Add legs first" : "Save current builder legs as a reusable template"}
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: legs.length === 0 ? C.faint : C.gold,
+                        background: legs.length === 0 ? "transparent" : "rgba(201,161,90,0.1)",
+                        border: `1px solid ${legs.length === 0 ? C.border : C.gold}`,
+                        borderRadius: 6,
+                        padding: "5px 12px",
+                        cursor: legs.length === 0 ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      + Save Current Strategy
+                    </button>
                   </div>
-                ) : (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))", gap: 8 }}>
-                    {savedList.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => {
-                          loadStrategy(s);
-                          setBuilderTab("ready");
-                        }}
-                        style={{
-                          position: "relative",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          background: C.surface2,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 8,
-                          padding: "10px 10px 8px",
-                          cursor: "pointer",
-                          textAlign: "left",
-                        }}
-                      >
-                        <div style={{ width: "100%", flexShrink: 0 }}>
-                          <ShapeIcon shape={s.shape} />
+                  {myTemplatesLoading ? (
+                    <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0" }}>Loading templates…</div>
+                  ) : myTemplatesError ? (
+                    <div style={{ fontSize: 11.5, color: C.red, padding: "8px 0" }}>
+                      {myTemplatesError}
+                      <button onClick={loadMyTemplates} style={{ marginLeft: 8, fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}>Retry</button>
+                    </div>
+                  ) : myTemplates.length === 0 ? (
+                    <div style={{ fontSize: 11.5, color: C.faint, padding: "8px 0", lineHeight: 1.5 }}>
+                      No saved strategies yet. Build legs in the Strategy Builder and click <b>+ Save Current Strategy</b> to create a reusable template.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      {myTemplates.map((t) => (
+                        <div key={t.id} style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              {renameDialogTemplateId === t.id ? (
+                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                  <input
+                                    value={renameValue}
+                                    onChange={(e) => setRenameValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") renameTemplate(t.id);
+                                      if (e.key === "Escape") { setRenameDialogTemplateId(null); setRenameValue(""); }
+                                    }}
+                                    autoFocus
+                                    style={{ fontSize: 11.5, fontWeight: 700, background: C.surface, border: `1px solid ${C.gold}`, borderRadius: 4, padding: "2px 6px", color: C.text, width: "100%" }}
+                                  />
+                                  <button onClick={() => renameTemplate(t.id)} style={{ fontSize: 10, color: C.gold, background: "none", border: "none", cursor: "pointer" }}>✓</button>
+                                  <button onClick={() => { setRenameDialogTemplateId(null); setRenameValue(""); }} style={{ fontSize: 10, color: C.red, background: "none", border: "none", cursor: "pointer" }}>✕</button>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{t.name}</div>
+                              )}
+                              <div style={{ fontSize: 10, color: C.faint }}>
+                                {t.symbol} · {legCountLabel(t.legs?.length ?? 0)}
+                                {t.legs?.length > 0 && <span> · {legSummary(t.legs)}</span>}
+                              </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                              <button
+                                onClick={() => { loadTemplateIntoBuilder(t); setBuilderTab("ready"); }}
+                                title="Load into Strategy Builder"
+                                style={{ fontSize: 10.5, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 9px", cursor: "pointer" }}
+                              >
+                                Load
+                              </button>
+                              <button
+                                onClick={() => { setRenameDialogTemplateId(t.id); setRenameValue(t.name); }}
+                                title="Rename"
+                                style={{ fontSize: 10.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => duplicateTemplate(t.id, t.name)}
+                                title="Duplicate"
+                                style={{ fontSize: 10.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}
+                              >
+                                📋
+                              </button>
+                              {deleteConfirmId === t.id ? (
+                                <>
+                                  <button
+                                    onClick={() => confirmDeleteTemplate(t.id)}
+                                    title="Confirm delete"
+                                    style={{ fontSize: 10.5, color: C.text, background: C.red, border: "none", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}
+                                  >
+                                    Yes
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmId(null)}
+                                    title="Cancel"
+                                    style={{ fontSize: 10.5, color: C.muted, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}
+                                  >
+                                    No
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => setDeleteConfirmId(t.id)}
+                                  title="Delete template"
+                                  style={{ fontSize: 11, color: C.red, background: "none", border: `1px solid ${C.border}`, borderRadius: 5, padding: "3px 7px", cursor: "pointer" }}
+                                >
+                                  🗑️
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text, lineHeight: 1.25 }}>{s.name}</span>
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSaved(s.id);
-                          }}
-                          title="Remove from saved"
-                          style={{ position: "absolute", top: 6, right: 8, fontSize: 13, color: C.gold, cursor: "pointer" }}
-                        >
-                          ★
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ))}
-
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
               {/* Draft portfolios */}
               {builderTab === "drafts" &&
                 (drafts.length === 0 ? (

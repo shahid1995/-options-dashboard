@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, getBrokerProfile, api } from "./api";
+import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, getBrokerProfile, api, getStrategyTemplates, createStrategyTemplate, updateStrategyTemplate, duplicateStrategyTemplate, deleteStrategyTemplate } from "./api";
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", "http://localhost:8000");
@@ -90,6 +90,56 @@ describe("broker profile api (Phase 6.4.1)", () => {
     const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { status: "available" } });
     await getBrokerProfile(true);
     expect(spy).toHaveBeenCalledWith("/paper/broker/profile", { params: { refresh: true } });
+    spy.mockRestore();
+  });
+});
+
+describe("strategy template API (Phase 6.7)", () => {
+  it("gets templates from /paper/templates", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: [{ id: 1, name: "My Bull" }] });
+    const result = await getStrategyTemplates();
+    expect(spy).toHaveBeenCalledWith("/paper/templates");
+    expect(result).toEqual([{ id: 1, name: "My Bull" }]);
+    spy.mockRestore();
+  });
+
+  it("creates a template via POST /paper/templates", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { id: 2, name: "New Strategy" } });
+    const payload = { name: "New Strategy", symbol: "NIFTY", legs: [] };
+    const result = await createStrategyTemplate(payload);
+    expect(spy).toHaveBeenCalledWith("/paper/templates", payload);
+    expect(result.id).toBe(2);
+    spy.mockRestore();
+  });
+
+  it("updates a template via PUT /paper/templates/:id", async () => {
+    const spy = vi.spyOn(api, "put").mockResolvedValue({ data: { id: 2, name: "Renamed" } });
+    const result = await updateStrategyTemplate(2, { name: "Renamed" });
+    expect(spy).toHaveBeenCalledWith("/paper/templates/2", { name: "Renamed" });
+    expect(result.name).toBe("Renamed");
+    spy.mockRestore();
+  });
+
+  it("duplicates a template via POST /paper/templates/:id/duplicate", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { id: 3, name: "My Bull (copy)" } });
+    const result = await duplicateStrategyTemplate(2, "My Bull (copy)");
+    expect(spy).toHaveBeenCalledWith("/paper/templates/2/duplicate", null, { params: { new_name: "My Bull (copy)" } });
+    expect(result.id).toBe(3);
+    spy.mockRestore();
+  });
+
+  it("duplicates without new_name when not provided", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { id: 4 } });
+    await duplicateStrategyTemplate(2);
+    expect(spy).toHaveBeenCalledWith("/paper/templates/2/duplicate", null, { params: {} });
+    spy.mockRestore();
+  });
+
+  it("deletes a template via DELETE /paper/templates/:id", async () => {
+    const spy = vi.spyOn(api, "delete").mockResolvedValue({ data: { ok: true } });
+    const result = await deleteStrategyTemplate(5);
+    expect(spy).toHaveBeenCalledWith("/paper/templates/5");
+    expect(result.ok).toBe(true);
     spy.mockRestore();
   });
 });

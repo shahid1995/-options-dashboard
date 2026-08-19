@@ -148,3 +148,26 @@ export const chainWsProtocols = () => {
   const sessionId = getSessionId();
   return sessionId ? ["options-dashboard-session", sessionId] : undefined;
 };
+
+// ---- Phase 6.7: strategy templates (CRUD) ----
+
+export const getStrategyTemplates = () =>
+  api.get("/paper/templates").then((r) => r.data);
+
+export const createStrategyTemplate = (payload) =>
+  api.post("/paper/templates", payload).then((r) => r.data);
+
+export const getStrategyTemplate = (id) =>
+  api.get(`/paper/templates/${id}`).then((r) => r.data);
+
+export const updateStrategyTemplate = (id, payload) =>
+  api.put(`/paper/templates/${id}`, payload).then((r) => r.data);
+
+export const duplicateStrategyTemplate = (id, newName) =>
+  api
+    .post(`/paper/templates/${id}/duplicate`, null, { params: newName ? { new_name: newName } : {} })
+    .then((r) => r.data);
+
+export const deleteStrategyTemplate = (id) =>
+  api.delete(`/paper/templates/${id}`).then((r) => r.data);
+
