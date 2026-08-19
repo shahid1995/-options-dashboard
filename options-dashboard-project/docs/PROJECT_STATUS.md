@@ -996,6 +996,47 @@ None. No database changes.
 
 **LIVE execution remains DISABLED.**
 
+---
+
+### Phase 6.6.6 — Live Position Valuation & P&L Workspace
+
+**Status: Implemented (working tree — pending review)**
+
+**What was built:**
+
+1. **Server-authoritative valuation service** (`backend/app/services/valuation.py`):
+   - `PositionValuationService` resolves live market prices (LTP) for open positions via the existing broker gateway → Upstox adapter → `get_option_chain()` pipeline
+   - Calculates Live P&L: `(LTP - avg_entry) × lots × lot_size` for long; inverse for short
+   - Calculates Market Value: `LTP × lots × lot_size`
+   - Calculates P&L %: `(live_pnl / market_value) × 100`
+   - Strategy-level and leg-level aggregation from `StrategyLegExposure` records
+   - Data quality: explicit `val_status` (available / unavailable / stale) and `price_status` fields
+   - Never interprets missing LTP as zero; returns `null`/`"unavailable"` explicitly
+   - User isolation: only returns valuations for the authenticated user's positions
+
+2. **Valuation endpoint** (`GET /paper/positions/valuation`):
+   - Returns per-position valuation with strategy-level and leg-level breakdowns
+   - Summary with total unrealized P&L, total market value, and count of open positions
+
+3. **Valuation schemas** (`backend/app/schemas.py`):
+   - `LegValuationOut`, `StrategyValuationOut`, `PositionValuationOut`, `ValuationSummaryOut`
+
+4. **Frontend live P&L display** (`frontend/app/positions/page.js`):
+   - Position row shows LTP, Live P&L with sign, P&L %, and market value
+   - PositionDetails shows: Current LTP, Price Source, Live P&L, Total P&L
+   - Strategy/leg-level P&L breakdown
+   - Contracts display alongside lot quantity
+
+5. **Frontend API** (`frontend/lib/api.js`):
+   - `getPaperPositionsValuation()` — GET /paper/positions/valuation
+
+6. **Comprehensive tests** (`backend/tests/test_valuation.py` — 22 tests):
+   - Long/short Live P&L, lot-size, market value, P&L %, missing/stale LTP
+   - Strategy/leg aggregation, shared instrument isolation
+   - Closed position excluded, user isolation, auth required
+
+**LIVE execution remains DISABLED.**
+
 ### Phase 6.6.4.y — Positions Endpoint Routing Correction
 
 **Problem**: The "All" tab on the Positions page sent `{ limit: 500 }` with no `status` param. The backend router condition `if any([status, symbol, option_type, strategy_execution_id])` did NOT include `limit`, so the request fell through to the legacy `get_open_positions()` path — returning only open positions instead of all.

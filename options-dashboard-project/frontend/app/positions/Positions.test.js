@@ -177,15 +177,27 @@ describe("PositionDetails", () => {
     expect(html).toContain("1,500");
   });
 
-  it("shows N/A for unrealized P&L", () => {
+  it("shows em-dash for live P&L when no valuation", () => {
     const html = renderToStaticMarkup(<PositionDetails position={MOCK_POSITION} />);
-    expect(html).toContain("Unrealized P&amp;L");
-    expect(html).toContain("N/A");
+    expect(html).toContain("Live P&amp;L");
+    // When no valuation prop is provided, live P&L shows an em-dash (—)
+    expect(html).toContain("\u2014");
   });
 
-  it("renders lot size information", () => {
+  it("shows Unavailable for live P&L when valuation has unavailable price status", () => {
+    const html = renderToStaticMarkup(
+      <PositionDetails
+        position={MOCK_POSITION}
+        valuation={{ price_status: "unavailable", live_pnl: null }}
+      />
+    );
+    expect(html).toContain("Live P&amp;L");
+    expect(html).toContain("Unavailable");
+  });
+
+  it("renders contracts information", () => {
     const html = renderToStaticMarkup(<PositionDetails position={MOCK_POSITION} />);
-    expect(html).toContain("Lot Size");
+    expect(html).toContain("Contracts");
     expect(html).toContain("65");
   });
 
