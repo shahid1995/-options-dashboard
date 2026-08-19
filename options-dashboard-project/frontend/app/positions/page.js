@@ -428,10 +428,17 @@ export function PositionDetails({ position, onExit }) {
 
 // ---- Exit Flow (Phase 6.6.5) ----
 
-function ExitFlow({ position, onClose, onExited }) {
+export function ExitFlow({ position, onClose, onExited }) {
+  // Generate one stable client_order_id for the ENTIRE exit flow (preview + confirm).
+  // This is the idempotency key — using the same key for preview and confirm
+  // ensures the paper engine treats a retry as a replay, not a second execution.
+  const [clientOrderId] = useState(() =>
+    `exit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  );
   const [step, setStep] = useState("select"); // select | preview | confirming | result
   const [selector, setSelector] = useState({
     scope: "POSITION",
+    strategy_execution_id: "",
     option_type: "",
     action: "",
     quantity_mode: "ALL",
@@ -442,6 +449,27 @@ function ExitFlow({ position, onClose, onExited }) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Derive unique strategy executions from the position's exposures.
+  // A position can contain exposures from multiple strategies; the UI
+  // must list all of them so the user can target the correct one.
+  const strategyOptions = useMemo(() => {
+    const legs = position.strategy_leg_exposures || [];
+    const seen = new Map();
+    for (const leg of legs) {
+      if (leg.status === "open" && leg.remaining_quantity > 0 && leg.execution_id) {
+        if (!seen.has(leg.execution_id)) {
+          seen.set(leg.execution_id, {
+            execution_id: leg.execution_id,
+            label: position.strategy_tag && seen.size === 0
+              ? position.strategy_tag
+              : leg.execution_id,
+          });
+        }
+      }
+    }
+    return Array.from(seen.values());
+  }, [position.strategy_leg_exposures, position.strategy_tag]);
+
   const canPreview = selector.quantity_mode === "ALL" ||
     (selector.quantity_mode === "QUANTITY" && Number(selector.quantity) > 0);
 
@@ -450,13 +478,14 @@ function ExitFlow({ position, onClose, onExited }) {
     setError(null);
     try {
       const payload = {
-        client_order_id: `exit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        client_order_id: clientOrderId,
         scope: selector.scope,
         quantity_mode: selector.quantity_mode,
       };
       if (selector.scope === "POSITION") payload.position_id = position.id;
-      if (selector.scope === "STRATEGY" && position.strategy_execution_id) {
-        payload.strategy_execution_id = position.strategy_execution_id;
+      if (selector.scope === "STRATEGY") {
+        payload.strategy_execution_id = selector.strategy_execution_id ||
+          (strategyOptions.length === 1 ? strategyOptions[0].execution_id : "");
       }
       if (selector.option_type) payload.option_type = selector.option_type;
       if (selector.action) payload.action = selector.action;
@@ -481,17 +510,15 @@ function ExitFlow({ position, onClose, onExited }) {
     setError(null);
     setStep("confirming");
     try {
-      // Re-use the same client_order_id for idempotency
       const payload = {
-        client_order_id: preview.targets[0]
-          ? `exit-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-          : `exit-${Date.now()}`,
+        client_order_id: clientOrderId,
         scope: selector.scope,
         quantity_mode: selector.quantity_mode,
       };
       if (selector.scope === "POSITION") payload.position_id = position.id;
-      if (selector.scope === "STRATEGY" && position.strategy_execution_id) {
-        payload.strategy_execution_id = position.strategy_execution_id;
+      if (selector.scope === "STRATEGY") {
+        payload.strategy_execution_id = selector.strategy_execution_id ||
+          (strategyOptions.length === 1 ? strategyOptions[0].execution_id : "");
       }
       if (selector.option_type) payload.option_type = selector.option_type;
       if (selector.action) payload.action = selector.action;
@@ -553,6 +580,34 @@ function ExitFlow({ position, onClose, onExited }) {
             </div>
           </div>
 
+          {/* Strategy selector (only when scope is STRATEGY) */}
+          {selector.scope === "STRATEGY" && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>STRATEGY</div>
+              {strategyOptions.length > 1 ? (
+                <select
+                  value={selector.strategy_execution_id}
+                  onChange={(e) => setSelector({ ...selector, strategy_execution_id: e.target.value })}
+                  style={{ fontSize: 11, padding: "4px 8px", borderRadius: 4,
+                    border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer" }}
+                >
+                  <option value="">All strategies</option>
+                  {strategyOptions.map((opt) => (
+                    <option key={opt.execution_id} value={opt.execution_id}>
+                      {opt.execution_id}
+                    </option>
+                  ))}
+                </select>
+              ) : strategyOptions.length === 1 ? (
+                <div style={{ fontSize: 11, color: C.gold, fontWeight: 600 }}>
+                  {position.strategy_tag || strategyOptions[0].execution_id}
+                </div>
+              ) : (
+                <div style={{ fontSize: 10, color: C.faint }}>No open strategy exposures</div>
+              )}
+            </div>
+          )}
+
           {/* Option Type */}
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>OPTION TYPE</div>
@@ -587,7 +642,7 @@ function ExitFlow({ position, onClose, onExited }) {
 
           {/* Quantity */}
           <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>QUANTITY</div>
+            <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.5, marginBottom: 4 }}>QUANTITY (lots)</div>
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
               <button onClick={() => setSelector({ ...selector, quantity_mode: "ALL" })}
                 style={{ fontSize: 10, fontWeight: 600, padding: "4px 8px", borderRadius: 4,
@@ -611,6 +666,11 @@ function ExitFlow({ position, onClose, onExited }) {
                     background: C.surface, color: C.text, border: `1px solid ${C.border}` }} />
               )}
             </div>
+            {selector.quantity_mode === "QUANTITY" && Number(selector.quantity) > 0 && position.lot_size > 0 && (
+              <div style={{ fontSize: 9, color: C.faint, marginTop: 3 }}>
+                = {Number(selector.quantity) * position.lot_size} contracts ({position.lot_size} contracts/lot)
+              </div>
+            )}
           </div>
 
           {/* Preview button */}
@@ -647,7 +707,8 @@ function ExitFlow({ position, onClose, onExited }) {
                     {t.exit_side?.toUpperCase()} {t.option_type === "call" ? "CE" : "PE"}
                   </span></div>
                 <div><span style={{ color: C.faint, fontSize: 9 }}>EXIT QTY</span><br />
-                  <span style={{ fontWeight: 600 }}>{t.quantity} lot{t.quantity !== 1 ? "s" : ""}</span></div>
+                  <span style={{ fontWeight: 600 }}>{t.quantity} lot{t.quantity !== 1 ? "s" : ""}
+                  {t.lot_size > 0 && <span style={{ color: C.faint, fontSize: 9 }}> ({t.quantity * t.lot_size} contracts)</span>}</span></div>
                 <div><span style={{ color: C.faint, fontSize: 9 }}>REMAINING AFTER</span><br />
                   <span style={{ fontWeight: 600 }}>{t.remaining_quantity - t.quantity} lot{(t.remaining_quantity - t.quantity) !== 1 ? "s" : ""}</span></div>
               </div>
