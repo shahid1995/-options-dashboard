@@ -83,7 +83,6 @@ import {
 import {
   templateToFrontendLegs,
   frontendLegsToTemplatePayload,
-  frontendLegsToUpdatePayload,
   legSummary,
   legCountLabel,
 } from "@/lib/templates";
@@ -1229,7 +1228,7 @@ export default function PaperTradingPage() {
     }
   };
 
-  const savedList = [];
+
 
   // ---- Zone C rows: DB journal (source of truth) + any local-only closed
   // trades that never synced (deduped by tradeId). ----
