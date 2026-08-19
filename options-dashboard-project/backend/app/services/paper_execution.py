@@ -1059,6 +1059,7 @@ def get_positions_enriched(
     strategy_execution_id: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    include_closed: bool = False,
 ) -> list[dict]:
     """Enriched positions with strategy leg exposures, orders, and derived fields.
 

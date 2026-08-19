@@ -437,20 +437,25 @@ def positions(
     strategy_execution_id: str | None = Query(default=None, description="Filter by strategy execution ID"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    _all: bool = Query(default=False, alias="all", description="Include closed positions (Positions module)"),
 ):
     """The user's paper positions (server-authoritative).
 
     Phase 6.6.4: enriched with strategy_leg_exposures, orders, side, lots.
     Backward-compatible: no params returns open positions (same as before).
+    ``all=true`` activates the enriched path without a status filter,
+    returning both open and closed positions.
     """
     user_id, _access_token = require_session(session_id)
-    if any([status, symbol, option_type, strategy_execution_id]):
+    use_enriched = _all or any([status, symbol, option_type, strategy_execution_id])
+    if use_enriched:
         from app.services.paper_execution import get_positions_enriched
         return get_positions_enriched(
             user_id, db,
             status=status, symbol=symbol, option_type=option_type,
             strategy_execution_id=strategy_execution_id,
             limit=limit, offset=offset,
+            include_closed=_all,
         )
     return get_open_positions(user_id, db)
 

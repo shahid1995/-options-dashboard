@@ -936,6 +936,20 @@ None. No database changes.
 - Exit controls are not wired in this phase (future Phase 6.6.5+)
 - Strategy filter dropdown is not yet dynamically populated from the backend
 
+### Phase 6.6.4.y — Positions Endpoint Routing Correction
+
+**Problem**: The "All" tab on the Positions page sent `{ limit: 500 }` with no `status` param. The backend router condition `if any([status, symbol, option_type, strategy_execution_id])` did NOT include `limit`, so the request fell through to the legacy `get_open_positions()` path — returning only open positions instead of all.
+
+**Fix** (server-side, authoritative):
+1. Added `all=true` query parameter to `GET /paper/positions` router
+2. Router condition updated: `use_enriched = _all or any([status, symbol, option_type, strategy_execution_id])`
+3. `get_positions_enriched()` gains `include_closed` param (signal only; the service already returns all when no status filter is set)
+4. Frontend "All" tab now sends `all=true` instead of relying on `limit=500`
+5. Counts fetch also uses `all=true`
+6. 15 backend regression tests added proving routing, filtering, pagination, user isolation, and backward compatibility
+
+**Backward compatibility preserved**: `GET /paper/positions` with no params still returns open positions via the legacy path.
+
 ---
 
 ## Phase 6.6.3 — Production-Grade Orders Module & Broker-Ready Order Lifecycle
