@@ -310,6 +310,69 @@ class BulkExitRecord(Base):
     __table_args__ = (UniqueConstraint("user_id", "client_order_id", name="uq_bulk_exit_client_order"),)
 
 
+class StrategyTemplate(Base):
+    """A user-created reusable strategy template (Phase 6.7).
+
+    Stores the named leg configuration so the user can save, edit, duplicate,
+    and re-use custom strategies without re-building them from scratch.
+
+    ``user_id`` enforces strict ownership — one user can never see or modify
+    another user's templates. Editing, renaming, duplicating or deleting a
+    template NEVER affects historical executions, positions, exposures,
+    orders, journal or P&L because there is NO foreign key from
+    ``StrategyExecution`` to ``StrategyTemplate`` — the template is a
+    reusable blueprint, not a live reference.
+    """
+
+    __tablename__ = "strategy_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    symbol: Mapped[str] = mapped_column(String(16), default="NIFTY")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    legs: Mapped[list["StrategyTemplateLeg"]] = relationship(
+        back_populates="template", cascade="all, delete-orphan", order_by="StrategyTemplateLeg.position"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_template_user_name"),
+    )
+
+
+class StrategyTemplateLeg(Base):
+    """One leg of a user-created strategy template (Phase 6.7).
+
+    Each leg stores the fixed-leg definition: side, option type, strike,
+    expiry, quantity, and lot size. ``position`` preserves the user's
+    intended ordering.
+
+    ``strike`` is stored as a fixed numeric value (V1). Future extensions
+    (ATM, spot, delta) will add a ``strike_mode`` discriminator column.
+    ``price`` is informational only — never used for execution; the
+    authoritative fill price is resolved from the live option chain at
+    execution time.
+    """
+
+    __tablename__ = "strategy_template_legs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    template_id: Mapped[int] = mapped_column(ForeignKey("strategy_templates.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)  # ordering
+    action: Mapped[str] = mapped_column(String(8))  # buy | sell
+    option_type: Mapped[str] = mapped_column(String(8))  # call | put
+    strike: Mapped[float] = mapped_column(Float)  # fixed strike
+    expiry: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    quantity: Mapped[int] = mapped_column(Integer, default=1)  # lots
+    lot_size: Mapped[int] = mapped_column(Integer, default=50)  # contracts per lot
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)  # informational only
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    template: Mapped["StrategyTemplate"] = relationship(back_populates="legs")
+
+
 class IVObservation(Base):
     """One stored implied-volatility observation (Phase 4.1 data foundation).
 

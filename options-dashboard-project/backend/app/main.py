@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db import init_db
-from app.routers import auth, chains, paper
+from app.routers import auth, chains, paper, templates
 
 
 @asynccontextmanager
@@ -26,6 +26,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(chains.router, prefix="/chains", tags=["chains"])
 app.include_router(paper.router, prefix="/paper", tags=["paper"])
+app.include_router(templates.router, prefix="/paper", tags=["templates"])
 
 
 @app.get("/health")
