@@ -881,6 +881,63 @@ No commit. No push. Implementation left in the working tree for the owner's revi
 
 No deployment.
 
+
+## Phase 6.6.4 — Production-Grade Positions Module & Broker-Ready Position Lifecycle
+
+### Status: Implemented (working tree — pending review)
+
+### What was built
+
+- **Enhanced backend positions endpoint** (`GET /paper/positions`): backward-compatible; new query params (`status`, `symbol`, `option_type`, `strategy_execution_id`, `limit`, `offset`) enable server-side filtering
+- **`get_positions_enriched()`** (`backend/app/services/paper_execution.py`): batched StrategyLegExposure and PaperOrder enrichment per position, with derived `side` (LONG/SHORT/CLOSED)
+- **Production-grade Positions frontend** (`frontend/app/positions/page.js`):
+  - Execution context banner (PAPER — Simulated)
+  - Tabs: Open | Closed | All (with count badges)
+  - Filters: Symbol, Option Type, Strategy
+  - Summary: open count, long count, short count, realized P&L
+  - Positions table: Side, Symbol, Expiry, Strike, CE/PE, Qty/Lots, Avg Entry, Realized P&L, Strategy, Status
+  - Expanded detail panel: Position, Instrument, Pricing, P&L, Strategy (with leg attribution table), Order Trace (entry/exit orders), Broker
+  - Loading, error, empty states with retry
+- **Frontend tests** (`frontend/app/positions/Positions.test.js`): 45 new tests covering all components, edge cases, and static architecture audit
+- **API function** (`getPaperPositionsFiltered()` in `frontend/lib/api.js`)
+
+### Architecture
+
+```
+GET /paper/positions?status=open&symbol=NIFTY&option_type=call
+    ↓
+get_positions_enriched()
+    ↓
+Position (authoritative net exposure)
+    +
+StrategyLegExposure (batched per-position attribution)
+    +
+PaperOrder (batched entry/exit orders)
+    +
+StrategyExecution (strategy tags)
+    ↓
+Enriched position with side, lots, leg attribution, order trace
+```
+
+### Schema / migration
+
+None. No database changes.
+
+### Automated verification
+
+- Backend: **626/626 tests passed** (unchanged)
+- Frontend: **865/865 tests passed** (45 new in `tests/test_positions_page.js`)
+- `npx next build`: passed; all routes generated
+
+### Known limitations
+
+- Current price (LTP/mark) is N/A server-side — the frontend chain cache supplies it where loaded
+- Unrealized P&L requires market marks — shown as N/A
+- Exit controls are not wired in this phase (future Phase 6.6.5+)
+- Strategy filter dropdown is not yet dynamically populated from the backend
+
+---
+
 ## Phase 6.6.3 — Production-Grade Orders Module & Broker-Ready Order Lifecycle
 
 ### Status: Implemented (working tree — pending review)

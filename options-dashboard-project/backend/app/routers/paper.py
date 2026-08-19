@@ -431,9 +431,27 @@ async def submit_exit_all(
 def positions(
     session_id: str | None = Depends(get_session_id),
     db: Session = Depends(get_db),
+    status: str | None = Query(default=None, description="Filter: open, closed, or omit for all"),
+    symbol: str | None = Query(default=None, description="Filter by symbol (case-insensitive)"),
+    option_type: str | None = Query(default=None, description="Filter by option type (call, put)"),
+    strategy_execution_id: str | None = Query(default=None, description="Filter by strategy execution ID"),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
 ):
-    """The user's OPEN paper positions (server-authoritative)."""
+    """The user's paper positions (server-authoritative).
+
+    Phase 6.6.4: enriched with strategy_leg_exposures, orders, side, lots.
+    Backward-compatible: no params returns open positions (same as before).
+    """
     user_id, _access_token = require_session(session_id)
+    if any([status, symbol, option_type, strategy_execution_id]):
+        from app.services.paper_execution import get_positions_enriched
+        return get_positions_enriched(
+            user_id, db,
+            status=status, symbol=symbol, option_type=option_type,
+            strategy_execution_id=strategy_execution_id,
+            limit=limit, offset=offset,
+        )
     return get_open_positions(user_id, db)
 
 

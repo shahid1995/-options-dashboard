@@ -44,6 +44,7 @@ from app.models import (
     PaperTransaction,
     Position,
     StrategyExecution,
+    StrategyLegExposure,
     Trade,
 )
 from app.schemas import (
@@ -1046,6 +1047,105 @@ def get_open_positions(user_id: str, db: Session) -> list[dict]:
     # Phase 5.2.1: attach the displayed strategy name (never "Custom" for a
     # named strategy; only legacy/missing executions fall back).
     return _attach_strategy_tags(db, user_id, [_serialize_position(p) for p in positions])
+
+
+def get_positions_enriched(
+    user_id: str,
+    db: Session,
+    *,
+    status: str | None = None,
+    symbol: str | None = None,
+    option_type: str | None = None,
+    strategy_execution_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    """Enriched positions with strategy leg exposures, orders, and derived fields.
+
+    Phase 6.6.4: production-grade positions endpoint supporting:
+    - status filter: "open" | "closed" | None (all)
+    - symbol filter (case-insensitive)
+    - option_type filter (call/put)
+    - strategy_execution_id filter
+    - pagination via limit/offset
+    - batched strategy_leg_exposures per position
+    - batched entry/exit orders per position
+    - derived side (LONG/SHORT) from net_quantity
+    - lot_size information (qty / lot_size = lots)
+    """
+    stmt = select(Position).where(Position.user_id == user_id)
+    if status == "open":
+        stmt = stmt.where(Position.status == "open", Position.net_quantity != 0)
+    elif status == "closed":
+        stmt = stmt.where(Position.status == "closed")
+    if symbol:
+        stmt = stmt.where(Position.symbol == symbol.upper())
+    if option_type:
+        stmt = stmt.where(Position.option_type == option_type.lower())
+    if strategy_execution_id:
+        stmt = stmt.where(Position.strategy_execution_id == strategy_execution_id)
+    stmt = stmt.order_by(Position.opened_at.desc()).limit(limit).offset(offset)
+    positions = list(db.scalars(stmt).all())
+
+    if not positions:
+        return []
+
+    position_ids = [p.id for p in positions]
+
+    # Batched: StrategyLegExposures for all positions
+    exposure_rows = list(
+        db.scalars(
+            select(StrategyLegExposure).where(
+                StrategyLegExposure.user_id == user_id,
+                StrategyLegExposure.position_id.in_(position_ids),
+            ).order_by(StrategyLegExposure.id.asc())
+        ).all()
+    )
+    exposures_by_pos: dict[int, list[dict]] = {}
+    for exp in exposure_rows:
+        exposures_by_pos.setdefault(exp.position_id, []).append({
+            "id": exp.id,
+            "execution_id": exp.execution_id,
+            "action": exp.action,
+            "original_quantity": exp.original_quantity,
+            "remaining_quantity": exp.remaining_quantity,
+            "status": exp.status,
+        })
+
+    # Batched: orders for all positions
+    order_rows = list(
+        db.scalars(
+            select(PaperOrder).where(
+                PaperOrder.user_id == user_id,
+                PaperOrder.position_id.in_(position_ids),
+            ).order_by(PaperOrder.id.asc())
+        ).all()
+    )
+    orders_by_pos: dict[int, list[dict]] = {}
+    for o in order_rows:
+        orders_by_pos.setdefault(o.position_id, []).append(_serialize_order(o))
+
+    # StrategyExecution tags
+    exec_ids = {p.strategy_execution_id for p in positions if p.strategy_execution_id}
+    tags: dict[str, str] = {}
+    if exec_ids:
+        rows = db.execute(
+            select(StrategyExecution.execution_id, StrategyExecution.strategy_tag).where(
+                StrategyExecution.user_id == user_id,
+                StrategyExecution.execution_id.in_(exec_ids),
+            )
+        ).all()
+        tags = {r[0]: r[1] or "Custom" for r in rows}
+
+    result = []
+    for p in positions:
+        d = _serialize_position(p)
+        d["strategy_tag"] = tags.get(p.strategy_execution_id, "Custom")
+        d["side"] = "LONG" if p.net_quantity > 0 else "SHORT" if p.net_quantity < 0 else "CLOSED"
+        d["strategy_leg_exposures"] = exposures_by_pos.get(p.id, [])
+        d["orders"] = orders_by_pos.get(p.id, [])
+        result.append(d)
+    return result
 
 
 def get_order_history(
