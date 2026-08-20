@@ -30,6 +30,14 @@ export function templateLegToFrontend(leg) {
     price: leg.price ?? 0,
     templateLegId: leg.id, // keep backend id for re-saving
     lotSize: leg.lot_size, // preserve lot_size from template
+    // Phase 6.8D: dynamic formula fields
+    strikeMode: leg.strike_mode || "fixed",
+    strikeOffset: leg.strike_offset ?? null,
+    targetDelta: leg.target_delta ?? null,
+    expiryMode: leg.expiry_mode || "fixed",
+    expiryDteMin: leg.expiry_dte_min ?? null,
+    expiryDteMax: leg.expiry_dte_max ?? null,
+    formulaVersion: leg.formula_version || 1,
   };
 }
 
@@ -69,16 +77,30 @@ export function frontendLegsToTemplatePayload(name, symbol, legs) {
   return {
     name,
     symbol: symbol || "NIFTY",
-    legs: legs.map((l, i) => ({
-      action: l.action,
-      option_type: l.type,
-      strike: l.strike,
-      expiry: l.expiry,
-      quantity: l.qty,
-      lot_size: l.lotSize || 50,
-      price: l.price ?? 0,
-      position: i,
-    })),
+    legs: legs.map((l, i) => {
+      const leg = {
+        action: l.action,
+        option_type: l.type,
+        strike: l.strike,
+        expiry: l.expiry,
+        quantity: l.qty,
+        lot_size: l.lotSize || 50,
+        price: l.price ?? 0,
+        position: i,
+      };
+      // Phase 6.8D: include dynamic formula fields when non-default
+      const sm = l.strikeMode || "fixed";
+      const em = l.expiryMode || "fixed";
+      if (sm !== "fixed" || em !== "fixed") {
+        leg.strike_mode = sm;
+        leg.expiry_mode = em;
+        if (l.strikeOffset != null) leg.strike_offset = l.strikeOffset;
+        if (l.targetDelta != null) leg.target_delta = l.targetDelta;
+        if (l.expiryDteMin != null) leg.expiry_dte_min = l.expiryDteMin;
+        if (l.expiryDteMax != null) leg.expiry_dte_max = l.expiryDteMax;
+      }
+      return leg;
+    }),
   };
 }
 
@@ -90,16 +112,30 @@ export function frontendLegsToUpdatePayload(name, symbol, legs) {
   const payload = {};
   if (name !== undefined) payload.name = name;
   if (symbol !== undefined) payload.symbol = symbol;
-  if (legs !== undefined) payload.legs = legs.map((l, i) => ({
-    action: l.action,
-    option_type: l.type,
-    strike: l.strike,
-    expiry: l.expiry,
-    quantity: l.qty,
-    lot_size: l.lotSize || 50,
-    price: l.price ?? 0,
-    position: i,
-  }));
+  if (legs !== undefined) payload.legs = legs.map((l, i) => {
+    const leg = {
+      action: l.action,
+      option_type: l.type,
+      strike: l.strike,
+      expiry: l.expiry,
+      quantity: l.qty,
+      lot_size: l.lotSize || 50,
+      price: l.price ?? 0,
+      position: i,
+    };
+    // Phase 6.8D: include dynamic formula fields when non-default
+    const sm = l.strikeMode || "fixed";
+    const em = l.expiryMode || "fixed";
+    if (sm !== "fixed" || em !== "fixed") {
+      leg.strike_mode = sm;
+      leg.expiry_mode = em;
+      if (l.strikeOffset != null) leg.strike_offset = l.strikeOffset;
+      if (l.targetDelta != null) leg.target_delta = l.targetDelta;
+      if (l.expiryDteMin != null) leg.expiry_dte_min = l.expiryDteMin;
+      if (l.expiryDteMax != null) leg.expiry_dte_max = l.expiryDteMax;
+    }
+    return leg;
+  });
   return payload;
 }
 
@@ -110,7 +146,11 @@ export function frontendLegsToUpdatePayload(name, symbol, legs) {
 export function legSummary(legs) {
   if (!legs || legs.length === 0) return "Empty";
   return legs
-    .map((l) => `${l.action.toUpperCase()} ${l.strike} ${l.type === "call" ? "CE" : "PE"} ×${l.qty}`)
+    .map((l) => {
+      const sm = l.strikeMode || "fixed";
+      const strikeLabel = sm === "fixed" ? l.strike : sm.toUpperCase();
+      return `${l.action.toUpperCase()} ${strikeLabel} ${l.type === "call" ? "CE" : "PE"} ×${l.qty}`;
+    })
     .join(" · ");
 }
 

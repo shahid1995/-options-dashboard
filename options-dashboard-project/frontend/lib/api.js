@@ -171,3 +171,11 @@ export const duplicateStrategyTemplate = (id, newName) =>
 export const deleteStrategyTemplate = (id) =>
   api.delete(`/paper/templates/${id}`).then((r) => r.data);
 
+// ---- Phase 6.8C/6.8D: strategy resolution API ----
+
+export const resolveInlineLegs = (payload) =>
+  api.post("/paper/resolve", payload).then((r) => r.data);
+
+export const resolveTemplateLegs = (templateId) =>
+  api.post(`/paper/templates/${templateId}/resolve`).then((r) => r.data);
+
