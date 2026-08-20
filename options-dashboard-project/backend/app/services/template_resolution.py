@@ -83,6 +83,7 @@ class ResolutionResult:
     warnings: list[str] = field(default_factory=list)
     template_id: int | None = None
     template_name: str | None = None
+    chain_strike_step: float | None = None  # min strike spacing from the chain
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +191,10 @@ def build_leg_formula(leg_data: dict) -> LegFormula:
     except ValueError:
         expiry_mode = ExpiryMode.FIXED
 
+    # strike_offset is overloaded in the input dict: it carries rupee offset
+    # for atm_offset/spot_offset modes AND step count for atm_offset_steps.
+    # Route to the correct LegFormula field based on the resolved strike mode.
+    raw_offset = leg_data.get("strike_offset")
     return LegFormula(
         action=leg_data["action"],
         option_type=leg_data["option_type"],
@@ -197,8 +202,8 @@ def build_leg_formula(leg_data: dict) -> LegFormula:
         lot_size=leg_data.get("lot_size", 50),
         strike_mode=strike_mode,
         strike=leg_data.get("strike"),
-        strike_offset=leg_data.get("strike_offset"),
-        strike_offset_steps=leg_data.get("strike_offset"),
+        strike_offset=raw_offset if strike_mode in (StrikeMode.ATM_OFFSET, StrikeMode.SPOT_OFFSET) else None,
+        strike_offset_steps=int(raw_offset) if strike_mode == StrikeMode.ATM_OFFSET_STEPS and raw_offset is not None else None,
         target_delta=leg_data.get("target_delta"),
         expiry_mode=expiry_mode,
         expiry=leg_data.get("expiry"),
@@ -299,6 +304,25 @@ async def resolve_legs(
             template_id=template_id,
             template_name=template_name,
         )
+
+    # Compute chain strike step from the first available chain.
+    # Defensive: filter non-numeric, deduplicate, only positive diffs.
+    chain_strike_step = None
+    for chain in chains.values():
+        raw_strikes = []
+        for r in chain.get("chain", []):
+            s = r.get("strike")
+            if isinstance(s, (int, float)) and s > 0:
+                raw_strikes.append(s)
+        strikes = sorted(set(raw_strikes))
+        if len(strikes) >= 2:
+            positive_diffs = [
+                strikes[i + 1] - strikes[i]
+                for i in range(len(strikes) - 1)
+                if strikes[i + 1] > strikes[i]
+            ]
+            chain_strike_step = min(positive_diffs) if positive_diffs else None
+            break
 
     # Step 3: Resolve each leg
     resolved_legs: list[ResolvedLegOutput] = []
@@ -429,4 +453,207 @@ async def resolve_legs(
         warnings=all_warnings,
         template_id=template_id,
         template_name=template_name,
+        chain_strike_step=chain_strike_step,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6.9: Execution-time resolution bridge
+# ---------------------------------------------------------------------------
+
+
+def compare_resolutions(
+    preview_legs: list[dict],
+    fresh_result: ResolutionResult,
+) -> list[dict]:
+    """Compare preview resolution against fresh execution-time resolution.
+
+    Returns a list of change dicts: [{position, field, preview_value, fresh_value}].
+    """
+    changes = []
+    fresh_by_pos = {leg.position: leg for leg in fresh_result.legs}
+    for preview_leg in preview_legs:
+        pos = preview_leg.get("position", 0)
+        fresh = fresh_by_pos.get(pos)
+        if fresh is None:
+            continue
+        preview_strike = preview_leg.get("resolved_strike")
+        preview_expiry = preview_leg.get("resolved_expiry")
+        if preview_strike is not None and fresh.resolved_strike != preview_strike:
+            changes.append({
+                "position": pos,
+                "field": "strike",
+                "preview_value": preview_strike,
+                "fresh_value": fresh.resolved_strike,
+            })
+        if preview_expiry is not None and fresh.resolved_expiry != preview_expiry:
+            changes.append({
+                "position": pos,
+                "field": "expiry",
+                "preview_value": preview_expiry,
+                "fresh_value": fresh.resolved_expiry,
+            })
+    return changes
+
+
+def resolution_changes_status(changes: list[dict]) -> str:
+    """Determine the change status from a list of detected changes."""
+    if not changes:
+        return "UNCHANGED"
+    has_strike = any(c["field"] == "strike" for c in changes)
+    has_expiry = any(c["field"] == "expiry" for c in changes)
+    if has_strike and has_expiry:
+        return "CHANGED_BOTH"
+    if has_strike:
+        return "CHANGED_STRIKE"
+    return "CHANGED_EXPIRY"
+
+
+def build_execution_legs_from_resolution(
+    resolved_legs: list[ResolvedLegOutput],
+    symbol: str,
+) -> list[dict]:
+    """Convert resolved legs to ExecutionLegIn-compatible dicts."""
+    return [
+        {
+            "symbol": symbol,
+            "expiration_date": leg.resolved_expiry,
+            "strike_price": leg.resolved_strike,
+            "option_type": leg.option_type,
+            "action": leg.action,
+            "quantity": leg.quantity,
+            "lot_size": leg.lot_size,
+        }
+        for leg in resolved_legs
+    ]
+
+
+def _is_one_strike_step(
+    preview_strike: float,
+    fresh_strike: float,
+    chain_step: float | None,
+) -> bool:
+    """Determine if a strike change is within one chain strike step.
+
+    Uses the actual chain strike spacing, not a hardcoded value.
+    When chain_step is unknown, treats any change as material.
+    """
+    if chain_step is None or chain_step <= 0:
+        return False  # Unknown step → treat as material change
+    diff = abs(fresh_strike - preview_strike)
+    return diff <= chain_step + 0.001  # small epsilon for float comparison
+
+
+def validate_execution_resolution(
+    fresh_result: ResolutionResult,
+    confirmed_strikes: dict[int, float] | None = None,
+    confirmed_expiries: dict[int, str] | None = None,
+    changes: list[dict] | None = None,
+) -> tuple[bool, list[str]]:
+    """Validate that a fresh resolution is safe to execute.
+
+    Defense-in-depth: always compares confirmed values against the fresh
+    resolution. Never trusts a boolean — validates actual reviewed values.
+
+    One-strike-step policy:
+      - Strike within 1 chain step of preview: auto-execute (no confirmation needed)
+      - Strike > 1 chain step from preview: block, require explicit confirmation
+      - Expiry changed: always block, require explicit confirmation
+
+    If confirmed values are provided but don't match the fresh resolution,
+    execution is blocked (old confirmation ≠ new resolution authorization).
+
+    Returns (ok, errors).
+    """
+    errors = []
+    chain_step = fresh_result.chain_strike_step
+
+    # 1. Resolution must have succeeded
+    if fresh_result.status == "FAILED":
+        errors.extend(fresh_result.errors)
+        return False, errors
+
+    # 2. All legs must be resolved
+    if not fresh_result.legs:
+        errors.append("No legs could be resolved.")
+        return False, errors
+
+    # 3. All prices must be available (not stale, not unavailable)
+    for leg in fresh_result.legs:
+        if leg.price_status == "unavailable":
+            errors.append(
+                f"Market data unavailable for {leg.option_type.upper()} "
+                f"{leg.resolved_strike:g} ({leg.resolved_expiry})."
+            )
+        elif leg.price_status == "stale":
+            errors.append(
+                f"Market data is stale for {leg.option_type.upper()} "
+                f"{leg.resolved_strike:g} ({leg.resolved_expiry}). "
+                f"Please refresh and try again."
+            )
+
+    # 4. Compare confirmed values against fresh resolution.
+    #    The frontend always sends the preview's resolved values as the
+    #    confirmation baseline. The server compares these against the fresh
+    #    resolution to detect material changes.
+    #
+    #    Policy:
+    #      a) No confirmed values provided → reject (TOCTOU protection)
+    #      b) Confirmed value matches fresh → OK
+    #      c) Confirmed value differs from fresh:
+    #         - Strike within 1 chain step → auto-execute (small ATM drift)
+    #         - Strike > 1 chain step → block, needs re-confirmation
+    #         - Expiry changed → always block, needs re-confirmation
+    if changes:
+        if not confirmed_strikes and not confirmed_expiries:
+            errors.append(
+                "Resolution has changed since preview but no confirmation was provided. "
+                "Please re-preview and confirm the updated values."
+            )
+            return False, errors
+
+        for change in changes:
+            pos = change["position"]
+            fresh_leg = next((l for l in fresh_result.legs if l.position == pos), None)
+            if fresh_leg is None:
+                continue
+
+            if change["field"] == "strike":
+                confirmed_strike = confirmed_strikes.get(pos) if confirmed_strikes else None
+                if confirmed_strike is not None:
+                    # Confirmed value exists — compare against fresh
+                    if confirmed_strike == fresh_leg.resolved_strike:
+                        continue  # Exact match — OK
+                    # Confirmed value differs from fresh — check one-step policy
+                    if _is_one_strike_step(confirmed_strike, fresh_leg.resolved_strike, chain_step):
+                        continue  # Within 1 chain step — auto-execute
+                    # Material change — block
+                    errors.append(
+                        f"Strike for leg {pos + 1} changed from {confirmed_strike:g} "
+                        f"to {fresh_leg.resolved_strike:g} (>{1 if chain_step is None else round((fresh_leg.resolved_strike - confirmed_strike) / chain_step, 1):g} chain steps). "
+                        f"Please re-preview and confirm."
+                    )
+                else:
+                    # No confirmed value for a changed strike — block
+                    errors.append(
+                        f"Strike for leg {pos + 1} changed ({change['preview_value']:g} → "
+                        f"{change['fresh_value']:g}) but no confirmation was provided."
+                    )
+
+            elif change["field"] == "expiry":
+                confirmed_expiry = confirmed_expiries.get(pos) if confirmed_expiries else None
+                if confirmed_expiry is not None:
+                    if confirmed_expiry == fresh_leg.resolved_expiry:
+                        continue  # Exact match — OK
+                    # Expiry changed — always block (no one-step tolerance for expiry)
+                    errors.append(
+                        f"Expiry for leg {pos + 1} changed from {confirmed_expiry} "
+                        f"to {fresh_leg.resolved_expiry}. Please re-preview and confirm."
+                    )
+                else:
+                    errors.append(
+                        f"Expiry for leg {pos + 1} changed ({change['preview_value']} → "
+                        f"{change['fresh_value']}) but no confirmation was provided."
+                    )
+
+    return len(errors) == 0, errors

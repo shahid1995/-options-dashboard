@@ -179,3 +179,11 @@ export const resolveInlineLegs = (payload) =>
 export const resolveTemplateLegs = (templateId) =>
   api.post(`/paper/templates/${templateId}/resolve`).then((r) => r.data);
 
+// ---- Phase 6.9: dynamic template execution bridge ----
+
+export const executeTemplatePreview = (templateId) =>
+  api.post(`/paper/templates/${templateId}/execute/preview`).then((r) => r.data);
+
+export const executeTemplate = (templateId, payload) =>
+  api.post(`/paper/templates/${templateId}/execute`, payload).then((r) => r.data);
+

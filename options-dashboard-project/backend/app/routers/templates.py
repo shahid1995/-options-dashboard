@@ -14,12 +14,16 @@ from app.models import StrategyTemplate, StrategyTemplateLeg
 from app.routers.deps import get_session_id
 from app.routers.paper import require_session
 from app.schemas import (
+    ExecutionOut,
     ResolutionLegOut,
     ResolutionOut,
+    ResolutionChangeOut,
     StrategyTemplateCreateIn,
     StrategyTemplateLegOut,
     StrategyTemplateOut,
     StrategyTemplateUpdateIn,
+    TemplateExecutePreviewOut,
+    TemplateExecuteRequestIn,
 )
 
 router = APIRouter()
@@ -406,3 +410,210 @@ async def resolve_template(
         template_id=result.template_id,
         template_name=result.template_name,
     )
+
+
+# ---- Phase 6.9: Dynamic template execution bridge ----------------------------
+
+
+def _template_to_legs(template: StrategyTemplate) -> list[dict]:
+    """Convert a template's legs to the dict format expected by resolve_legs()."""
+    return [
+        {
+            "position": leg.position,
+            "action": leg.action,
+            "option_type": leg.option_type,
+            "strike": leg.strike,
+            "expiry": leg.expiry,
+            "quantity": leg.quantity,
+            "lot_size": leg.lot_size,
+            "strike_mode": getattr(leg, "strike_mode", "fixed"),
+            "strike_offset": getattr(leg, "strike_offset", None),
+            "target_delta": getattr(leg, "target_delta", None),
+            "expiry_mode": getattr(leg, "expiry_mode", "fixed"),
+            "expiry_dte_min": getattr(leg, "expiry_dte_min", None),
+            "expiry_dte_max": getattr(leg, "expiry_dte_max", None),
+        }
+        for leg in template.legs
+    ]
+
+
+def _resolution_to_leg_outs(result) -> list[ResolutionLegOut]:
+    """Convert ResolutionResult legs to ResolutionLegOut schema objects."""
+    return [
+        ResolutionLegOut(
+            position=leg.position,
+            action=leg.action,
+            option_type=leg.option_type,
+            quantity=leg.quantity,
+            lot_size=leg.lot_size,
+            resolved_strike=leg.resolved_strike,
+            resolved_expiry=leg.resolved_expiry,
+            strike_mode_used=leg.strike_mode_used,
+            expiry_mode_used=leg.expiry_mode_used,
+            current_price=leg.current_price,
+            price_status=leg.price_status,
+            quote_timestamp=leg.quote_timestamp,
+            ltp=leg.ltp,
+            warnings=leg.warnings,
+            symbol=leg.symbol,
+            expiration_date=leg.expiration_date,
+            strike_price=leg.strike_price,
+        )
+        for leg in result.legs
+    ]
+
+
+@router.post(
+    "/templates/{template_id}/execute/preview",
+    response_model=TemplateExecutePreviewOut,
+)
+async def execute_template_preview(
+    template_id: int,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """POST /paper/templates/:id/execute/preview — Pre-execution resolution.
+
+    Read-only: resolves all legs against the live chain and returns the
+    fresh resolution. The frontend compares this against the displayed
+    preview to detect changes before the user confirms execution.
+    """
+    from app.services.template_resolution import (
+        compare_resolutions,
+        resolution_changes_status,
+        resolve_legs,
+    )
+
+    user_id, access_token = require_session(session_id)
+    template = _get_user_template(db, user_id, template_id)
+    legs = _template_to_legs(template)
+
+    fresh_result = await resolve_legs(
+        access_token=access_token,
+        symbol=template.symbol,
+        legs=legs,
+        template_id=template.id,
+        template_name=template.name,
+    )
+
+    leg_outs = _resolution_to_leg_outs(fresh_result)
+
+    # For change detection, we compare against the template's stored
+    # strike/expiry values (which represent the last preview).
+    preview_legs = [
+        {"position": leg.position, "resolved_strike": leg.strike, "resolved_expiry": leg.expiry}
+        for leg in template.legs
+    ]
+    changes = compare_resolutions(preview_legs, fresh_result)
+    status = resolution_changes_status(changes)
+    if fresh_result.status == "FAILED":
+        status = "FAILED"
+
+    return TemplateExecutePreviewOut(
+        status=status,
+        symbol=template.symbol,
+        template_id=template.id,
+        legs=leg_outs,
+        changes=changes,
+        errors=fresh_result.errors,
+        warnings=fresh_result.warnings,
+    )
+
+
+@router.post(
+    "/templates/{template_id}/execute",
+    response_model=ExecutionOut,
+)
+async def execute_template(
+    template_id: int,
+    request: TemplateExecuteRequestIn,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """POST /paper/templates/:id/execute — Execute a V2 dynamic template.
+
+    Server re-resolves all legs against live broker data, validates the
+    resolution (prices available, not stale), and executes atomically via
+    the existing paper execution engine.
+
+    CRITICAL: This NEVER resolves from client-supplied strike/expiry.
+    Resolution is always fresh from the broker chain.
+    """
+    from app.routers.paper import require_market_open
+    from app.services.template_resolution import (
+        build_execution_legs_from_resolution,
+        compare_resolutions,
+        resolution_changes_status,
+        resolve_legs,
+        validate_execution_resolution,
+    )
+    from app.services.paper_execution import execute_strategy
+
+    user_id, access_token = require_session(session_id)
+    await require_market_open(access_token)
+
+    template = _get_user_template(db, user_id, template_id)
+    legs = _template_to_legs(template)
+
+    # Fresh resolution against live chain
+    fresh_result = await resolve_legs(
+        access_token=access_token,
+        symbol=template.symbol,
+        legs=legs,
+        template_id=template.id,
+        template_name=template.name,
+    )
+
+    # Detect changes from preview
+    preview_legs = [
+        {"position": leg.position, "resolved_strike": leg.strike, "resolved_expiry": leg.expiry}
+        for leg in template.legs
+    ]
+    changes = compare_resolutions(preview_legs, fresh_result)
+
+    # Validate resolution is safe to execute
+    ok, validation_errors = validate_execution_resolution(
+        fresh_result,
+        confirmed_strikes=request.confirmed_strikes,
+        confirmed_expiries=request.confirmed_expiries,
+        changes=changes,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=";".join(validation_errors))
+
+    # Build ExecutionLegIn-compatible legs from resolution
+    exec_legs = build_execution_legs_from_resolution(fresh_result.legs, template.symbol)
+
+    # Build leg-like objects for resolve_market_prices (needs attribute access)
+    class _Leg:
+        def __init__(self, d):
+            self.expiration_date = d["expiration_date"]
+            self.strike_price = d["strike_price"]
+            self.option_type = d["option_type"]
+
+    price_legs = [_Leg(leg) for leg in exec_legs]
+
+    # Resolve authoritative fill prices from the resolved expiry chains.
+    # Wrapped in PaperExecutionError handling matching the V1 /paper/executions
+    # pattern — produces structured 409/502 errors instead of raw 500.
+    from app.routers.paper import _paper_error, resolve_market_prices
+    from app.services.paper_execution import PaperExecutionError
+
+    try:
+        prices = await resolve_market_prices(access_token, template.symbol, price_legs)
+
+        # Build the execution request
+        from app.schemas import ExecutionLegIn, ExecutionRequestIn
+
+        exec_request = ExecutionRequestIn(
+            client_order_id=request.client_order_id,
+            symbol=template.symbol,
+            strategy_tag=template.name,
+            strategy_id=str(template.id),
+            starting_capital=request.starting_capital,
+            legs=[ExecutionLegIn(**leg) for leg in exec_legs],
+        )
+
+        return execute_strategy(user_id, exec_request, db, prices)
+    except PaperExecutionError as exc:
+        raise _paper_error(exc) from exc

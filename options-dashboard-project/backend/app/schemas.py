@@ -1071,3 +1071,48 @@ class ResolutionOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     template_id: int | None = None
     template_name: str | None = None
+
+
+# ---- Phase 6.9: Dynamic template execution bridge --------------------------------
+
+
+class TemplateExecuteRequestIn(BaseModel):
+    """POST /paper/templates/:id/execute — Execute a V2 dynamic template.
+
+    Server re-resolves all legs against live broker data, validates the
+    resolution, and executes atomically. The ``client_order_id`` provides
+    idempotency: a retry returns the original execution.
+    """
+
+    client_order_id: str = Field(..., min_length=8, max_length=64)
+    starting_capital: float | None = Field(default=None, gt=0)
+    # When the preview detected changes, the frontend sends the values
+    # the user explicitly confirmed so the server can verify they still
+    # match the current resolution.
+    confirmed_strikes: dict[int, float] | None = None   # position → accepted strike
+    confirmed_expiries: dict[int, str] | None = None    # position → accepted expiry
+
+
+class ResolutionChangeOut(BaseModel):
+    """One detected change between preview and fresh execution-time resolution."""
+
+    position: int
+    field: str  # "strike" | "expiry"
+    preview_value: str | float
+    fresh_value: str | float
+
+
+class TemplateExecutePreviewOut(BaseModel):
+    """POST /paper/templates/:id/execute/preview — Pre-execution resolution.
+
+    Read-only: resolves all legs against live chain and compares against
+    the last preview. Returns the fresh resolution plus any detected changes.
+    """
+
+    status: str  # UNCHANGED | CHANGED_STRIKE | CHANGED_EXPIRY | CHANGED_BOTH | FAILED
+    symbol: str
+    template_id: int
+    legs: list[ResolutionLegOut] = Field(default_factory=list)
+    changes: list[ResolutionChangeOut] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

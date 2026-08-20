@@ -80,12 +80,15 @@ import {
   duplicateStrategyTemplate,
   deleteStrategyTemplate,
   resolveTemplateLegs,
+  executeTemplatePreview,
+  executeTemplate,
 } from "@/lib/api";
 import {
   templateToFrontendLegs,
   frontendLegsToTemplatePayload,
   legSummary,
   legCountLabel,
+  detectResolutionChanges,
 } from "@/lib/templates";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
 import {
@@ -167,8 +170,13 @@ export default function PaperTradingPage() {
   const [dynamicResolution, setDynamicResolution] = useState(null); // last resolution result
   const [dynamicResolutionLoading, setDynamicResolutionLoading] = useState(false);
   const [dynamicResolutionError, setDynamicResolutionError] = useState(null);
-  const [dynamicTemplateId, setDynamicTemplateId] = useState(null); // currently loaded dynamic template ID
-  const [dynamicResolutionSnapshot, setDynamicResolutionSnapshot] = useState(null); // snapshot for change detection
+  const [dynamicTemplateId, setDynamicTemplateId] = useState(null); // currently loaded dynamic template ID  const [dynamicResolutionSnapshot, setDynamicResolutionSnapshot] = useState(null); // snapshot for change detection
+  // Phase 6.9: execution-time change confirmation state
+  const [executePreviewResult, setExecutePreviewResult] = useState(null);
+  const [executeConfirmOpen, setExecuteConfirmOpen] = useState(false);
+  const [executeConfirmLoading, setExecuteConfirmLoading] = useState(false);
+
+
   const [fundsOpen, setFundsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [spotChg, setSpotChg] = useState(null);
@@ -809,9 +817,103 @@ export default function PaperTradingPage() {
 
   const cancelReview = () => setReviewOpen(false);
 
+  // Phase 6.9: V2 execution path — preview → confirm → execute
+  // Always sends the preview's resolved values as the confirmation baseline,
+  // even for UNCHANGED. The server compares these against the fresh resolution
+  // to detect material changes (TOCTOU protection).
+  const buildPreviewConfirmation = (previewLegs) => {
+    const strikes = {};
+    const expiries = {};
+    (previewLegs || []).forEach((leg) => {
+      strikes[leg.position] = leg.resolved_strike;
+      expiries[leg.position] = leg.resolved_expiry;
+    });
+    return { strikes, expiries };
+  };
+
+  const executeWithPreview = async () => {
+    if (!dynamicTemplateId || orderInFlightRef.current) return;
+    setExecuteConfirmLoading(true);
+    try {
+      const preview = await executeTemplatePreview(dynamicTemplateId);
+      if (preview.status === "FAILED") {
+        alert(preview.errors?.join("\n") || "Resolution failed.");
+        return;
+      }
+      // Always build confirmation from preview legs — even UNCHANGED
+      const previewConfirmation = buildPreviewConfirmation(preview.legs);
+
+      if (preview.status === "UNCHANGED") {
+        // No changes detected — execute with preview values as confirmation baseline
+        await doExecuteV2(preview, previewConfirmation);
+        return;
+      }
+      // Changes detected — show confirmation dialog
+      setExecutePreviewResult(preview);
+      setExecuteConfirmOpen(true);
+    } catch (e) {
+      if (isAuthError(e)) { setSessionExpired(true); return; }
+      alert(paperErrorMessage(e));
+    } finally {
+      setExecuteConfirmLoading(false);
+    }
+  };
+
+  const doExecuteV2 = async (preview, confirmed) => {
+    const clientOrderId = `exec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await executeTemplate(dynamicTemplateId, {
+        client_order_id: clientOrderId,
+        starting_capital: paperStartingCapital,
+        confirmed_strikes: confirmed.strikes || null,
+        confirmed_expiries: confirmed.expiries || null,
+      });
+    } catch (e) {
+      if (isAuthError(e)) { setSessionExpired(true); return; }
+      alert(paperErrorMessage(e));
+      return;
+    }
+    await Promise.all([loadPortfolio(), loadJournal()]);
+    resetBuilderState();
+    setExecuteConfirmOpen(false);
+    setExecutePreviewResult(null);
+  };
+
   const confirmExecute = async () => {
     if (orderInFlightRef.current) return;
+    // V2 dynamic templates go through the preview → confirm → execute path
+    if (dynamicTemplateId) {
+      orderInFlightRef.current = true;
+      setOrderInFlight(true);
+      try {
+        const gateMsg = await assertMarketOpen();
+        if (gateMsg) { alert(gateMsg); return; }
+        await executeWithPreview();
+      } finally {
+        orderInFlightRef.current = false;
+        setOrderInFlight(false);
+      }
+      return;
+    }
+    // V1 and custom legs go through the existing path
     await executeTradeAll();
+  };
+
+  const resetBuilderState = () => {
+    setLegs([]);
+    setStrategyName(null);
+    setStrategyId(newStrategyId());
+    setStrategyCreatedAt(new Date().toISOString());
+    setStrategySource("custom");
+    setReviewOpen(false);
+    setShift(0);
+    setWidth(0);
+    setHedge(0);
+    setShowAddLeg(false);
+    setDynamicTemplateId(null);
+    setDynamicResolution(null);
+    setDynamicResolutionSnapshot(null);
+    setDynamicResolutionError(null);
   };
 
   const closePosition = async (id, qty) => {
@@ -1160,7 +1262,7 @@ export default function PaperTradingPage() {
     try {
       const result = await resolveTemplateLegs(templateId);
       // Snapshot the previous resolution for change detection
-      setDynamicResolutionSnapshot((prev) => ({ ...prev }));
+      setDynamicResolutionSnapshot((prev) => (prev ? JSON.parse(JSON.stringify(prev)) : null));
       setDynamicResolution(result);
     } catch (e) {
       setDynamicResolutionError(e.response?.data?.detail || e.message || "Resolution failed");
@@ -2303,6 +2405,40 @@ export default function PaperTradingPage() {
                     {dynamicResolution.warnings.join(" \u00b7 ")}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Phase 6.9: Execution change confirmation dialog */}
+            {executeConfirmOpen && executePreviewResult && (
+              <div style={{ background: C.surface2, border: `1px solid ${C.gold}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, marginBottom: 6 }}>⚠ EXECUTION CHANGED SINCE PREVIEW</div>
+                {executePreviewResult.changes.map((c, i) => (
+                  <div key={i} style={{ fontSize: 10.5, color: C.text, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 600 }}>Leg {c.position + 1} {c.field}:</span>{" "}
+                    <span style={{ color: C.muted, textDecoration: "line-through" }}>{String(c.preview_value)}</span>
+                    {' → '}<span style={{ color: C.gold, fontWeight: 600 }}>{String(c.fresh_value)}</span>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                  <button
+                    onClick={() => {
+                      // Send ALL legs' resolved values as confirmation baseline
+                      const confirmed = buildPreviewConfirmation(executePreviewResult.legs);
+                      doExecuteV2(executePreviewResult, confirmed);
+                    }}
+                    disabled={executeConfirmLoading}
+                    style={{ fontSize: 10.5, fontWeight: 700, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 6, padding: "5px 12px", cursor: executeConfirmLoading ? "not-allowed" : "pointer" }}
+                  >
+                    {executeConfirmLoading ? "Executing…" : "Confirm & Execute"}
+                  </button>
+                  <button
+                    onClick={() => { setExecuteConfirmOpen(false); setExecutePreviewResult(null); }}
+                    disabled={executeConfirmLoading}
+                    style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
 

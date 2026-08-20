@@ -106,9 +106,12 @@ def _get_ltp(chain, strike, option_type):
 class TestServiceChainSelection:
     """resolve_legs() must use the resolved expiry's chain for price extraction."""
 
+    @patch("app.services.template_resolution.date")
     @patch("app.services.template_resolution.fetch_chain_for_expiry")
     @patch("app.services.template_resolution.fetch_available_expiries")
-    async def test_current_week_uses_correct_chain(self, mock_exp, mock_chain):
+    async def test_current_week_uses_correct_chain(self, mock_exp, mock_chain, mock_date):
+        mock_date.today.return_value = date(2026, 8, 19)
+        mock_date.side_effect = lambda *a, **k: date(*a, **k)
         mock_exp.return_value = ALL_EXPIRIES
         mock_chain.side_effect = _mock_chains(CHAINS)
 
@@ -127,9 +130,12 @@ class TestServiceChainSelection:
         # LTP must be 100.0 (from CW chain), not 200.0 (NW) or 50.0 (MTH)
         assert leg.current_price == 100.0, f"Expected 100.0 from CW chain, got {leg.current_price}"
 
+    @patch("app.services.template_resolution.date")
     @patch("app.services.template_resolution.fetch_chain_for_expiry")
     @patch("app.services.template_resolution.fetch_available_expiries")
-    async def test_next_week_uses_correct_chain(self, mock_exp, mock_chain):
+    async def test_next_week_uses_correct_chain(self, mock_exp, mock_chain, mock_date):
+        mock_date.today.return_value = date(2026, 8, 19)
+        mock_date.side_effect = lambda *a, **k: date(*a, **k)
         mock_exp.return_value = ALL_EXPIRIES
         mock_chain.side_effect = _mock_chains(CHAINS)
 
@@ -146,9 +152,12 @@ class TestServiceChainSelection:
         assert leg.resolved_expiry == "2026-08-27"
         assert leg.current_price == 200.0, f"Expected 200.0 from NW chain, got {leg.current_price}"
 
+    @patch("app.services.template_resolution.date")
     @patch("app.services.template_resolution.fetch_chain_for_expiry")
     @patch("app.services.template_resolution.fetch_available_expiries")
-    async def test_monthly_august_uses_correct_chain(self, mock_exp, mock_chain):
+    async def test_monthly_august_uses_correct_chain(self, mock_exp, mock_chain, mock_date):
+        mock_date.today.return_value = date(2026, 8, 19)
+        mock_date.side_effect = lambda *a, **k: date(*a, **k)
         mock_exp.return_value = ALL_EXPIRIES
         mock_chain.side_effect = _mock_chains(CHAINS)
 

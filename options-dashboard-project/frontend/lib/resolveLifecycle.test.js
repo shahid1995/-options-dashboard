@@ -146,3 +146,51 @@ describe("Phase 6.8E: resolvedLegSummary", () => {
     expect(resolvedLegSummary(null)).toBe("");
   });
 });
+
+// ---- Phase 6.9: detectResolutionChanges for execution preview ----
+
+describe("Phase 6.9: detectResolutionChanges for execution preview", () => {
+  it("detects strike change between preview and fresh resolution", () => {
+    const preview = {
+      legs: [
+        { resolved_strike: 25000, resolved_expiry: "2026-08-20" },
+      ],
+    };
+    const fresh = {
+      legs: [
+        { resolved_strike: 25050, resolved_expiry: "2026-08-20" },
+      ],
+    };
+    const changes = detectResolutionChanges(preview, fresh);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].field).toBe("strike");
+    expect(changes[0].oldValue).toBe(25000);
+    expect(changes[0].newValue).toBe(25050);
+  });
+
+  it("detects expiry change between preview and fresh resolution", () => {
+    const preview = {
+      legs: [
+        { resolved_strike: 25000, resolved_expiry: "2026-08-20" },
+      ],
+    };
+    const fresh = {
+      legs: [
+        { resolved_strike: 25000, resolved_expiry: "2026-08-27" },
+      ],
+    };
+    const changes = detectResolutionChanges(preview, fresh);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].field).toBe("expiry");
+  });
+
+  it("returns empty when preview and fresh are identical", () => {
+    const data = {
+      legs: [
+        { resolved_strike: 25000, resolved_expiry: "2026-08-20" },
+        { resolved_strike: 25200, resolved_expiry: "2026-08-20" },
+      ],
+    };
+    expect(detectResolutionChanges(data, { ...data })).toEqual([]);
+  });
+});
