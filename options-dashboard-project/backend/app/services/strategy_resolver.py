@@ -407,7 +407,7 @@ def resolve_expiry_fixed(
     )
 
 
-def resolve_expiry_current_week(available_expiries: list[str]) -> tuple[str, list[str]]:
+def resolve_expiry_current_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
     """Nearest listed expiry within the current trading week.
 
     NSE weekly options expire on Thursdays.  The resolver uses the
@@ -417,7 +417,7 @@ def resolve_expiry_current_week(available_expiries: list[str]) -> tuple[str, lis
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
-    today = date.today()
+    today = today or date.today()
     # End of current trading week = today + (3 - today.weekday()) days
     # weekday(): Mon=0 ... Thu=3 ... Sun=6
     days_to_thu = (3 - today.weekday()) % 7
@@ -435,12 +435,12 @@ def resolve_expiry_current_week(available_expiries: list[str]) -> tuple[str, lis
     return candidates[0], []
 
 
-def resolve_expiry_next_week(available_expiries: list[str]) -> tuple[str, list[str]]:
+def resolve_expiry_next_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
     """First listed expiry after the current-week expiry."""
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
-    today = date.today()
+    today = today or date.today()
     days_to_thu = (3 - today.weekday()) % 7
     week_end = today + timedelta(days=days_to_thu)
 
@@ -456,12 +456,12 @@ def resolve_expiry_next_week(available_expiries: list[str]) -> tuple[str, list[s
     return candidates[0], []
 
 
-def resolve_expiry_monthly(available_expiries: list[str]) -> tuple[str, list[str]]:
+def resolve_expiry_monthly(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
     """Latest listed expiry in the current calendar month."""
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
-    today = date.today()
+    today = today or date.today()
     candidates = [
         e for e in available_expiries
         if _parse_expiry(e) is not None
@@ -479,6 +479,7 @@ def resolve_expiry_dte_range(
     available_expiries: list[str],
     dte_min: int,
     dte_max: int,
+    today: date | None = None,
 ) -> tuple[str, list[str]]:
     """Expiry whose days-to-expiry falls in ``[dte_min, dte_max]``.
 
@@ -493,7 +494,7 @@ def resolve_expiry_dte_range(
     if dte_min is None or dte_max is None:
         raise ValueError("DTE range requires both min and max values.")
 
-    today = date.today()
+    today = today or date.today()
     candidates: list[tuple[str, int]] = []
     for e in available_expiries:
         d = _parse_expiry(e)
@@ -631,26 +632,31 @@ def _resolve_strike(
 def _resolve_expiry(
     formula: LegFormula,
     available_expiries: list[str],
-    today: date | None,
+    today: date | None = None,
 ) -> tuple[str, list[str]]:
-    """Dispatch to the correct expiry resolver."""
+    """Dispatch to the correct expiry resolver.
+
+    ``today`` is propagated to all expiry-mode functions so tests can
+    control the date.  When ``None``, each function defaults to
+    ``date.today()``.
+    """
     mode = formula.expiry_mode
 
     if mode == ExpiryMode.FIXED:
         return resolve_expiry_fixed(available_expiries, formula.expiry)
 
     if mode == ExpiryMode.CURRENT_WEEK:
-        return resolve_expiry_current_week(available_expiries)
+        return resolve_expiry_current_week(available_expiries, today)
 
     if mode == ExpiryMode.NEXT_WEEK:
-        return resolve_expiry_next_week(available_expiries)
+        return resolve_expiry_next_week(available_expiries, today)
 
     if mode == ExpiryMode.MONTHLY:
-        return resolve_expiry_monthly(available_expiries)
+        return resolve_expiry_monthly(available_expiries, today)
 
     if mode == ExpiryMode.DTE_RANGE:
         return resolve_expiry_dte_range(
-            available_expiries, formula.expiry_dte_min, formula.expiry_dte_max,
+            available_expiries, formula.expiry_dte_min, formula.expiry_dte_max, today,
         )
 
     raise ValueError(f"Unknown expiry mode: {mode}")

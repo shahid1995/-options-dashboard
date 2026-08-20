@@ -23,7 +23,12 @@ from app.services.strategy_resolver import (
     LegFormula,
     ResolverResult,
     StrikeMode,
+    _resolve_expiry,
+    _resolve_strike,
+    chain_rows,
     resolve_leg,
+    sorted_strikes,
+    spot_price,
 )
 
 
@@ -319,43 +324,59 @@ async def resolve_legs(
             else:
                 all_errors.extend(result.errors)
         elif formula.expiry_mode != ExpiryMode.FIXED:
-            # Dynamic expiry: try each available chain
-            for expiry in sorted(chains.keys()):
-                result = resolve_leg(formula, chains[expiry], all_expiries, date.today())
-                if result.ok:
-                    resolved = result.leg
-                    ltp, quote_ts, price_status = get_price_from_chain(
-                        chains[expiry], resolved.resolved_strike, formula.option_type
-                    )
-                    if price_status == "available" and is_stale_quote(quote_ts):
-                        price_status = "stale"
+            # Phase 6.8D fix: resolve expiry FIRST, then resolve strike
+            # and extract price from THAT expiry's chain.
+            try:
+                resolved_expiry, expiry_warnings = _resolve_expiry(
+                    formula, all_expiries, date.today(),
+                )
+            except ValueError as exc:
+                all_errors.append(str(exc))
+                leg_resolved = False
+            else:
+                all_warnings.extend(expiry_warnings)
+                # Now use exactly the resolved expiry's chain
+                if resolved_expiry in chains:
+                    chain_for_expiry = chains[resolved_expiry]
+                    result = resolve_leg(formula, chain_for_expiry, all_expiries, date.today())
+                    if result.ok:
+                        resolved = result.leg
+                        # Price extracted from the RESOLVED expiry's chain
+                        ltp, quote_ts, price_status = get_price_from_chain(
+                            chain_for_expiry, resolved.resolved_strike, formula.option_type,
+                        )
+                        if price_status == "available" and is_stale_quote(quote_ts):
+                            price_status = "stale"
 
-                    resolved_legs.append(ResolvedLegOutput(
-                        position=position,
-                        action=formula.action,
-                        option_type=formula.option_type,
-                        quantity=formula.quantity,
-                        lot_size=formula.lot_size,
-                        resolved_strike=resolved.resolved_strike,
-                        resolved_expiry=resolved.resolved_expiry,
-                        strike_mode_used=resolved.strike_mode_used,
-                        expiry_mode_used=resolved.expiry_mode_used,
-                        anchor_value=resolved.anchor_value,
-                        delta_actual=resolved.delta_actual,
-                        current_price=ltp,
-                        price_status=price_status,
-                        quote_timestamp=quote_ts,
-                        ltp=ltp,
-                        warnings=resolved.warnings,
-                        symbol=symbol,
-                        expiration_date=resolved.resolved_expiry,
-                        strike_price=resolved.resolved_strike,
-                    ))
-                    all_warnings.extend(resolved.warnings)
-                    leg_resolved = True
-                    break
+                        resolved_legs.append(ResolvedLegOutput(
+                            position=position,
+                            action=formula.action,
+                            option_type=formula.option_type,
+                            quantity=formula.quantity,
+                            lot_size=formula.lot_size,
+                            resolved_strike=resolved.resolved_strike,
+                            resolved_expiry=resolved.resolved_expiry,
+                            strike_mode_used=resolved.strike_mode_used,
+                            expiry_mode_used=resolved.expiry_mode_used,
+                            anchor_value=resolved.anchor_value,
+                            delta_actual=resolved.delta_actual,
+                            current_price=ltp,
+                            price_status=price_status,
+                            quote_timestamp=quote_ts,
+                            ltp=ltp,
+                            warnings=resolved.warnings,
+                            symbol=symbol,
+                            expiration_date=resolved.resolved_expiry,
+                            strike_price=resolved.resolved_strike,
+                        ))
+                        all_warnings.extend(resolved.warnings)
+                        leg_resolved = True
+                    else:
+                        all_errors.extend(result.errors)
                 else:
-                    all_errors.extend(result.errors)
+                    all_errors.append(
+                        f"Chain data for resolved expiry {resolved_expiry} is not available."
+                    )
 
         if not leg_resolved:
             all_errors.append(f"Leg {i} ({formula.action} {formula.option_type}) could not be resolved.")
