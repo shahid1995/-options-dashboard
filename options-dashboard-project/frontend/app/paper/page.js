@@ -3135,12 +3135,37 @@ function StepperRow({ label, value, onDec, onInc, title }) {
   );
 }
 
+const STRIKE_MODES = [
+  { value: "fixed", label: "Fixed Strike" },
+  { value: "atm", label: "ATM" },
+  { value: "atm_offset_steps", label: "ATM \u00b1 Steps" },
+  { value: "atm_offset", label: "ATM \u00b1 \u20b9" },
+  { value: "spot_offset", label: "Spot \u00b1 \u20b9" },
+  { value: "delta", label: "Delta" },
+];
+
+const EXPIRY_MODES = [
+  { value: "fixed", label: "Fixed Expiry" },
+  { value: "current_week", label: "Current Week" },
+  { value: "next_week", label: "Next Week" },
+  { value: "monthly", label: "Monthly" },
+  { value: "dte_range", label: "DTE Range" },
+];
+
 function AddLegForm({ onAdd, chainByStrike, strikesSorted, atmIndex }) {
   const [action, setAction] = useState("buy");
   const [type, setType] = useState("call");
   const [strike, setStrike] = useState("");
   const [qty, setQty] = useState(1);
   const [price, setPrice] = useState("");
+  // Phase 6.8D: dynamic formula fields
+  const [strikeMode, setStrikeMode] = useState("fixed");
+  const [strikeOffset, setStrikeOffset] = useState("");
+  const [targetDelta, setTargetDelta] = useState("");
+  const [expiryMode, setExpiryMode] = useState("fixed");
+  const [expiryDteMin, setExpiryDteMin] = useState("");
+  const [expiryDteMax, setExpiryDteMax] = useState("");
+  const [showFormula, setShowFormula] = useState(false);
 
   // Auto-fill the live premium whenever strike or type changes (manual edits
   // survive until one of those changes).
@@ -3154,10 +3179,42 @@ function AddLegForm({ onAdd, chainByStrike, strikesSorted, atmIndex }) {
 
   const atmStrike = strikesSorted[Math.min(Math.max(atmIndex, 0), strikesSorted.length - 1)] ?? "";
 
+  // When switching away from fixed strike mode, pre-fill the strike with ATM
+  useEffect(() => {
+    if (strikeMode !== "fixed" && !strike && atmStrike) {
+      setStrike(String(atmStrike));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strikeMode]);
+
+  const isDynamic = strikeMode !== "fixed" || expiryMode !== "fixed";
+
   const submit = () => {
     const s = Number(strike);
     if (!s) return;
-    onAdd({ action, type, strike: s, qty: Math.max(1, Number(qty) || 1), price: Number(price) || 0 });
+    const leg = {
+      action,
+      type,
+      strike: s,
+      qty: Math.max(1, Number(qty) || 1),
+      price: Number(price) || 0,
+    };
+    // Phase 6.8D: include formula fields when dynamic
+    if (isDynamic) {
+      leg.strikeMode = strikeMode;
+      leg.expiryMode = expiryMode;
+      if (strikeMode === "atm_offset_steps" || strikeMode === "atm_offset" || strikeMode === "spot_offset") {
+        leg.strikeOffset = Number(strikeOffset) || 0;
+      }
+      if (strikeMode === "delta" && targetDelta) {
+        leg.targetDelta = Number(targetDelta);
+      }
+      if (expiryMode === "dte_range") {
+        leg.expiryDteMin = Number(expiryDteMin) || 0;
+        leg.expiryDteMax = Number(expiryDteMax) || 30;
+      }
+    }
+    onAdd(leg);
   };
 
   const field = { background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: "4px 6px", fontSize: 11, width: 58 };
@@ -3171,6 +3228,13 @@ function AddLegForm({ onAdd, chainByStrike, strikesSorted, atmIndex }) {
     color: active ? C.gold : C.muted,
     cursor: "pointer",
   });
+  const selectStyle = {
+    ...field,
+    width: "auto",
+    minWidth: 90,
+    cursor: "pointer",
+    fontSize: 10.5,
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -3195,6 +3259,61 @@ function AddLegForm({ onAdd, chainByStrike, strikesSorted, atmIndex }) {
           Add Leg
         </button>
       </div>
+      {/* Phase 6.8D: Formula toggle */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button
+          onClick={() => setShowFormula(!showFormula)}
+          style={{ fontSize: 9.5, fontWeight: 600, color: showFormula ? C.gold : C.muted, background: "none", border: "none", cursor: "pointer", letterSpacing: 0.5 }}
+        >
+          {showFormula ? "\u25bc Formula" : "\u25b6 Formula"}
+        </button>
+        {isDynamic && (
+          <span style={{ fontSize: 9, color: C.gold, background: "rgba(201,161,90,0.12)", padding: "2px 6px", borderRadius: 3 }}>
+            DYNAMIC
+          </span>
+        )}
+      </div>
+      {/* Phase 6.8D: Formula controls */}
+      {showFormula && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 0", borderTop: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ fontSize: 10, color: C.muted, minWidth: 70 }}>Strike:</label>
+            <select value={strikeMode} onChange={(e) => setStrikeMode(e.target.value)} style={selectStyle}>
+              {STRIKE_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            {(strikeMode === "atm_offset_steps" || strikeMode === "atm_offset" || strikeMode === "spot_offset") && (
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: C.muted }}>
+                Offset
+                <input type="number" value={strikeOffset} onChange={(e) => setStrikeOffset(e.target.value)} placeholder="0" style={{ ...field, width: 60 }} />
+              </label>
+            )}
+            {strikeMode === "delta" && (
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: C.muted }}>
+                Delta
+                <input type="number" step="0.01" value={targetDelta} onChange={(e) => setTargetDelta(e.target.value)} placeholder="0.30" style={{ ...field, width: 60 }} />
+              </label>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <label style={{ fontSize: 10, color: C.muted, minWidth: 70 }}>Expiry:</label>
+            <select value={expiryMode} onChange={(e) => setExpiryMode(e.target.value)} style={selectStyle}>
+              {EXPIRY_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+            {expiryMode === "dte_range" && (
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <label style={{ fontSize: 10.5, color: C.muted }}>
+                  Min DTE
+                  <input type="number" min={0} value={expiryDteMin} onChange={(e) => setExpiryDteMin(e.target.value)} placeholder="1" style={{ ...field, width: 46, marginLeft: 4 }} />
+                </label>
+                <label style={{ fontSize: 10.5, color: C.muted }}>
+                  Max DTE
+                  <input type="number" min={0} value={expiryDteMax} onChange={(e) => setExpiryDteMax(e.target.value)} placeholder="30" style={{ ...field, width: 46, marginLeft: 4 }} />
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
