@@ -957,3 +957,117 @@ class PositionValuationResponseOut(BaseModel):
 
     positions: list[PositionValuationOut]
     summary: ValuationSummaryOut
+
+
+# ---- Phase 6.8C: strategy resolution API ------------------------------------
+
+
+class ResolutionInlineLegIn(BaseModel):
+    """One leg for inline resolution (POST /paper/resolve).
+
+    V1 (fixed-leg): provide ``strike`` + ``expiry``.
+    V2 (dynamic formula): additionally provide ``strike_mode``, ``expiry_mode``,
+    and the relevant formula parameters.
+    """
+
+    action: Literal["buy", "sell"]
+    option_type: Literal["call", "put"]
+    strike: float = Field(..., gt=0)
+    expiry: str = Field(..., min_length=1)
+    quantity: int = Field(..., ge=1)
+    lot_size: int = Field(..., ge=1)
+
+    # Phase 6.8B: dynamic formula fields (all optional, V1 defaults)
+    strike_mode: Literal["fixed", "atm", "atm_offset_steps", "atm_offset", "spot_offset", "delta"] = "fixed"
+    strike_offset: int | None = None
+    strike_offset_pct: float | None = None
+    target_delta: float | None = None
+    expiry_mode: Literal["fixed", "current_week", "next_week", "monthly", "dte_range"] = "fixed"
+    expiry_dte_min: int | None = None
+    expiry_dte_max: int | None = None
+    formula_version: int = Field(default=1, ge=1, le=2)
+
+    @model_validator(mode="after")
+    def _validate_formula(self) -> "ResolutionInlineLegIn":
+        """Validate formula field consistency (structural only, no market lookup)."""
+        sm = self.strike_mode
+        em = self.expiry_mode
+
+        if sm == "atm_offset_steps" and self.strike_offset is None:
+            raise ValueError("strike_offset is required for strike_mode='atm_offset_steps'")
+        if sm == "atm_offset" and self.strike_offset is None:
+            raise ValueError("strike_offset is required for strike_mode='atm_offset'")
+        if sm == "spot_offset" and self.strike_offset is None:
+            raise ValueError("strike_offset is required for strike_mode='spot_offset'")
+        if sm == "delta" and self.target_delta is None:
+            raise ValueError("target_delta is required for strike_mode='delta'")
+
+        if sm != "delta":
+            self.target_delta = None
+
+        if em == "dte_range":
+            if self.expiry_dte_min is None or self.expiry_dte_max is None:
+                raise ValueError("expiry_dte_min and expiry_dte_max are required for expiry_mode='dte_range'")
+            if self.expiry_dte_min > self.expiry_dte_max:
+                raise ValueError(f"expiry_dte_min ({self.expiry_dte_min}) must be <= expiry_dte_max ({self.expiry_dte_max})")
+
+        if em != "dte_range":
+            self.expiry_dte_min = None
+            self.expiry_dte_max = None
+
+        if sm != "fixed" or em != "fixed":
+            self.formula_version = 2
+
+        return self
+
+
+class ResolutionInlineRequestIn(BaseModel):
+    """POST /paper/resolve — inline leg resolution request."""
+
+    symbol: str = Field(default="NIFTY", min_length=1)
+    legs: list[ResolutionInlineLegIn] = Field(..., min_length=1)
+
+
+class TemplateResolutionRequestIn(BaseModel):
+    """POST /paper/templates/:id/resolve — optional override body.
+
+    Currently unused in V1 but the schema is in place for future
+    parameter overrides (e.g. symbol override, market-price overrides).
+    """
+
+    pass
+
+
+class ResolutionLegOut(BaseModel):
+    """One resolved leg in the resolution response."""
+
+    position: int
+    action: str
+    option_type: str
+    quantity: int
+    lot_size: int
+    resolved_strike: float
+    resolved_expiry: str  # YYYY-MM-DD
+    strike_mode_used: str
+    expiry_mode_used: str
+    current_price: float | None = None
+    price_status: str = "unavailable"  # available | stale | unavailable
+    quote_timestamp: str | None = None
+    ltp: float | None = None
+    warnings: list[str] = Field(default_factory=list)
+    # ExecutionLegIn-compatible fields for seamless handoff
+    symbol: str
+    expiration_date: str
+    strike_price: float
+
+
+class ResolutionOut(BaseModel):
+    """Response for both POST /paper/resolve and POST /paper/templates/:id/resolve."""
+
+    status: str  # RESOLVED | RESOLVED_WITH_WARNINGS | PARTIAL | NO_PRICES | FAILED
+    symbol: str
+    legs: list[ResolutionLegOut] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    template_id: int | None = None
+    template_name: str | None = None
