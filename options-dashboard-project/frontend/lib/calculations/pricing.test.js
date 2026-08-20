@@ -200,4 +200,23 @@ describe("time representation", () => {
     expect(addDays("2026-08-28", -1)).toBe("2026-08-27");
     expect(addDays("2026-08-28", 0)).toBe("2026-08-28");
   });
+
+  // Cross-platform regression: ISO calendar dates must be treated as UTC so
+  // Windows (positive-timezone) and Linux (UTC) produce identical results.
+  it("addDays is timezone-independent (UTC-parsed, not local-time)", () => {
+    const base = new Date("2026-08-28T00:00:00Z"); // always midnight UTC
+    for (const offset of [0, 1, -1, 3, 7, 30]) {
+      const expected = new Date(base);
+      expected.setUTCDate(expected.getUTCDate() + offset);
+      const expectedStr = expected.toISOString().slice(0, 10);
+      expect(addDays("2026-08-28", offset)).toBe(expectedStr);
+    }
+  });
+
+  it("timeToExpiry is timezone-independent (UTC-parsed, not local-time)", () => {
+    // Both dates parsed as UTC: difference must equal calendar day count
+    expect(timeToExpiry("2026-08-25", "2026-08-28")).toBeCloseTo(3 / 365, 10);
+    expect(timeToExpiry("2026-08-25", "2026-09-25")).toBeCloseTo(31 / 365, 10);
+    expect(timeToExpiry("2026-01-01", "2026-12-31")).toBeCloseTo(364 / 365, 10);
+  });
 });

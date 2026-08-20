@@ -91,3 +91,35 @@ def test_init_db_is_idempotent_on_migrated_schema(monkeypatch, engine):
     cols = _existing_columns(engine, "trades")
     assert "strategy_execution_id" in cols
     assert "client_order_id" in cols
+
+
+def test_init_db_session_uses_same_engine_as_create_all(monkeypatch, engine):
+    """Regression: init_db must create its backfill session from the current
+    engine variable so the session queries the same database that create_all
+    just migrated — even when engine is monkeypatched in tests.
+    """
+    _create_legacy_trades(engine)
+    monkeypatch.setattr("app.db.engine", engine)
+
+    # init_db must not raise — the backfill session must see the positions
+    # table that create_all just created on the test engine.
+    init_db()
+
+    # Verify the positions table exists on our test engine (created by
+    # create_all inside init_db).
+    with engine.connect() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+        }
+    assert "positions" in tables
+
+    # Verify the backfill session could query positions without error
+    # by checking that the engine can resolve the table.
+    from app.models import Position
+    from sqlalchemy import select
+
+    with engine.connect() as conn:
+        result = conn.execute(select(Position.user_id).distinct())
+        # Should execute without OperationalError; result can be empty
+        assert result.fetchall() == []
