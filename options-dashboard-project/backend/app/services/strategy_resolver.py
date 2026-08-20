@@ -413,7 +413,10 @@ def resolve_expiry_fixed(
 
 
 def resolve_expiry_current_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
-    """Nearest listed expiry that is on or after today.
+    """Nearest listed expiry on or after today ("current week").
+
+    Semantic definition:
+        current_week = the first listed expiry >= today
 
     The broker-provided expiry list is the sole source of truth.  This
     function does NOT assume any specific expiry weekday (Tuesday,
@@ -439,7 +442,11 @@ def resolve_expiry_current_week(available_expiries: list[str], today: date | Non
 
 
 def resolve_expiry_next_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
-    """Second-nearest listed expiry on or after today.
+    """Second-nearest listed expiry on or after today ("next week").
+
+    Semantic definition:
+        next_week = the second listed expiry >= today
+                   (i.e. the listed expiry immediately after current_week)
 
     The broker-provided expiry list is the sole source of truth.  The
     first listed expiry >= today is "current week"; this function returns
@@ -463,22 +470,53 @@ def resolve_expiry_next_week(available_expiries: list[str], today: date | None =
 
 
 def resolve_expiry_monthly(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
-    """Latest listed expiry in the current calendar month."""
+    """Latest listed expiry in the current calendar month.
+
+    When no listed expiry falls in the current calendar month (e.g. today
+    is after the month's last expiry, or the broker has not yet listed any
+    monthly contracts for this month), the resolver prefers the latest
+    listed expiry in the **nearest future month** that has listed expiries.
+    If no future month has expiries either, falls back to the nearest
+    overall expiry.
+    """
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
     today = today or date.today()
+
+    # 1. Try current calendar month
     candidates = [
         e for e in available_expiries
         if _parse_expiry(e) is not None
         and _parse_expiry(e).year == today.year
         and _parse_expiry(e).month == today.month
     ]
-    if not candidates:
-        return _nearest_expiry_by_date(available_expiries, today)
+    if candidates:
+        candidates.sort(reverse=True)  # latest first
+        return candidates[0], []
 
-    candidates.sort(reverse=True)  # latest first
-    return candidates[0], []
+    # 2. No current-month expiry — pick the latest in the nearest future month
+    future = [
+        e for e in available_expiries
+        if _parse_expiry(e) is not None and _parse_expiry(e) > today
+    ]
+    if future:
+        future.sort()  # chronological
+        # Group by (year, month) and pick the latest in the first month
+        first_month = (_parse_expiry(future[0]).year, _parse_expiry(future[0]).month)
+        month_candidates = [
+            e for e in future
+            if (_parse_expiry(e).year, _parse_expiry(e).month) == first_month
+        ]
+        month_candidates.sort(reverse=True)
+        warnings = [
+            f"No expiry in {today.year}-{today.month:02d}; "
+            f"using nearest future month ({first_month[0]}-{first_month[1]:02d})."
+        ]
+        return month_candidates[0], warnings
+
+    # 3. All expiries in the past — fallback to nearest overall
+    return _nearest_expiry_by_date(available_expiries, today)
 
 
 def resolve_expiry_dte_range(

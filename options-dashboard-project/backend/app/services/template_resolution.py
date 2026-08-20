@@ -251,14 +251,39 @@ async def resolve_legs(
         else:
             has_dynamic_expiry = True
 
-    # Step 2: Fetch all available expiries and chains
+    # Step 2: Fetch broker-provided expiry list and validate fixed expiries
     all_expiries: list[str] = []
     chains: dict[str, dict] = {}  # expiry -> chain data
+    pre_check_errors: list[str] = []
 
     if has_dynamic_expiry or not fixed_expiries:
         all_expiries = await fetch_available_expiries(access_token, symbol)
     else:
-        all_expiries = sorted(fixed_expiries)
+        # Fetch the broker expiry list even for fixed legs so we can
+        # validate that every requested fixed expiry actually exists.
+        broker_expiries = await fetch_available_expiries(access_token, symbol)
+        if broker_expiries:
+            all_expiries = broker_expiries
+            # Validate each fixed expiry against the broker list
+            for fe in fixed_expiries:
+                if fe not in broker_expiries:
+                    pre_check_errors.append(
+                        f"EXPIRY_UNAVAILABLE: {fe} is not in the broker-provided "
+                        f"expiry list for {symbol}. "
+                        f"Available: {', '.join(sorted(broker_expiries))}"
+                    )
+        else:
+            # Broker expiry list unavailable — fall back to fixed set
+            all_expiries = sorted(fixed_expiries)
+
+    if pre_check_errors:
+        return ResolutionResult(
+            status="FAILED",
+            symbol=symbol,
+            errors=pre_check_errors,
+            template_id=template_id,
+            template_name=template_name,
+        )
 
     # Fetch chains for each needed expiry
     for expiry in all_expiries:

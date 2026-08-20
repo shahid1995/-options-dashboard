@@ -534,6 +534,36 @@ class TestResolveExpiryMonthly:
             if ed.year == today.year and ed.month == today.month:
                 assert ed <= d
 
+    def test_fallback_to_next_future_month(self):
+        """When today is past all current-month expiries, prefer the
+        nearest future month's latest expiry."""
+        # Only Sep expiries, today is Oct 1 → picks latest Sep
+        expiries = ["2026-09-01", "2026-09-15", "2026-09-29"]
+        exp, w = resolve_expiry_monthly(expiries, today=date(2026, 10, 1))
+        assert exp == "2026-09-29"
+        assert len(w) > 0, "Should emit a warning about no current-month expiry"
+
+    def test_fallback_picks_latest_in_nearest_future_month(self):
+        """Among multiple future months, pick the nearest month's latest."""
+        # No October expiries listed → nearest future month is Nov
+        expiries = ["2026-11-20", "2026-12-15"]
+        exp, w = resolve_expiry_monthly(expiries, today=date(2026, 10, 20))
+        assert exp == "2026-11-20"
+        assert len(w) > 0, "Should emit a warning about no current-month expiry"
+
+    def test_on_expiry_day_picks_it(self):
+        """If today IS the monthly expiry date, return it."""
+        expiries = ["2026-08-18", "2026-08-25"]
+        exp, _ = resolve_expiry_monthly(expiries, today=date(2026, 8, 25))
+        assert exp == "2026-08-25"
+
+    def test_all_past_fallback_to_nearest(self):
+        """All expiries in the past → fallback to nearest overall."""
+        expiries = ["2026-08-18", "2026-08-25"]
+        exp, w = resolve_expiry_monthly(expiries, today=date(2026, 12, 1))
+        assert exp == "2026-08-25"  # nearest to Dec 1
+        assert any("No ideal" in x for x in w)
+
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="No expiries"):
             resolve_expiry_monthly([])
