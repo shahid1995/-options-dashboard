@@ -160,3 +160,49 @@ export function legSummary(legs) {
 export function legCountLabel(count) {
   return count === 1 ? "1 leg" : `${count} legs`;
 }
+
+// ---- Phase 6.8E: dynamic resolution helpers ----
+
+/**
+ * Compare two resolution results and detect changes in resolved
+ * strike or expiry for each leg.
+ *
+ * Returns an array of { position, field, oldValue, newValue } entries
+ * for every change detected, or [] if identical.
+ */
+export function detectResolutionChanges(prev, next) {
+  if (!prev?.legs || !next?.legs) return [];
+  const changes = [];
+  for (let i = 0; i < Math.max(prev.legs.length, next.legs.length); i++) {
+    const p = prev.legs[i];
+    const n = next.legs[i];
+    if (!p || !n) continue;
+    if (p.resolved_strike !== n.resolved_strike) {
+      changes.push({ position: i, field: "strike", oldValue: p.resolved_strike, newValue: n.resolved_strike });
+    }
+    if (p.resolved_expiry !== n.resolved_expiry) {
+      changes.push({ position: i, field: "expiry", oldValue: p.resolved_expiry, newValue: n.resolved_expiry });
+    }
+  }
+  return changes;
+}
+
+/**
+ * Build a formula summary string from a resolution leg.
+ * e.g. "ATM + 2 steps → 25200, current_week → 2026-08-27"
+ */
+export function resolvedLegSummary(leg) {
+  if (!leg) return "";
+  const parts = [];
+  if (leg.strike_mode_used && leg.strike_mode_used !== "fixed") {
+    parts.push(`${leg.strike_mode_used.toUpperCase()} → ${leg.resolved_strike}`);
+  } else {
+    parts.push(`${leg.resolved_strike}`);
+  }
+  if (leg.expiry_mode_used && leg.expiry_mode_used !== "fixed") {
+    parts.push(`${leg.expiry_mode_used.replace(/_/g, " ")} → ${leg.resolved_expiry}`);
+  } else {
+    parts.push(leg.resolved_expiry);
+  }
+  return parts.join(", ");
+}

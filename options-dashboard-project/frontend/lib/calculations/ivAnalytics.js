@@ -96,8 +96,8 @@ export function ivWarning(code, message, meta = null) {
 // Whole calendar days between an ISO valuation date and an ISO expiry date
 // (0 when expired; null when either date is unparseable).
 export function daysToExpiry(valuationDate, expiryDate) {
-  const v = new Date(`${valuationDate}T00:00:00`);
-  const e = new Date(`${expiryDate}T00:00:00`);
+  const v = new Date(`${valuationDate}T00:00:00Z`);
+  const e = new Date(`${expiryDate}T00:00:00Z`);
   if (Number.isNaN(v.getTime()) || Number.isNaN(e.getTime())) return null;
   return Math.max(0, Math.round((e - v) / 86400000));
 }
