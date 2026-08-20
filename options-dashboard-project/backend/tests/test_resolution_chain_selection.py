@@ -10,6 +10,11 @@ Expiry layout (today = 2026-08-19, Wednesday):
   2026-08-20 (Thu) — current week expiry  (DTE=1)
   2026-08-27 (Thu) — next week expiry     (DTE=8)
   2026-09-24 (Thu) — Sep monthly          (DTE=36)
+
+IMPORTANT: The resolver does NOT assume any specific weekday.  It uses
+the broker-provided listed expiry dates as the sole source of truth.
+These test dates happen to be Thursdays, but the resolver works identically
+with Tuesday, Friday, or any other weekday expiries.
 """
 
 from datetime import date
@@ -22,6 +27,9 @@ from app.services.strategy_resolver import (
     _resolve_expiry,
     _resolve_strike,
     chain_rows,
+    resolve_expiry_current_week,
+    resolve_expiry_next_week,
+    resolve_expiry_monthly,
     resolve_leg,
     sorted_strikes,
     spot_price,
@@ -63,7 +71,7 @@ def _make_chain(spot, strikes, expiry_label, ltp_base):
 STRIKES = [24800.0, 24900.0, 25000.0, 25100.0, 25200.0]
 
 # Three expiries with DISTINCT LTP bases
-# today = 2026-08-19 (Wed) → week_end = 2026-08-20 (Thu)
+# today = 2026-08-19 (Wed)
 CHAIN_CW  = _make_chain(25000.0, STRIKES, "2026-08-20", ltp_base=100)  # current week
 CHAIN_NW  = _make_chain(25000.0, STRIKES, "2026-08-27", ltp_base=200)  # next week
 CHAIN_MTH = _make_chain(25000.0, STRIKES, "2026-09-24", ltp_base=50)   # Sep monthly
@@ -97,7 +105,7 @@ class TestTodayPropagation:
     """Verify that the supplied today parameter controls expiry selection."""
 
     def test_current_week_with_controlled_today(self):
-        """today=2026-08-19 (Wed) → current_week picks 2026-08-20 (Thu, this week)."""
+        """today=2026-08-19 (Wed) → current_week picks 2026-08-20 (nearest future)."""
         exp, _ = _resolve_expiry(
             LegFormula(action="buy", option_type="call", quantity=1, lot_size=65,
                        expiry_mode=ExpiryMode.CURRENT_WEEK),
@@ -107,7 +115,7 @@ class TestTodayPropagation:
         assert exp == "2026-08-20"
 
     def test_next_week_with_controlled_today(self):
-        """today=2026-08-19 (Wed) → next_week picks 2026-08-27 (next Thu)."""
+        """today=2026-08-19 (Wed) → next_week picks 2026-08-27 (second-nearest future)."""
         exp, _ = _resolve_expiry(
             LegFormula(action="buy", option_type="call", quantity=1, lot_size=65,
                        expiry_mode=ExpiryMode.NEXT_WEEK),
@@ -162,7 +170,7 @@ class TestTodayPropagation:
 # ---------------------------------------------------------------------------
 
 class TestChainSelectionCurrentWeek:
-    """current_week resolves to CW expiry → price must come from CW chain."""
+    """current_week resolves to nearest future expiry → price must come from that chain."""
 
     def test_resolved_expiry_matches_price_source(self):
         formula = LegFormula(
@@ -185,7 +193,7 @@ class TestChainSelectionCurrentWeek:
 
 
 class TestChainSelectionNextWeek:
-    """next_week resolves to NW expiry → price must come from NW chain."""
+    """next_week resolves to second-nearest future expiry → price must come from that chain."""
 
     def test_resolved_expiry_matches_price_source(self):
         formula = LegFormula(
@@ -219,7 +227,7 @@ class TestChainSelectionNextWeek:
 
 
 class TestChainSelectionMonthly:
-    """monthly resolves to monthly expiry → price must come from that chain."""
+    """monthly resolves to latest-in-month expiry → price must come from that chain."""
 
     def test_august_monthly_resolves_to_aug_27(self):
         """today=Aug 19 → monthly picks 2026-08-27 → ltp_base=200."""
@@ -232,11 +240,9 @@ class TestChainSelectionMonthly:
         assert result.ok
         assert result.leg.resolved_expiry == "2026-08-27"
 
-        # 2026-08-27 is the monthly (Aug) → uses CHAIN_NW (ltp_base=200)
         ltp = _get_ltp(CHAIN_NW, 25000.0, "call")
         assert ltp == 200.0, f"Expected LTP 200.0 for Aug monthly, got {ltp}"
 
-        # CW chain has a different LTP — proves correct chain selection
         ltp_cw = _get_ltp(CHAIN_CW, 25000.0, "call")
         assert ltp_cw == 100.0, "CW chain LTP must differ"
 
@@ -254,7 +260,6 @@ class TestChainSelectionMonthly:
         ltp = _get_ltp(CHAIN_MTH, 25000.0, "call")
         assert ltp == 50.0, f"Expected LTP 50.0 for Sep monthly, got {ltp}"
 
-        # Other chains have different LTPs
         ltp_cw = _get_ltp(CHAIN_CW, 25000.0, "call")
         ltp_nw = _get_ltp(CHAIN_NW, 25000.0, "call")
         assert ltp_cw != ltp, "CW chain LTP must differ"
@@ -345,12 +350,10 @@ class TestCrossExpiryLTPDivergence:
             strike_mode=StrikeMode.DELTA, target_delta=0.50,
             expiry_mode=ExpiryMode.NEXT_WEEK,
         )
-        # NW chain has delta=0.5 at 25000 → resolves to 25000
         result = resolve_leg(formula, CHAIN_NW, ALL_EXPIRIES, today=TODAY)
         assert result.ok
         assert result.leg.resolved_expiry == "2026-08-27"
         assert result.leg.resolved_strike == 25000.0
-        # The delta must come from the NW chain's Greeks
         assert result.leg.delta_actual is not None
 
     def test_wrong_chain_gives_wrong_price(self):
@@ -360,13 +363,89 @@ class TestCrossExpiryLTPDivergence:
             strike_mode=StrikeMode.FIXED, strike=25000.0,
             expiry_mode=ExpiryMode.NEXT_WEEK,
         )
-        # Resolve with NW chain (correct for next_week) → LTP = 200
         result_ok = resolve_leg(formula, CHAIN_NW, ALL_EXPIRIES, today=TODAY)
         assert result_ok.ok
         ltp_correct = _get_ltp(CHAIN_NW, 25000.0, "call")
         assert ltp_correct == 200.0
 
-        # If we had used the CW chain instead, LTP = 100 (wrong!)
         ltp_wrong = _get_ltp(CHAIN_CW, 25000.0, "call")
         assert ltp_wrong == 100.0
         assert ltp_correct != ltp_wrong, "Different chains must give different prices"
+
+
+# ---------------------------------------------------------------------------
+# Tests: NIFTY Tuesday weekly / holiday / non-Tuesday expiry conventions
+# ---------------------------------------------------------------------------
+
+class TestNIFTYExpiryConventions:
+    """Verify the resolver follows broker-listed expiries for NIFTY conventions.
+
+    NIFTY 50 index options: weekly expiry on Tuesday, monthly on last
+    Tuesday of the month.  If Tuesday is a holiday, expiry moves to the
+    previous trading day.  The resolver must NOT hardcode any weekday —
+    it uses the broker-provided list as ground truth.
+    """
+
+    def test_nifty_tuesday_weekly(self):
+        """Broker lists Tuesday expiries → current_week picks nearest Tuesday."""
+        # Tue Aug 18, Tue Aug 25, Tue Sep 1
+        expiries = ["2026-08-18", "2026-08-25", "2026-09-01"]
+        today = date(2026, 8, 17)  # Monday
+        exp, _ = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-18"  # nearest future Tuesday
+
+    def test_nifty_tuesday_monthly_last_of_month(self):
+        """Broker lists last Tuesday of Sep = Sep 29 → monthly picks it."""
+        expiries = [
+            "2026-09-01", "2026-09-08", "2026-09-15",
+            "2026-09-22", "2026-09-29",  # last Tue of Sep
+        ]
+        today = date(2026, 9, 10)
+        exp, _ = resolve_expiry_monthly(expiries, today=today)
+        assert exp == "2026-09-29"
+
+    def test_tuesday_holiday_previous_trading_day(self):
+        """Tue Aug 18 is a holiday → broker lists Mon Aug 17 instead.
+
+        current_week must pick Mon Aug 17, not skip to Aug 25."""
+        expiries = ["2026-08-17", "2026-08-25", "2026-09-01"]
+        today = date(2026, 8, 16)  # Sunday
+        exp, _ = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-17"  # holiday-adjusted (Monday)
+
+    def test_tuesday_holiday_next_week(self):
+        """Holiday-adjusted list → next_week picks the second-nearest future."""
+        expiries = ["2026-08-17", "2026-08-25", "2026-09-01"]
+        today = date(2026, 8, 16)
+        exp, _ = resolve_expiry_next_week(expiries, today=today)
+        assert exp == "2026-08-25"
+
+    def test_non_tuesday_listed_expiry(self):
+        """Prove the resolver follows broker-listed dates, not weekday assumptions.
+
+        Expiries are on Wednesday and Friday — no Tuesday at all."""
+        expiries = ["2026-08-19", "2026-08-21", "2026-08-28"]
+        today = date(2026, 8, 18)  # Tuesday
+        exp, _ = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-19"  # nearest future (Wednesday)
+
+    def test_all_friday_weekly(self):
+        """If broker only lists Friday expiries, resolver picks them."""
+        expiries = ["2026-08-21", "2026-08-28", "2026-09-04"]
+        today = date(2026, 8, 19)
+        exp, _ = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-21"  # nearest future Friday
+
+    def test_current_week_on_expiry_day(self):
+        """If today IS a listed expiry, return it (expiry day = current week)."""
+        expiries = ["2026-08-18", "2026-08-25"]
+        today = date(2026, 8, 18)  # Tuesday = expiry day
+        exp, _ = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-18"
+
+    def test_next_week_requires_at_least_two_future(self):
+        """next_week with only one future expiry falls back to nearest."""
+        expiries = ["2026-08-25"]  # only one future
+        today = date(2026, 8, 18)
+        exp, _ = resolve_expiry_next_week(expiries, today=today)
+        assert exp == "2026-08-25"  # fallback to nearest

@@ -16,16 +16,21 @@ Strike modes
 
 Expiry modes
     fixed       — literal YYYY-MM-DD string
-    current_week  — nearest listed expiry within the current trading week
-    next_week     — first listed expiry after the current-week one
+    current_week  — nearest listed expiry on or after today
+    next_week     — second-nearest listed expiry on or after today
     monthly       — latest listed expiry in the current calendar month
     dte_range     — listed expiry whose days-to-expiry falls in [min, max]
+
+All expiry modes use the broker-provided listed expiry dates as the
+sole source of truth.  No specific weekday (Tuesday, Thursday, etc.)
+is assumed.  Holiday handling is naturally provided by the broker
+omitting holiday dates from its listed expiries.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from enum import Enum
 from typing import Literal
 
@@ -408,52 +413,53 @@ def resolve_expiry_fixed(
 
 
 def resolve_expiry_current_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
-    """Nearest listed expiry within the current trading week.
+    """Nearest listed expiry that is on or after today.
 
-    NSE weekly options expire on Thursdays.  The resolver uses the
-    broker-provided expiry list as ground truth — it does NOT compute
-    Thursday dates independently.
+    The broker-provided expiry list is the sole source of truth.  This
+    function does NOT assume any specific expiry weekday (Tuesday,
+    Thursday, etc.) or compute calendar-week boundaries.  Holidays are
+    naturally handled because the broker omits holiday dates from its
+    listed expiries.
     """
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
     today = today or date.today()
-    # End of current trading week = today + (3 - today.weekday()) days
-    # weekday(): Mon=0 ... Thu=3 ... Sun=6
-    days_to_thu = (3 - today.weekday()) % 7
-    week_end = today + timedelta(days=days_to_thu)
 
-    candidates = [
+    # Expiries on or after today, sorted chronologically
+    future = sorted(
         e for e in available_expiries
-        if _parse_expiry(e) is not None and _parse_expiry(e) <= week_end
-    ]
-    if not candidates:
-        # Fallback: return the closest listed expiry
-        return _nearest_expiry_by_date(available_expiries, today)
+        if _parse_expiry(e) is not None and _parse_expiry(e) >= today
+    )
+    if future:
+        return future[0], []
 
-    candidates.sort(reverse=True)  # latest first
-    return candidates[0], []
+    # All listed expiries are in the past — fallback to nearest
+    return _nearest_expiry_by_date(available_expiries, today)
 
 
 def resolve_expiry_next_week(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:
-    """First listed expiry after the current-week expiry."""
+    """Second-nearest listed expiry on or after today.
+
+    The broker-provided expiry list is the sole source of truth.  The
+    first listed expiry >= today is "current week"; this function returns
+    the next one after that.
+    """
     if not available_expiries:
         raise ValueError("No expiries are available.")
 
     today = today or date.today()
-    days_to_thu = (3 - today.weekday()) % 7
-    week_end = today + timedelta(days=days_to_thu)
 
-    # Expiries strictly after the current week
-    candidates = [
+    # Expiries on or after today, sorted chronologically
+    future = sorted(
         e for e in available_expiries
-        if _parse_expiry(e) is not None and _parse_expiry(e) > week_end
-    ]
-    if not candidates:
-        return _nearest_expiry_by_date(available_expiries, today)
+        if _parse_expiry(e) is not None and _parse_expiry(e) >= today
+    )
+    if len(future) >= 2:
+        return future[1], []
 
-    candidates.sort()
-    return candidates[0], []
+    # Fewer than two future expiries — fallback to nearest
+    return _nearest_expiry_by_date(available_expiries, today)
 
 
 def resolve_expiry_monthly(available_expiries: list[str], today: date | None = None) -> tuple[str, list[str]]:

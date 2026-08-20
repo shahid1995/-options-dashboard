@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -80,10 +80,10 @@ NIFTY_STRIKES = [24500, 24600, 24700, 24800, 24900, 25000, 25100, 25200, 25300, 
 NIFTY_SPOT = 25030.0
 
 NIFTY_EXPIRIES = [
-    "2026-08-20",  # current week (Thursday, Aug 20)
-    "2026-08-27",  # next week (Thursday, Aug 27)
+    "2026-08-20",  # current week (Tue, Aug 20)
+    "2026-08-27",  # next week (Tue, Aug 27)
     "2026-09-03",  # week after
-    "2026-09-24",  # monthly (last Thu of Sep)
+    "2026-09-24",  # monthly (last Tue of Sep)
 ]
 
 
@@ -487,15 +487,22 @@ class TestResolveExpiryFixed:
 
 
 class TestResolveExpiryCurrentWeek:
-    def test_returns_thursday_or_sooner(self):
-        exp, w = resolve_expiry_current_week(NIFTY_EXPIRIES)
-        assert exp in NIFTY_EXPIRIES
-        d = date.fromisoformat(exp)
-        # Should be ≤ this Thursday
-        today = date.today()
-        days_to_thu = (3 - today.weekday()) % 7
-        week_end = today + timedelta(days=days_to_thu)
-        assert d <= week_end
+    def test_returns_nearest_future_expiry(self):
+        """current_week returns the nearest listed expiry >= today."""
+        today = date(2026, 8, 19)  # Wednesday
+        exp, w = resolve_expiry_current_week(NIFTY_EXPIRIES, today=today)
+        assert exp == "2026-08-20"  # nearest future expiry
+
+    def test_on_expiry_day_returns_that_expiry(self):
+        """If today IS a listed expiry date, return it."""
+        exp, w = resolve_expiry_current_week(NIFTY_EXPIRIES, today=date(2026, 8, 27))
+        assert exp == "2026-08-27"
+
+    def test_after_all_expiries_fallback(self):
+        """When today is past all expiries, fallback to nearest."""
+        exp, w = resolve_expiry_current_week(NIFTY_EXPIRIES, today=date(2026, 12, 1))
+        assert exp == "2026-09-24"  # nearest overall
+        assert any("No ideal" in x for x in w)
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="No expiries"):
@@ -503,14 +510,11 @@ class TestResolveExpiryCurrentWeek:
 
 
 class TestResolveExpiryNextWeek:
-    def test_returns_after_current_week(self):
-        exp, w = resolve_expiry_next_week(NIFTY_EXPIRIES)
-        assert exp in NIFTY_EXPIRIES
-        d = date.fromisoformat(exp)
-        today = date.today()
-        days_to_thu = (3 - today.weekday()) % 7
-        week_end = today + timedelta(days=days_to_thu)
-        assert d > week_end
+    def test_returns_second_nearest_future(self):
+        """next_week returns the second-nearest listed expiry >= today."""
+        today = date(2026, 8, 19)  # Wednesday
+        exp, w = resolve_expiry_next_week(NIFTY_EXPIRIES, today=today)
+        assert exp == "2026-08-27"  # second-nearest future expiry
 
     def test_empty_raises(self):
         with pytest.raises(ValueError, match="No expiries"):
@@ -588,16 +592,59 @@ class TestResolveExpiryDTERange:
 # ============================================================================
 
 class TestNonStandardExpiries:
-    """When broker lists expiries on non-Thursday dates (holidays), the
-    resolver must use the broker-provided list, not compute Thursday dates."""
+    """When broker lists expiries on non-standard dates (holidays), the
+    resolver must use the broker-provided list, not compute any weekday."""
 
-    def test_holiday_expiry(self):
-        # If the only listed expiry is a Wednesday (holiday-adjusted)
-        expiries = ["2026-08-18", "2026-08-27"]
-        exp, w = resolve_expiry_current_week(expiries)
-        # 2026-08-18 is a Tuesday — the resolver should still pick it
-        # if it's within the current week window
-        assert exp in expiries
+    def test_holiday_adjusted_expiry(self):
+        """If the broker lists a Monday expiry (holiday-adjusted from Tuesday),
+        the resolver picks it based purely on the broker list."""
+        # 2026-08-17 is a Monday; broker moved Tue expiry to Mon due to holiday
+        expiries = ["2026-08-17", "2026-08-27"]
+        today = date(2026, 8, 16)  # Sunday
+        exp, w = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-17"  # nearest future expiry from broker list
+
+    def test_non_tuesday_expiry(self):
+        """Prove the resolver follows broker-listed dates, not weekday assumptions.
+
+        All expiries are on Wednesdays and Fridays — no Tuesday at all.
+        The resolver must still pick correctly from the broker list."""
+        expiries = ["2026-08-19", "2026-08-21", "2026-08-28"]  # Wed, Fri, Fri
+        today = date(2026, 8, 18)  # Tuesday
+        exp, w = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-19"  # nearest future (Wednesday)
+
+    def test_friday_only_weekly_expiry(self):
+        """If the only listed expiry is a Friday, it should still be selected."""
+        expiries = ["2026-08-21", "2026-08-28"]
+        today = date(2026, 8, 19)  # Wednesday
+        exp, w = resolve_expiry_current_week(expiries, today=today)
+        assert exp == "2026-08-21"  # nearest future (Friday)
+
+    def test_next_week_with_holiday_adjusted_list(self):
+        """next_week should return the second-nearest future expiry
+        when the broker list includes a holiday-adjusted date."""
+        # Mon=holiday-adjusted, Tue=regular, next Tue=next week
+        expiries = ["2026-08-17", "2026-08-18", "2026-08-25"]
+        today = date(2026, 8, 16)  # Sunday
+        exp, w = resolve_expiry_next_week(expiries, today=today)
+        assert exp == "2026-08-18"  # second-nearest future
+
+    def test_monthly_tuesday_last_of_month(self):
+        """NIFTY last-Tuesday monthly: broker lists Tue expiries,
+        monthly should pick the latest in the current month."""
+        # Aug 2026: Tue 18 (past), Tue 25 (future)
+        # Sep 2026: Tue 1, Tue 8, Tue 15, Tue 22, Tue 29
+        expiries = [
+            "2026-08-18", "2026-08-25",
+            "2026-09-01", "2026-09-08", "2026-09-15", "2026-09-22", "2026-09-29",
+        ]
+        # In August: monthly picks 2026-08-25
+        exp, w = resolve_expiry_monthly(expiries, today=date(2026, 8, 19))
+        assert exp == "2026-08-25"
+        # In September: monthly picks 2026-09-29 (last Tuesday)
+        exp, w = resolve_expiry_monthly(expiries, today=date(2026, 9, 10))
+        assert exp == "2026-09-29"
 
     def test_custom_expiry_list(self):
         """Resolver works with any arbitrary expiry list the broker provides."""
