@@ -163,8 +163,8 @@ export function bsVega(type, S, K, T, sigma, r = 0, q = 0) {
 // date is unparseable. Never passes a raw integer "days remaining" to the
 // pricing model — the model only ever sees this year fraction.
 export function timeToExpiry(valuationDate, expiryDate) {
-  const v = new Date(`${valuationDate}T00:00:00`);
-  const e = new Date(`${expiryDate}T00:00:00`);
+  const v = new Date(`${valuationDate}T00:00:00Z`);
+  const e = new Date(`${expiryDate}T00:00:00Z`);
   if (Number.isNaN(v.getTime()) || Number.isNaN(e.getTime())) return null;
   const days = (e - v) / 86400000;
   return Math.max(0, days / 365);
@@ -173,7 +173,7 @@ export function timeToExpiry(valuationDate, expiryDate) {
 // Add whole calendar days to an ISO date, returning a new ISO date. Used to
 // advance the valuation date for time scenarios.
 export function addDays(isoDate, days) {
-  const d = new Date(`${isoDate}T00:00:00`);
+  const d = new Date(`${isoDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime()) || !Number.isFinite(Number(days))) return isoDate;
   d.setUTCDate(d.getUTCDate() + Number(days));
   return d.toISOString().slice(0, 10);

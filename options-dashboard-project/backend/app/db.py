@@ -83,7 +83,10 @@ def init_db():
     # Idempotent — rows already present are never duplicated.
     from app.services.leg_exposure import backfill_all_exposures
 
-    session = SessionLocal()
+    # Create a session bound to the *current* engine variable so that
+    # backfill_all_exposures always queries the same database that create_all
+    # just migrated — even when engine is monkeypatched in tests.
+    session = sessionmaker(bind=engine)()
     try:
         backfill_all_exposures(session)
     finally:
