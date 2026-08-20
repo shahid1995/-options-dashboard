@@ -79,6 +79,7 @@ import {
   updateStrategyTemplate,
   duplicateStrategyTemplate,
   deleteStrategyTemplate,
+  resolveTemplateLegs,
 } from "@/lib/api";
 import {
   templateToFrontendLegs,
@@ -162,6 +163,12 @@ export default function PaperTradingPage() {
   const [renameDialogTemplateId, setRenameDialogTemplateId] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+  // Phase 6.8E: dynamic template re-evaluation state
+  const [dynamicResolution, setDynamicResolution] = useState(null); // last resolution result
+  const [dynamicResolutionLoading, setDynamicResolutionLoading] = useState(false);
+  const [dynamicResolutionError, setDynamicResolutionError] = useState(null);
+  const [dynamicTemplateId, setDynamicTemplateId] = useState(null); // currently loaded dynamic template ID
+  const [dynamicResolutionSnapshot, setDynamicResolutionSnapshot] = useState(null); // snapshot for change detection
   const [fundsOpen, setFundsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [spotChg, setSpotChg] = useState(null);
@@ -1145,6 +1152,23 @@ export default function PaperTradingPage() {
 
   // ---- Phase 6.7: My Strategies CRUD ----
 
+  // Phase 6.8E: resolve a dynamic template against live broker data
+  const reEvaluateDynamicTemplate = useCallback(async (templateId) => {
+    if (!templateId) return;
+    setDynamicResolutionLoading(true);
+    setDynamicResolutionError(null);
+    try {
+      const result = await resolveTemplateLegs(templateId);
+      // Snapshot the previous resolution for change detection
+      setDynamicResolutionSnapshot((prev) => ({ ...prev }));
+      setDynamicResolution(result);
+    } catch (e) {
+      setDynamicResolutionError(e.response?.data?.detail || e.message || "Resolution failed");
+    } finally {
+      setDynamicResolutionLoading(false);
+    }
+  }, []);
+
   const loadTemplateIntoBuilder = (template) => {
     setLegs(templateToFrontendLegs(template));
     setStrategyName(template.name);
@@ -1154,6 +1178,21 @@ export default function PaperTradingPage() {
     setReviewOpen(false);
     resetAdjustments();
     setShowAddLeg(false);
+    // Phase 6.8E: track dynamic template and auto-resolve
+    const isDynamicTemplate = template.legs?.some((l) => l.formula_version === 2);
+    if (isDynamicTemplate) {
+      setDynamicTemplateId(template.id);
+      setDynamicResolution(null);
+      setDynamicResolutionSnapshot(null);
+      setDynamicResolutionError(null);
+      // Auto-resolve after state settles
+      setTimeout(() => reEvaluateDynamicTemplate(template.id), 0);
+    } else {
+      setDynamicTemplateId(null);
+      setDynamicResolution(null);
+      setDynamicResolutionSnapshot(null);
+      setDynamicResolutionError(null);
+    }
     // Switch symbol if the template uses a different one
     if (template.symbol && template.symbol !== symbol) {
       setSymbol(template.symbol);
@@ -2015,9 +2054,14 @@ export default function PaperTradingPage() {
                               ) : (
                                 <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{t.name}</div>
                               )}
-                              <div style={{ fontSize: 10, color: C.faint }}>
+                              <div style={{ fontSize: 10, color: C.faint, display: "flex", alignItems: "center", gap: 6 }}>
                                 {t.symbol} · {legCountLabel(t.legs?.length ?? 0)}
                                 {t.legs?.length > 0 && <span> · {legSummary(t.legs)}</span>}
+                                {t.legs?.some((l) => l.formula_version === 2) && (
+                                  <span style={{ fontSize: 9, color: C.gold, background: "rgba(201,161,90,0.12)", padding: "1px 5px", borderRadius: 3, fontWeight: 600 }}>
+                                    DYNAMIC
+                                  </span>
+                                )}
                               </div>
                             </div>
                             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -2194,7 +2238,75 @@ export default function PaperTradingPage() {
               )}
             </div>
 
-            {calc.calculationWarnings.length > 0 && (
+            {/* Phase 6.8E: Dynamic template resolution panel */}
+            {dynamicTemplateId && (
+              <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: C.gold, letterSpacing: 0.5 }}>DYNAMIC FORMULA</span>
+                  <button
+                    onClick={() => reEvaluateDynamicTemplate(dynamicTemplateId)}
+                    disabled={dynamicResolutionLoading}
+                    style={{
+                      fontSize: 10, fontWeight: 700,
+                      color: dynamicResolutionLoading ? C.faint : C.gold,
+                      background: dynamicResolutionLoading ? "transparent" : "rgba(201,161,90,0.1)",
+                      border: `1px solid ${dynamicResolutionLoading ? C.border : C.gold}`,
+                      borderRadius: 4, padding: "2px 8px",
+                      cursor: dynamicResolutionLoading ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {dynamicResolutionLoading ? "Resolving..." : "\u21bb Re-evaluate"}
+                  </button>
+                  {dynamicResolution?.status && (
+                    <span style={{ fontSize: 9, color: C.muted }}>
+                      {dynamicResolution.status === "RESOLVED" ? "\u2713 Live prices" : dynamicResolution.status}
+                    </span>
+                  )}
+                </div>
+                {dynamicResolutionError && (
+                  <div style={{ fontSize: 10, color: C.red, marginBottom: 4 }}>{dynamicResolutionError}</div>
+                )}
+                {dynamicResolution?.legs?.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {dynamicResolution.legs.map((rl, i) => {
+                      const formulaLeg = legs[i];
+                      const sm = formulaLeg?.strikeMode || "fixed";
+                      const em = formulaLeg?.expiryMode || "fixed";
+                      const isFormula = sm !== "fixed" || em !== "fixed";
+                      if (!isFormula) return null;
+                      return (
+                        <div key={i} style={{ fontSize: 10, color: C.muted, display: "flex", gap: 8, alignItems: "center" }}>
+                          <span style={{ color: C.text, fontWeight: 600, minWidth: 60 }}>
+                            {formulaLeg.action?.toUpperCase()} {formulaLeg.type === "call" ? "CE" : "PE"} x{formulaLeg.qty}
+                          </span>
+                          <span>
+                            {sm !== "fixed" && <span style={{ color: C.gold }}>{sm.replace(/_/g, " ").toUpperCase()}</span>}
+                            {sm !== "fixed" && em !== "fixed" && <span> {"\u2192"} </span>}
+                            {em !== "fixed" && <span style={{ color: C.gold }}>{em.replace(/_/g, " ").toUpperCase()}</span>}
+                          </span>
+                          <span style={{ color: C.text, fontWeight: 600 }}>
+                            {"\u2192"} {rl.resolved_strike} {"\u00b7"} {rl.resolved_expiry}
+                          </span>
+                          {rl.current_price != null && (
+                            <span style={{ color: C.muted }}>{"\u20b9"}{rl.current_price}</span>
+                          )}
+                          {rl.price_status === "stale" && (
+                            <span style={{ fontSize: 9, color: C.red }}>stale</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {dynamicResolution?.warnings?.length > 0 && (
+                  <div style={{ fontSize: 10, color: C.gold, marginTop: 4 }}>
+                    {dynamicResolution.warnings.join(" \u00b7 ")}
+                  </div>
+                )}
+              </div>
+            )}
+
+{calc.calculationWarnings.length > 0 && (
               <div
                 style={{
                   background: "rgba(224,163,58,0.08)",
