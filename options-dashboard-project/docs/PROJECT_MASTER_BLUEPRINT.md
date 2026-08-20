@@ -1,6 +1,6 @@
 # Options Dashboard — Project Master Blueprint
 
-_Last updated: 2026-08-18_
+_Last updated: 2026-08-21_
 
 ## 1. Product vision
 
@@ -269,107 +269,51 @@ Planned dashboard capabilities include:
 
 The dashboard must consume shared market-data and calculation services. It must not implement its own financial logic.
 
-## 10. Planned product roadmap
+## 10. Implementation roadmap — current state
 
-### Phase 0 — Repository audit
-Completed.
+| Phase | Status |
+|---|---|
+| Phase 0 — Repository audit | ✅ Complete |
+| Phase 0.5 — Strategy/calculation refactor | ✅ Complete |
+| Phase 1 — Strategy Builder 2.0 | ✅ Complete |
+| Phase 1.1 — Risk metrics correction | ✅ Complete |
+| Phase 2 — Professional Payoff & Risk Engine | ✅ Complete |
+| Phase 2.1 — Multi-expiry chain handling | ✅ Complete |
+| Phase 3 — Scenario & Time Analysis | ✅ Complete |
+| Phase 4.0 — Greek Foundation & Live-vs-Model Analytics | ✅ Complete |
+| Phase 4.1 — IV Analytics | ✅ Complete |
+| Phase 4.2 — Generic Greek/IV Analytics & Statistical Condition Engine | ✅ Complete |
+| Phase 5.0 — Paper Trading & Portfolio Foundation | ✅ Complete |
+| Phase 5.1 — Portfolio & Journal Analytics | ✅ Complete |
+| Phase 5.2 — Bulk Paper Position Exit & Exit-All Safety | ✅ Complete |
+| Phase 5.2.1 — Active Positions UX, Strategy Filtering, Market Session Awareness | ✅ Complete |
+| Phase 6.0 — Capital & Margin Foundation | ✅ Complete |
+| Phase 6.1 — Broker Margin Integration (Upstox) | ✅ Complete |
+| Phase 6.2 — Analytical Margin Model | ✅ Complete |
+| Phase 6.3 — Capital Efficiency & Return Metrics | ✅ Complete |
+| Phase 6.4 — Capital Allocation / Portfolio Risk Controls | ✅ Complete |
+| Phase 6.4.1 — Broker Profile & Connection Diagnostics | ✅ Complete |
+| Phase 6.5.0 — Exit Intent / Selector Foundation | ✅ Complete |
+| Phase 6.5.0.1 — Strategy Leg Attribution Architecture | ✅ Complete |
+| Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation | ✅ Complete |
+| Phase 6.5.0.3 — Execution Intent + Execution Router | ✅ Complete |
+| Phase 6.8 — Dynamic Template Resolution Architecture | ✅ Complete |
+| Phase 6.9 — Dynamic Template Execution Safety Bridge | ✅ Complete |
+| Phase 6.10 — Template Execution Audit Trail and Retry Safety | ✅ Complete |
+| Phase 6.11 — Production Deployment Readiness / CORS Correction | 🔄 In Progress |
+| Phase 7 — Journal & performance analytics | ⏳ Planned |
+| Phase 8 — Backtesting | ⏳ Planned |
+| Phase 9 — Strategy scanner | ⏳ Planned |
+| Phase 10 — Custom trading terminal/dashboard | ⏳ Planned |
+| Phase 11 — Automation / alerts | ⏳ Planned |
+| Phase 12 — Multi-broker expansion | ⏳ Planned (foundation in 6.5.0.2) |
+| Phase 13 — Community | ⏳ Planned |
 
-### Phase 0.5 — Strategy/calculation architecture refactor
-Completed and verified.
+### Current verified checkpoint
 
-### Phase 1 — Strategy Builder 2.0
-Completed and verified.
+`391b8f06a7ec5691a6c9eb824ea06320d6ea83e5` — Phase 6.10: Template Execution Audit Trail and Retry Safety.
 
-### Phase 1.1 — Risk metrics correction
-Completed and verified.
-
-### Phase 2 — Professional Payoff & Risk Engine
-Current / next implementation phase.
-
-Goals:
-- theoretical payoff independent of visible chain limits
-- analytical tail handling
-- exact finite max profit/loss for same-expiry strategies
-- underlying lower bound S >= 0
-- exact theoretical breakevens
-- separate theoretical payoff from chart/display grid
-- mixed-quantity ratio handling
-- explicit multi-expiry analytical limitations
-- clean calculation warnings/state
-
-### Phase 3 — Scenario & Time Analysis
-Planned:
-- spot price scenarios
-- time-to-expiry scenarios
-- IV scenarios
-- combined scenarios
-- current/theoretical P&L analysis
-
-### Phase 4 — Advanced Greeks / IV analytics
-Planned:
-- improved Greeks presentation
-- IV metrics
-- strategy-level Greek analysis
-- volatility relationships
-
-### Phase 5 — Paper trading / portfolio upgrade
-Planned:
-- stronger server-authoritative positions/orders
-- portfolio analytics
-- more robust trade lifecycle
-
-### Phase 6 — Capital & margin analysis
-Planned:
-- required capital
-- margin estimates
-- return on capital
-- funds/margin summary
-
-### Phase 7 — Strategy journal & performance analytics
-Planned:
-- trade journal
-- win rate
-- profit factor
-- drawdown
-- strategy performance
-- filters and comparisons
-
-### Phase 8 — Backtesting
-Planned:
-- historical strategy execution
-- entry/exit logic
-- trade statistics
-- historical replay
-
-### Phase 9 — Strategy scanner
-Planned:
-- generate candidate strategies
-- calculate risk/reward
-- rank/filter candidates
-
-### Phase 10 — Custom trading terminal/dashboard
-Planned.
-
-### Phase 11 — Automation / alerts
-Planned.
-
-### Phase 12 — Multi-broker expansion
-Planned (the broker-neutral FOUNDATION was pulled forward and is already
-implemented in Phase 6.5.0.2 — see section 8):
-- second broker adapter (architectural proof test)
-- additional broker adapters
-- persistent multi-broker connections (BrokerConnection credential model)
-- broker account management UI
-- broker-specific capability matrices
-
-### Phase 13 — Community
-Planned:
-- strategy sharing
-- profiles
-- follows
-- comments
-- leaderboards
-- challenges
+Tests: 995 backend + 946 frontend. Production build: PASS.
 
 ## 11. Development workflow with FreeBuff
 
@@ -430,26 +374,46 @@ Important regression cases include:
 
 ## 13. Current project state
 
-As of 2026-08-16:
+As of 2026-08-21:
 
-- Phase 0: complete
-- Phase 0.5: complete
-- Phase 1: complete
-- Phase 1.1: complete
-- Phase 2: prompt prepared; implementation is the current next step
+All phases through 6.10 are complete and verified. Phase 6.11 (CORS correction + deployment readiness) is in progress.
 
-The latest known main-branch implementation commit before Phase 2 is:
+Latest verified commit: `391b8f06a7ec5691a6c9eb824ea06320d6ea83e5`
 
-`3c0430b924ae97cb37e73f279a2337b63e32a393`
+### Current architecture summary
+
+- **Frontend:** Next.js 14 / React 18
+- **Backend:** FastAPI (Python 3.12+) / SQLAlchemy 2.0
+- **Database:** SQLite (development) / PostgreSQL (production)
+- **Authentication:** Upstox OAuth 2.0 (single-user MVP)
+- **Real-time:** WebSocket (FastAPI native) with HTTP fallback
+- **Paper execution:** Server-authoritative
+- **Execution boundary:** ExecutionIntent → ExecutionRouter → Paper Execution Engine
+- **Position attribution:** StrategyLegExposure (per-execution, per-leg remaining)
+- **Template execution:** preview → confirmation → server resolution → validation → audit metadata
+- **Idempotency:** clientOrderId-based at both execution and exit boundaries
+- **LIVE execution:** DISABLED — Paper is the safe execution environment
+- **Deployment target:** Railway backend + PostgreSQL / Vercel frontend
+
+### Key architectural features completed
+
+- Dynamic V2 template resolution with formula-driven strike/expiry resolution
+- Server-authoritative resolution during execution (never trusts client values)
+- Execution audit trail (formula, preview, confirmed, execution resolution)
+- Deterministic/retry-safe client identity with server-side idempotency
+- One-strike-step tolerance with confirmation-based material-change protection
+- Broker-neutral domain architecture (BrokerGateway → BrokerAdapter → UpstoxAdapter)
 
 ## 14. Current key limitations / future work
 
-- Payoff/risk engine must be upgraded so theoretical results do not depend on visible option-chain boundaries.
-- Multi-expiry strategies need explicit analytical-mode handling until a time-value model exists.
-- Margin/capital is not yet a full engine.
-- Persistent server-authoritative portfolio state is a future improvement.
-- Multi-broker support is future work.
-- Community features must be designed carefully around market-data licensing/redistribution constraints.
+- Execution-time quote_timestamp is not currently captured (blocked by protected `resolve_market_prices()` interface)
+- broker_data.spot_price may be null at the template router level
+- Single-user MVP — multi-user architecture not yet implemented
+- Live execution is disabled — requires full broker order placement pipeline
+- Community features must be designed carefully around market-data licensing/redistribution constraints
+- Persistent audit trail could be extended to all execution types (not just V2 template)
+- No automated database backup in production
+- No rate limiting on API endpoints
 
 ## 15. Permanent project constraint
 

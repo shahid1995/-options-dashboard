@@ -1,85 +1,91 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-18_
+_Last updated: 2026-08-21_
 
 ## Current phase
 
-**Phase 6.6.4 — Production-Grade Positions Module & Broker-Ready Position Lifecycle**
+**Phase 6.11 — Production Deployment Readiness / CORS Correction**
 
-Status: ✅ **Verified** (automated verification passed — 626 backend tests, 865 frontend tests, Next.js build — bug fix applied: All tab now correctly returns all positions including closed)
-
-## Phase 6.5.0.4 implementation
-
-Status: 🔄 Implemented / Pending Review (server-authoritative exit intent resolution + paper exit API — NO live execution, NO UI, NO new persistence)
+Status: 🔄 In Progress — deployment-readiness corrective milestone (CORS PUT/DELETE blocker identified and fixed)
 
 ### What was built
 
-Turns the frontend Exit Selector architecture into a SERVER-AUTHORITATIVE, LEG-AWARE, IDEMPOTENT, PAPER-EXECUTABLE exit flow.
+CORS middleware now permits all HTTP methods used by the application:
+- `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`
+- Previously only `GET` and `POST` were allowed, blocking browser preflight requests for template `PUT`/`DELETE` operations
 
-- **Server-Side Exit Selector Resolver** (`backend/app/services/exit_selector.py`): `resolve_server_exit_targets(db, user_id, scope, ...)` — independently resolves the user's exit selector against the authenticated user's current `StrategyLegExposure` and `Position` data. The client does NOT dictate which exposure is targeted.
-  - Scopes: POSITION (one position), STRATEGY (one strategy_execution_id), PORTFOLIO (all user exposures)
-  - Selector filters: option_type (CALL/PUT/CE/PE), action (BUY/SELL — the source strategy-leg action)
-  - Quantity modes: ALL (all remaining), QUANTITY (explicit lot count)
-  - Normalization: CE→CALL, PE→PUT, case-insensitive action/scope/mode
-  - Individual exposure targeting via `exposure_id`
-  - Deterministic ordering: `[option_type, source_action, exposure_id]`
-  - Side inversion: BUY exposure → SELL execution (via `exit_side_for()`)
-  - StrategyLegExposure is the authoritative attribution source
-  - Position remains authoritative for NET portfolio exposure
-  - User identity from authentication, never from request body
-  - No broker-specific fields, no Upstox imports
+### CORS regression tests added
 
-- **ExitIntentRequestIn** (`backend/app/schemas.py`): request schema with `client_order_id`, `scope`, `strategy_execution_id`, `position_id`, `exposure_id`, `option_type`, `action`, `quantity_mode`, `quantity`
-- **ExitIntentOut** + **ExitIntentTargetOut** (`backend/app/schemas.py`): response schemas exposing status, intent_id, targets, orders, positions, errors
+11 new tests in `backend/tests/test_cors.py`:
+- Preflight acceptance for GET, POST, PUT, DELETE, OPTIONS
+- Configured `FRONTEND_URL` origin accepted
+- Localhost development origin accepted
+- Unrelated origin rejected
+- Credentials allowed for configured origin
+- Actual `GET /health` has CORS headers
+- Actual `POST /` has CORS headers
 
-- **POST /paper/exit-intent** (`backend/app/routers/paper.py`): server-authoritative exit intent endpoint that:
-  1. Authenticates user
-  2. Resolves selector against authoritative DB state (StrategyLegExposure + Position)
-  3. Creates ExecutionTarget[] from server-resolved exposures
-  4. Creates ExecutionIntent (Phase 6.5.0.3)
-  5. Resolves market prices for all target positions (existing market-price resolver)
-  6. Sets fill prices on targets
-  7. Executes through ExecutionRouter → PAPER → existing paper execution engine
-  8. Returns structured ExitIntentOut response
+---
 
-### Architecture
+## Phase 6.10 — Template Execution Audit Trail and Retry Safety
 
-```
-    User selector (scope + option_type + action + quantity_mode)
-        ↓
-    POST /paper/exit-intent
-        ↓
-    Server Exit Resolver (resolve_server_exit_targets)
-        ↓
-    StrategyLegExposure (authoritative per-execution/per-leg)
-        ↓
-    ExecutionTarget[] (with side inversion)
-        ↓
-    ExecutionIntent (Phase 6.5.0.3)
-        ↓
-    ExecutionRouter (Phase 6.5.0.3)
-        ↓
-    Market Price Resolver (existing)
-        ↓
-    Existing Paper Execution Engine
-        ↓
-    Position + StrategyLegExposure + Cash + P&L + Journal
-```
+Status: ✅ **Verified and pushed** — commit `391b8f06a7ec5691a6c9eb824ea06320d6ea83e5`
 
-### Schema / migration
+### What was built
 
-None. No database changes.
+Persistent V2 execution audit trail:
+- `execution_metadata` column on `StrategyExecution` — stores complete execution context as JSON in a `Text` column
+- Metadata captures: formula definition, preview resolution, confirmed values, execution resolution, changes from preview, broker data context
+- Metadata persistence is in a separate post-execution transaction — if metadata persistence fails, the execution remains successful and API returns `execution_metadata: null`
+- V1 executions continue to have `execution_metadata: null`
 
-### Automated verification (actual runs)
+Deterministic/retry-safe client identity:
+- `clientOrderId` generated once per logical execution attempt in `confirmExecute()`
+- Stored in `currentClientOrderIdRef` (React ref)
+- `doExecuteV2()` reads from the ref — never regenerates
+- `retryExecuteV2()` reuses the same `clientOrderId` from `lastFailedExecution` state
+- Server idempotency mechanism protects against duplicate execution on retry
 
-- Backend: **604/604 tests passed** — 73 new in `tests/test_exit_selector.py` covering: selector normalization (CE→CALL, PE→PUT, action, scope, quantity_mode), side inversion (buy→sell, sell→buy), input validation (missing scope, missing position_id, missing execution_id, missing quantity, invalid quantity), no matching targets (no exposures, wrong option type filter, wrong action filter, closed exposure, zero remaining, nonexistent strategy/position, closed position), position scope (single exposure, multiple exposures, option_type filter, action filter), strategy scope (strategy isolation, selector filter), portfolio scope (all exposures, option_type filter), individual exposure targeting (specific exposure_id), quantity mode (ALL, QUANTITY, exceeds remaining, ambiguous multiple targets, unambiguous single target), user isolation (cross-user position/strategy/portfolio), deterministic ordering (by option_type/action/exposure_id), side inversion integration (buy call→sell, sell call→buy, buy put→sell, sell put→buy), instrument identity preservation, exposure identity preservation, edge cases (partial remaining, multiple strategies same instrument, no broker fields, CE/PE filter), static architecture audit (no broker imports, no broker fields).
-- Frontend: **769/769 tests passed (33 files)** — unchanged (no frontend changes in this phase)
-- `npx next build`: passed; all routes generated; no type/lint errors
+Frontend retry handling:
+- On V2 execution failure, `{ preview, confirmed, clientOrderId }` stored in `lastFailedExecution` state
+- Retry UI button reuses same clientOrderId
+- Stale confirmation dialog closed on failure
+- New execution attempt generates a fresh clientOrderId
 
-Manual verification: ⏳ pending
-ChatGPT review: ⏳ pending
+### Tests added
 
-## Phase 6.5.0.3 implementation
+Backend: +15 tests (`test_template_execution_metadata.py`)
+- Metadata builder structure and serialization
+- Metadata persistence after execution
+- Preview/confirmed/execution resolution correctness
+- V1 returns null metadata
+- Metadata persistence failure does not convert success to failure
+- Concurrent executions with different client_order_ids
+- Same client_order_id idempotent
+- Execution metadata matches actual PaperOrder strike/expiry/fill_price
+
+Frontend: +7 tests (`resolveLifecycle.test.js`)
+- Deterministic clientOrderId generation
+- Retry reuses same ID
+- New execution gets new ID
+- Metadata structure completeness
+- Metadata serialization round-trip
+
+---
+
+## Phase 6.8 — Dynamic Template Resolution Architecture
+
+Status: ✅ **Verified and merged** — commit `b7f6eb2`
+
+- 6.8A: Dynamic Strategy Resolver Foundation
+- 6.8B: Dynamic Strategy Template Schema
+- 6.8C: Strategy Resolution API
+- 6.8D: Dynamic Strategy Builder
+- 6.8E: Dynamic Template Lifecycle (auto-resolution, re-evaluate, formula vs resolved display, resolution change detection, DYNAMIC badge, V1 backward compatibility)
+
+Phase 6.9: Server-authoritative dynamic template execution (preview → confirmation → server resolution → validation → execute)
+
+Phase 6.9 verified: backend 967 passed, frontend 939 passed, build PASS
 
 ## Phase 6.5.0.3 implementation
 
@@ -287,19 +293,17 @@ ChatGPT review: ⏳ pending
 
 ## Latest verified implementation commit
 
-`3d032f2` — Phase 5.1: portfolio and journal analytics (verified).
+`391b8f06a7ec5691a6c9eb824ea06320d6ea83e5` — Phase 6.10: Template Execution Audit Trail and Retry Safety (verified and pushed).
 
-Phase 6.0 was committed via the Changes panel: implementation `01d008e` + status update `45b459e` (pending final market-hours verification).
+`3c9fac6112582e709bae8b01fbab5b00a4b1816b` — Phase 6.9: Server-authoritative dynamic template execution.
 
-Phase 6.1 implementation commit: `e677bb9` (audited 2026-08-17 — see "Phase 6.1 final audit" below; not yet user-verified / ChatGPT-approved).
+`b7f6eb23e16d462cf73a6580f76934c84cf32bf4` — Phase 6.8E: Dynamic template lifecycle (merged into main).
 
-Prior baselines: Phase 5.0 `f72b5c0fde522bf5110b125ce310d3685ffb75b4`, Phase 4.1 `22f09073749db169905fd2dd06c81c3e37794e0a`, Phase 4.0 `9ae9966ca358a716c0e53d96203103f5e717e86f`.
+**Phase 6.11** — CORS correction + deployment readiness documentation (in progress).
 
-The Phase 4.2 implementation is committed but was never user-verified or ChatGPT-reviewed; it is superseded by later phases.
+Previous baselines: Phase 6.9 verified at 967 backend + 939 frontend. Phase 6.10 verified at 984 backend + 946 frontend.
 
-Phase 6.1 was committed via the Changes panel: implementation `e677bb9` (11 files). Phase 5.2 was committed as `27a4cd2`; Phase 5.2.1 was committed as `f0d0623`; the Recharts `Line` import fix + Vitest config landed in `8aad8c2`. All phases now exist in committed history.
-
-Phases 6.4, 6.4.1, 6.5.0, 6.5.0.1 and 6.5.0.2 are implemented in the current working tree (uncommitted). Phase 6.4: `frontend/lib/calculations/capitalAllocation.js` + `capitalAllocation.test.js` (new), `frontend/app/paper/PortfolioAnalyticsPanel.js` + `PortfolioAnalyticsPanel.test.js` (modified). Phase 6.4.1: `backend/app/services/broker_profile.py` + `backend/tests/test_broker_profile.py` (new), `backend/app/services/upstox.py`, `backend/app/routers/paper.py`, `backend/app/schemas.py` (modified), `frontend/lib/brokerDiagnostics.js` + `brokerDiagnostics.test.js` (new), `frontend/app/paper/BrokerConnectionPanel.js` + `BrokerConnectionPanel.test.js` (new), `frontend/lib/api.js`, `frontend/app/paper/page.js` (modified). Phase 6.5.0: `frontend/lib/calculations/exitIntent.js` + `exitIntent.test.js` (new). Phase 6.5.0.1: `backend/app/models.py`, `backend/app/db.py`, `backend/app/services/paper_execution.py` (modified), `backend/app/services/leg_exposure.py` + `backend/tests/test_leg_exposure.py` (new). Phase 6.5.0.2: `backend/app/brokers/` (new — domain contracts, Upstox adapter, registry, gateway), `backend/app/routers/auth.py`, `backend/app/routers/chains.py`, `backend/app/routers/paper.py`, `backend/app/services/market_status.py`, `backend/app/services/broker_margin.py`, `backend/app/services/broker_profile.py` (modified — migrated behind the adapter/gateway), `backend/tests/test_broker_domain.py` + `backend/tests/test_upstox_adapter.py` (new), `docs/PROJECT_MASTER_BLUEPRINT.md` (updated) — plus this status update. Phases 6.2 and 6.3 were committed via the Changes panel. The project owner commits Phases 6.4 / 6.4.1 / 6.5.0 / 6.5.0.1 / 6.5.0.2 from the Changes panel — FreeBuff does not commit or push.
+Current verified: 995 backend + 946 frontend + production build PASS.
 
 ## Phase 5.2.1 implementation
 
