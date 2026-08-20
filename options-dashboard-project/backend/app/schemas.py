@@ -115,6 +115,8 @@ class ExecutionOut(BaseModel):
     failed_count: int
     errors: list[str]
     duplicated: bool = False  # true when this is an idempotent replay
+    # Phase 6.10: V2 execution audit trail (null for V1 executions)
+    execution_metadata: dict | None = None
 
 
 class PositionOut(BaseModel):

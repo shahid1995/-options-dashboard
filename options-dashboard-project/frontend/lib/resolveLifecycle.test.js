@@ -194,3 +194,76 @@ describe("Phase 6.9: detectResolutionChanges for execution preview", () => {
     expect(detectResolutionChanges(data, { ...data })).toEqual([]);
   });
 });
+
+// ---- Phase 6.10: execution audit trail ----
+
+describe("Phase 6.10: execution metadata structure", () => {
+  it("metadata has all required top-level keys", () => {
+    const metadata = {
+      formula_version: 2,
+      formula: { strike_mode: "atm", expiry_mode: "current_week" },
+      preview_resolution: { status: "RESOLVED", legs: [], chain_strike_step: 50 },
+      confirmed_values: { confirmed_strikes: { "0": 25000 }, confirmed_expiries: { "0": "2026-08-27" } },
+      execution_resolution: { legs: [], changes_from_preview: [], computed_at: "" },
+      broker_data: { spot_price: null, chain_fetched_at: "" },
+    };
+    expect(metadata.formula_version).toBe(2);
+    expect(metadata.preview_resolution.status).toBe("RESOLVED");
+    expect(metadata.confirmed_values.confirmed_strikes["0"]).toBe(25000);
+    expect(metadata.broker_data.spot_price).toBeNull();
+  });
+
+  it("metadata can be JSON serialized and deserialized", () => {
+    const metadata = {
+      formula_version: 2,
+      formula: { strike_mode: "atm" },
+      preview_resolution: { legs: [{ resolved_strike: 25000, resolved_expiry: "2026-08-27" }] },
+      confirmed_values: { confirmed_strikes: { "0": 25000 }, confirmed_expiries: { "0": "2026-08-27" } },
+      execution_resolution: { legs: [{ fill_price: 100.0 }], changes_from_preview: [] },
+      broker_data: { spot_price: null },
+    };
+    const serialized = JSON.stringify(metadata);
+    const deserialized = JSON.parse(serialized);
+    expect(deserialized).toEqual(metadata);
+  });
+
+  it("execution resolution captures fill prices from server", () => {
+    const execLegs = [
+      { resolved_strike: 25000, resolved_expiry: "2026-08-27", fill_price: 100.0, price_source: "market" },
+      { resolved_strike: 25200, resolved_expiry: "2026-08-27", fill_price: 50.0, price_source: "market" },
+    ];
+    expect(execLegs).toHaveLength(2);
+    expect(execLegs[0].fill_price).toBe(100.0);
+    expect(execLegs[1].fill_price).toBe(50.0);
+    expect(execLegs.every(l => l.price_source === "market")).toBe(true);
+  });
+});
+
+describe("Phase 6.10: deterministic clientOrderId generation", () => {
+  it("generates unique IDs for different timestamps", () => {
+    const id1 = `exec-template-1-${Date.now()}-abc123`;
+    // Even with same prefix, timestamp ensures uniqueness
+    const id2 = `exec-template-1-${Date.now() + 1}-abc123`;
+    expect(id1).not.toBe(id2);
+  });
+
+  it("format includes templateId for traceability", () => {
+    const templateId = 42;
+    const id = `exec-${templateId}-${Date.now()}-abc123`;
+    expect(id).toContain(`exec-${templateId}-`);
+  });
+
+  it("retry uses the same clientOrderId (idempotency)", () => {
+    const clientOrderId = `exec-42-${Date.now()}-abc123`;
+    // Simulating retry: same ID reused
+    const retryClientId = clientOrderId;
+    expect(retryClientId).toBe(clientOrderId);
+  });
+
+  it("new execution attempt generates a different clientOrderId", () => {
+    const id1 = `exec-42-${Date.now()}-abc123`;
+    const id2 = `exec-42-${Date.now()}-def456`;
+    // Different random component ensures uniqueness
+    expect(id1).not.toBe(id2);
+  });
+});

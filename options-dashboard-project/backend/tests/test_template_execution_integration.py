@@ -667,8 +667,10 @@ class TestExecuteEndpoint:
         assert _db_counts(db_session) == before
 
     def test_execute_idempotency_replay(self, client, logged_in, db_session):
-        """Same client_order_id replay returns the original execution."""
+        """Same client_order_id replay returns the original execution
+        with zero additional DB writes."""
         tid = _create_template(client, logged_in, name="Idempotent")
+        before = _db_counts(db_session)
 
         with patch("app.services.template_resolution.resolve_legs", new_callable=AsyncMock) as mock_resolve, \
              patch("app.routers.paper.resolve_market_prices", new_callable=AsyncMock) as mock_prices, \
@@ -688,6 +690,7 @@ class TestExecuteEndpoint:
             )
             assert resp1.status_code == 200
             exec_id_1 = resp1.json()["execution_id"]
+            after_first = _db_counts(db_session)
 
             resp2 = client.post(
                 f"/paper/templates/{tid}/execute",
@@ -702,6 +705,11 @@ class TestExecuteEndpoint:
             assert resp2.status_code == 200
             assert resp2.json()["execution_id"] == exec_id_1
             assert resp2.json().get("duplicated") is True
+            # Zero additional DB writes on replay
+            after_second = _db_counts(db_session)
+            assert after_second["executions"] == after_first["executions"]
+            assert after_second["orders"] == after_first["orders"]
+            assert after_second["positions"] == after_first["positions"]
 
     def test_execute_persisted_data_matches_server_resolution(self, client, logged_in, db_session):
         """Proof: persisted PaperOrder.strike, .expiry, .fill_price come from server."""

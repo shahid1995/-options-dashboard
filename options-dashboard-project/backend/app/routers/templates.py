@@ -5,8 +5,12 @@ Editing, renaming, duplicating or deleting a template NEVER affects
 historical executions, positions, exposures, orders, journal or P&L.
 """
 
+import json
+import logging
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
@@ -414,6 +418,8 @@ async def resolve_template(
 
 # ---- Phase 6.9: Dynamic template execution bridge ----------------------------
 
+logger = logging.getLogger(__name__)
+
 
 def _template_to_legs(template: StrategyTemplate) -> list[dict]:
     """Convert a template's legs to the dict format expected by resolve_legs()."""
@@ -461,6 +467,112 @@ def _resolution_to_leg_outs(result) -> list[ResolutionLegOut]:
         )
         for leg in result.legs
     ]
+
+
+# ---- Phase 6.10: Execution audit trail -----------------------------------------
+
+
+def _build_execution_metadata(
+    template,
+    preview_result,
+    comparison_changes,
+    confirmed_strikes,
+    confirmed_expiries,
+    exec_result,
+    exec_legs,
+    prices,
+) -> dict:
+    """Build the V2 execution audit trail metadata.
+
+    Captures five layers of information for post-hoc analysis:
+      A. Formula definition (what the template says)
+      B. Preview resolution (what the user saw)
+      C. Confirmed values (what the user approved)
+      D. Execution resolution (what the server actually used)
+      E. Actual fill prices (what was recorded)
+    """
+    # A. Formula definition from the first template leg
+    formula = {}
+    formula_version = 1
+    if template.legs:
+        first_leg = template.legs[0]
+        formula_version = getattr(first_leg, "formula_version", 1)
+        formula = {
+            "strike_mode": getattr(first_leg, "strike_mode", "fixed"),
+            "expiry_mode": getattr(first_leg, "expiry_mode", "fixed"),
+            "strike_offset": getattr(first_leg, "strike_offset", None),
+            "target_delta": getattr(first_leg, "target_delta", None),
+            "expiry_dte_min": getattr(first_leg, "expiry_dte_min", None),
+            "expiry_dte_max": getattr(first_leg, "expiry_dte_max", None),
+        }
+
+    # B. Preview resolution from the fresh resolution result
+    preview_legs = []
+    for leg in preview_result.legs:
+        preview_legs.append({
+            "position": leg.position,
+            "resolved_strike": leg.resolved_strike,
+            "resolved_expiry": leg.resolved_expiry,
+            "strike_mode_used": leg.strike_mode_used,
+            "expiry_mode_used": leg.expiry_mode_used,
+            "current_price": leg.current_price,
+            "price_status": leg.price_status,
+            "quote_timestamp": leg.quote_timestamp,
+        })
+
+    # D+E. Execution resolution from the actual exec_legs + prices
+    exec_legs_meta = []
+    for leg in exec_legs:
+        key = (leg["expiration_date"], leg["strike_price"], leg["option_type"])
+        exec_legs_meta.append({
+            "resolved_strike": leg["strike_price"],
+            "resolved_expiry": leg["expiration_date"],
+            "fill_price": prices.get(key),
+            "price_source": "market",
+        })
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "formula_version": formula_version,
+        "formula": formula,
+        "preview_resolution": {
+            "status": preview_result.status,
+            "legs": preview_legs,
+            "chain_strike_step": preview_result.chain_strike_step,
+            "computed_at": now_iso,
+        },
+        "confirmed_values": {
+            "confirmed_strikes": {str(k): v for k, v in (confirmed_strikes or {}).items()},
+            "confirmed_expiries": {str(k): v for k, v in (confirmed_expiries or {}).items()},
+        },
+        "execution_resolution": {
+            "legs": exec_legs_meta,
+            "changes_from_preview": comparison_changes or [],
+            "computed_at": now_iso,
+        },
+        "broker_data": {
+            "spot_price": None,  # not available at router level
+            "chain_fetched_at": now_iso,
+        },
+    }
+
+
+def _persist_execution_metadata(db: Session, execution_id: str, metadata: dict) -> None:
+    """Write execution metadata in a separate transaction (post-commit).
+
+    This runs AFTER execute_strategy() has committed the execution.
+    Raises on failure so the caller can decide whether to include
+    metadata in the response.
+    """
+    from app.models import StrategyExecution
+
+    db.execute(
+        update(StrategyExecution)
+        .where(StrategyExecution.execution_id == execution_id)
+        .values(execution_metadata=json.dumps(metadata))
+    )
+    db.commit()
 
 
 @router.post(
@@ -614,6 +726,37 @@ async def execute_template(
             legs=[ExecutionLegIn(**leg) for leg in exec_legs],
         )
 
-        return execute_strategy(user_id, exec_request, db, prices)
+        result = execute_strategy(user_id, exec_request, db, prices)
+
+        # Phase 6.10: Persist execution audit trail metadata.
+        # This runs AFTER execute_strategy() has committed in a separate
+        # transaction. If metadata persistence fails, the execution remains
+        # valid — metadata is optional.
+        try:
+            metadata = _build_execution_metadata(
+                template=template,
+                preview_result=fresh_result,
+                comparison_changes=changes,
+                confirmed_strikes=request.confirmed_strikes,
+                confirmed_expiries=request.confirmed_expiries,
+                exec_result=result,
+                exec_legs=exec_legs,
+                prices=prices,
+            )
+            _persist_execution_metadata(db, result.execution_id, metadata)
+            # Only include metadata in response if DB write succeeded
+            result = result.model_copy(update={"execution_metadata": metadata})
+        except Exception:
+            logger.warning(
+                "Failed to persist execution metadata for %s",
+                result.execution_id,
+                exc_info=True,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        return result
     except PaperExecutionError as exc:
         raise _paper_error(exc) from exc

@@ -175,6 +175,9 @@ export default function PaperTradingPage() {
   const [executePreviewResult, setExecutePreviewResult] = useState(null);
   const [executeConfirmOpen, setExecuteConfirmOpen] = useState(false);
   const [executeConfirmLoading, setExecuteConfirmLoading] = useState(false);
+  // Phase 6.10: retry-safe execution identity
+  const currentClientOrderIdRef = useRef(null);
+  const [lastFailedExecution, setLastFailedExecution] = useState(null);
 
 
   const [fundsOpen, setFundsOpen] = useState(false);
@@ -860,7 +863,9 @@ export default function PaperTradingPage() {
   };
 
   const doExecuteV2 = async (preview, confirmed) => {
-    const clientOrderId = `exec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Phase 6.10: reuse the clientOrderId from the current logical execution attempt.
+    // This ensures retries use the same idempotency key.
+    const clientOrderId = currentClientOrderIdRef.current;
     try {
       await executeTemplate(dynamicTemplateId, {
         client_order_id: clientOrderId,
@@ -870,19 +875,44 @@ export default function PaperTradingPage() {
       });
     } catch (e) {
       if (isAuthError(e)) { setSessionExpired(true); return; }
+      // Phase 6.10: preserve execution context for retry, close stale dialog
+      setLastFailedExecution({ preview, confirmed, clientOrderId });
+      setExecuteConfirmOpen(false);
+      setExecutePreviewResult(null);
       alert(paperErrorMessage(e));
       return;
     }
     await Promise.all([loadPortfolio(), loadJournal()]);
+    setLastFailedExecution(null);
     resetBuilderState();
     setExecuteConfirmOpen(false);
     setExecutePreviewResult(null);
+  };
+
+  // Phase 6.10: retry failed V2 execution with the SAME clientOrderId
+  const retryExecuteV2 = async () => {
+    if (!lastFailedExecution || orderInFlightRef.current) return;
+    const { preview, confirmed, clientOrderId } = lastFailedExecution;
+    currentClientOrderIdRef.current = clientOrderId;
+    setLastFailedExecution(null);
+    orderInFlightRef.current = true;
+    setOrderInFlight(true);
+    try {
+      await doExecuteV2(preview, confirmed);
+    } finally {
+      orderInFlightRef.current = false;
+      setOrderInFlight(false);
+    }
   };
 
   const confirmExecute = async () => {
     if (orderInFlightRef.current) return;
     // V2 dynamic templates go through the preview → confirm → execute path
     if (dynamicTemplateId) {
+      // Phase 6.10: generate clientOrderId ONCE per logical execution attempt.
+      // Retries within the same attempt reuse this ID for idempotency.
+      currentClientOrderIdRef.current = `exec-${dynamicTemplateId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setLastFailedExecution(null);
       orderInFlightRef.current = true;
       setOrderInFlight(true);
       try {
@@ -2437,6 +2467,30 @@ export default function PaperTradingPage() {
                     style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
                   >
                     Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Phase 6.10: Retry failed V2 execution */}
+            {lastFailedExecution && !executeConfirmOpen && (
+              <div style={{ background: C.surface2, border: `1px solid ${C.red}`, borderRadius: 8, padding: "10px 12px", marginTop: 6 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: C.red, marginBottom: 6 }}>✕ EXECUTION FAILED</div>
+                <div style={{ fontSize: 10, color: C.muted, marginBottom: 8 }}>
+                  The execution could not be completed. You can retry with the same order identity.
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    onClick={retryExecuteV2}
+                    style={{ fontSize: 10.5, fontWeight: 700, color: "#0B0E14", background: C.gold, border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    onClick={() => { setLastFailedExecution(null); }}
+                    style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}
+                  >
+                    Dismiss
                   </button>
                 </div>
               </div>
