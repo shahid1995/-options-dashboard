@@ -31,7 +31,8 @@ import {
   calculatePortfolioRiskControls,
   calculateStrategyAllocation,
 } from "@/lib/calculations/capitalAllocation";
-import { updateTradeAnnotations } from "@/lib/api";
+import { updateTradeAnnotations, getStrategyDetail } from "@/lib/api";
+import TradeDetailModal from "./TradeDetailModal";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
@@ -91,6 +92,33 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
   const [annotationDraft, setAnnotationDraft] = useState({ tags: "", notes: "" });
   const [annotationSaving, setAnnotationSaving] = useState(false);
   const [annotationFeedback, setAnnotationFeedback] = useState(null);
+
+  // Phase 7.1: trade detail + strategy drill-down state
+  const [tradeDetailId, setTradeDetailId] = useState(null);
+  const [strategyDrilldown, setStrategyDrilldown] = useState(null); // strategy name or null
+  const [strategyDetail, setStrategyDetail] = useState(null);
+  const [strategyDetailLoading, setStrategyDetailLoading] = useState(false);
+  const [strategyDetailError, setStrategyDetailError] = useState(null);
+
+  const openStrategyDrilldown = async (strategyName) => {
+    setStrategyDrilldown(strategyName);
+    setStrategyDetailLoading(true);
+    setStrategyDetailError(null);
+    try {
+      const detail = await getStrategyDetail(strategyName);
+      setStrategyDetail(detail);
+    } catch (e) {
+      setStrategyDetailError(e?.response?.data?.detail || "Failed to load strategy");
+    } finally {
+      setStrategyDetailLoading(false);
+    }
+  };
+
+  const closeStrategyDrilldown = () => {
+    setStrategyDrilldown(null);
+    setStrategyDetail(null);
+    setStrategyDetailError(null);
+  };
 
   const saveAnnotations = async () => {
     if (!editingAnnotations) return;
@@ -515,7 +543,14 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
             <tbody>
               {strategies.map((s) => (
                 <tr key={s.strategy} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
-                  <td style={{ padding: "5px 6px", fontWeight: 700 }}>{s.strategy}</td>
+                  <td style={{ padding: "5px 6px", fontWeight: 700 }}>
+                    <button
+                      onClick={() => openStrategyDrilldown(s.strategy)}
+                      style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: 0, textAlign: "left" }}
+                    >
+                      {s.strategy}
+                    </button>
+                  </td>
                   <td style={{ padding: "5px 6px" }}>{s.trades} ({s.wins}W/{s.losses}L)</td>
                   <td style={{ padding: "5px 6px", color: s.win_rate == null ? C.faint : C.gold }}>{s.win_rate == null ? "—" : `${s.win_rate.toFixed(0)}%`}</td>
                   <td style={{ padding: "5px 6px", color: pnlColor(s.total_pnl) }}>{fmtPnl(s.total_pnl)}</td>
@@ -589,7 +624,14 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
                 return (
                   <tr key={r.executionId} className="paper-row" style={{ borderTop: `1px solid ${C.border}`, verticalAlign: "top" }}>
                     <td style={{ padding: "5px 6px", whiteSpace: "nowrap" }}>{r.exitLabel}</td>
-                    <td style={{ padding: "5px 6px", fontWeight: 700 }}>{r.strategy}</td>
+                    <td style={{ padding: "5px 6px", fontWeight: 700 }}>
+                      <button
+                        onClick={() => setTradeDetailId(r.executionId)}
+                        style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11.5, fontWeight: 700, padding: 0, textAlign: "left" }}
+                      >
+                        {r.strategy}
+                      </button>
+                    </td>
                     <td style={{ padding: "5px 6px", fontSize: 10, color: C.muted }}>
                       <div>{r.entryLabel} → {r.exitLabel}</div>
                       <div style={{ marginTop: 2 }}>{r.legs.slice(0, 2).map((l) => l.label).join(" / ")}</div>
@@ -679,6 +721,93 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 7.1: Trade Detail Modal */}
+      {tradeDetailId && (
+        <TradeDetailModal executionId={tradeDetailId} onClose={() => setTradeDetailId(null)} />
+      )}
+
+      {/* Phase 7.1: Strategy Drill-Down Modal */}
+      {strategyDrilldown && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10000 }} onClick={closeStrategyDrilldown}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 20, width: 560, maxWidth: "92vw", maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 800 }}>Strategy: {strategyDrilldown}</div>
+              <button onClick={closeStrategyDrilldown} style={{ fontSize: 18, color: C.muted, background: "none", border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            {strategyDetailLoading && <div style={{ fontSize: 12, color: C.muted, padding: 20 }}>Loading…</div>}
+            {strategyDetailError && <div style={{ fontSize: 12, color: C.red, padding: 20 }}>{strategyDetailError}</div>}
+            {strategyDetail && (
+              <>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginBottom: 14 }}>
+                  {["total_executions", "closed_executions", "open_executions"].map((k) => (
+                    <div key={k} style={{ minWidth: 80 }}>
+                      <div style={{ fontSize: 10, color: C.muted }}>{k.replace(/_/g, " ")}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>{strategyDetail[k]}</div>
+                    </div>
+                  ))}
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>win rate</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.gold }}>{strategyDetail.win_rate != null ? `${strategyDetail.win_rate.toFixed(0)}%` : "—"}</div>
+                  </div>
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>net P&L</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: pnlColor(strategyDetail.net_realized_pnl) }}>{fmtPnl(strategyDetail.net_realized_pnl)}</div>
+                  </div>
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>profit factor</div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{strategyDetail.profit_factor != null ? strategyDetail.profit_factor.toFixed(2) : "—"}</div>
+                  </div>
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontSize: 10, color: C.muted }}>expectancy</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: pnlColor(strategyDetail.expectancy) }}>{strategyDetail.expectancy != null ? fmtPnl(strategyDetail.expectancy) : "—"}</div>
+                  </div>
+                </div>
+                <div style={sectionTitle}>TRADES</div>
+                {strategyDetail.trades.length === 0 ? (
+                  <div style={{ fontSize: 11, color: C.faint }}>No trades</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ color: C.muted, fontSize: 9.5, textAlign: "left" }}>
+                        <th style={{ padding: "4px 6px" }}>Date</th>
+                        <th style={{ padding: "4px 6px" }}>Result</th>
+                        <th style={{ padding: "4px 6px" }}>P&L</th>
+                        <th style={{ padding: "4px 6px" }}>Duration</th>
+                        <th style={{ padding: "4px 6px" }}>Tags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {strategyDetail.trades.map((t) => (
+                        <tr key={t.execution_id} style={{ borderTop: `1px solid ${C.border}` }}>
+                          <td style={{ padding: "4px 6px" }}>
+                            <button
+                              onClick={() => { closeStrategyDrilldown(); setTradeDetailId(t.execution_id); }}
+                              style={{ background: "none", border: "none", color: C.accent, cursor: "pointer", fontSize: 11, padding: 0 }}
+                            >
+                              {t.entry_at ? new Date(t.entry_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "—"}
+                            </button>
+                          </td>
+                          <td style={{ padding: "4px 6px" }}>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: t.result === "WIN" ? C.green : t.result === "LOSS" ? C.red : C.gold, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "1px 6px" }}>
+                              {t.result ?? "OPEN"}
+                            </span>
+                          </td>
+                          <td style={{ padding: "4px 6px", fontWeight: 600, color: pnlColor(t.realized_pnl) }}>{fmtPnl(t.realized_pnl)}</td>
+                          <td style={{ padding: "4px 6px" }}>{t.duration_label ?? "—"}</td>
+                          <td style={{ padding: "4px 6px", fontSize: 10 }}>
+                            {t.tags && t.tags.length > 0 ? t.tags.join(", ") : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

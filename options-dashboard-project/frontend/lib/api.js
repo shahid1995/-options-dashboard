@@ -123,6 +123,12 @@ export const getPaperAnalytics = (params) =>
 export const updateTradeAnnotations = (executionId, data) =>
   api.put(`/paper/analytics/trades/${executionId}/annotations`, data).then((r) => r.data);
 
+// ---- Phase 7.1: trade detail + strategy detail drill-down ----
+export const getTradeDetail = (executionId) =>
+  api.get(`/paper/analytics/trades/${executionId}`).then((r) => r.data);
+export const getStrategyDetail = (strategyName) =>
+  api.get(`/paper/analytics/strategies/${encodeURIComponent(strategyName)}`).then((r) => r.data);
+
 // ---- Phase 6.0: capital & margin foundation ----
 // Server-authoritative capital summary: premium outlay, broker margin,
 // estimated capital, paper capital — each with source/status. Read-only.

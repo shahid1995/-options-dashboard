@@ -584,3 +584,225 @@ def _leg_summary(order) -> dict:
         "lot_size": order.lot_size,
         "fill_price": order.fill_price,
     }
+
+
+# ---- Phase 7.1: Trade Detail + Strategy Detail --------------------------------
+
+
+def get_trade_detail(user_id: str, execution_id: str, db: Session) -> dict | None:
+    """Return complete details for one strategy execution.
+
+    Returns None when the execution does not exist or does not belong to
+    the authenticated user. The backend remains authoritative: all data
+    comes from StrategyExecution / Position / PaperOrder.
+    """
+    ex = db.scalar(
+        select(StrategyExecution).where(
+            StrategyExecution.execution_id == execution_id,
+            StrategyExecution.user_id == user_id,
+        )
+    )
+    if ex is None:
+        return None
+
+    positions = list(
+        db.scalars(
+            select(Position).where(Position.strategy_execution_id == execution_id)
+        ).all()
+    )
+    orders = list(
+        db.scalars(
+            select(PaperOrder).where(PaperOrder.execution_id == execution_id)
+        ).all()
+    )
+
+    open_positions = [p for p in positions if p.status == "open"]
+    closed_positions = [p for p in positions if p.status == "closed"]
+    is_open = len(open_positions) > 0
+
+    # Classification
+    realized = round(sum(p.realized_pnl for p in positions), 2) if positions else None
+    if is_open:
+        result = "OPEN"
+    elif realized is not None:
+        result = classify_result(realized)
+    else:
+        result = None
+
+    # Duration
+    dur = holding_duration_seconds(ex.entry_at, ex.exit_at)
+
+    # Entry/exit orders
+    entry_orders = [o for o in orders if o.kind == "entry" and o.status == "FILLED"]
+    exit_orders = [o for o in orders if o.kind == "exit" and o.status == "FILLED"]
+
+    # Leg details with per-leg P&L
+    legs = []
+    for o in orders:
+        if o.kind != "entry":
+            continue
+        # Find matching exit for this leg
+        matching_exit = None
+        for eo in exit_orders:
+            if (eo.symbol == o.symbol and eo.expiry == o.expiry
+                    and eo.strike == o.strike and eo.option_type == o.option_type
+                    and eo.action != o.action):
+                matching_exit = eo
+                break
+        legs.append({
+            "symbol": o.symbol,
+            "expiry": o.expiry,
+            "strike": o.strike,
+            "option_type": o.option_type,
+            "action": o.action,
+            "quantity": o.quantity,
+            "lot_size": o.lot_size,
+            "entry_price": o.fill_price,
+            "exit_price": matching_exit.fill_price if matching_exit else None,
+            "entry_status": o.status,
+            "realized_pnl": matching_exit.realized_pnl if matching_exit else None,
+        })
+
+    # Position summary
+    total_quantity = sum(abs(p.net_quantity) for p in positions)
+    total_exposure = sum(
+        p.average_entry_price * abs(p.net_quantity) * p.lot_size
+        for p in positions
+    )
+
+    # Execution metadata (Phase 6.10)
+    metadata = None
+    if ex.execution_metadata:
+        try:
+            metadata = json.loads(ex.execution_metadata)
+        except (json.JSONDecodeError, TypeError):
+            metadata = None
+
+    return {
+        "execution_id": ex.execution_id,
+        "strategy": ex.strategy_tag or "Custom",
+        "symbol": ex.symbol,
+        "status": ex.status,
+        "result": result,
+        "entry_at": ex.entry_at,
+        "exit_at": ex.exit_at,
+        "duration_seconds": dur,
+        "duration_label": format_duration(dur),
+        "entry_net": ex.entry_net,
+        "realized_pnl": realized,
+        "total_quantity": total_quantity,
+        "total_exposure": round(total_exposure, 2),
+        "open_position_count": len(open_positions),
+        "closed_position_count": len(closed_positions),
+        "entry_order_count": len(entry_orders),
+        "exit_order_count": len(exit_orders),
+        "legs": legs,
+        "execution_metadata": metadata,
+        "tags": _parse_tags(ex.tags),
+        "notes": ex.notes,
+    }
+
+
+def get_strategy_detail(user_id: str, strategy_name: str, db: Session) -> dict | None:
+    """Return aggregate performance + trade list for one strategy.
+
+    Returns None when no executions exist for the given strategy name.
+    Strategy identity is by strategy_tag (name). Duplicate strategy names
+    across users are isolated by user_id.
+    """
+    executions = list(
+        db.scalars(
+            select(StrategyExecution).where(
+                StrategyExecution.user_id == user_id,
+                StrategyExecution.strategy_tag == strategy_name,
+            ).order_by(StrategyExecution.entry_at.asc())
+        ).all()
+    )
+    if not executions:
+        return None
+
+    all_positions = list(
+        db.scalars(
+            select(Position).where(Position.user_id == user_id)
+        ).all()
+    )
+    all_orders = list(
+        db.scalars(
+            select(PaperOrder).where(PaperOrder.user_id == user_id)
+        ).all()
+    )
+
+    # Build completed trades list (reuse get_analytics logic)
+    completed = []
+    trade_list = []
+    for ex in executions:
+        ex_positions = [p for p in all_positions if p.strategy_execution_id == ex.execution_id]
+        if not ex_positions:
+            continue
+        is_open = any(p.status == "open" for p in ex_positions)
+        ex_realized = round(sum(p.realized_pnl for p in ex_positions), 2)
+        exit_at = ex.exit_at or max(
+            (p.closed_at for p in ex_positions if p.closed_at), default=None
+        )
+
+        if not is_open and exit_at is not None:
+            dur = holding_duration_seconds(ex.entry_at, exit_at)
+            completed.append({
+                "execution_id": ex.execution_id,
+                "exit_date": _as_utc(exit_at).date().isoformat(),
+                "realized_pnl": ex_realized,
+                "entry_at": ex.entry_at,
+                "exit_at": exit_at,
+                "result": classify_result(ex_realized),
+            })
+
+        trade_list.append({
+            "execution_id": ex.execution_id,
+            "symbol": ex.symbol,
+            "status": ex.status,
+            "result": "OPEN" if is_open else classify_result(ex_realized),
+            "entry_at": ex.entry_at,
+            "exit_at": ex.exit_at,
+            "realized_pnl": ex_realized,
+            "duration_seconds": holding_duration_seconds(ex.entry_at, ex.exit_at),
+            "duration_label": format_duration(holding_duration_seconds(ex.entry_at, ex.exit_at)),
+            "tags": _parse_tags(ex.tags),
+        })
+
+    # Aggregate performance (reuse existing pure functions)
+    pnls = [t["realized_pnl"] for t in completed]
+    results = [t["result"] for t in completed]
+    wins = sum(1 for r in results if r == "WIN")
+    losses = sum(1 for r in results if r == "LOSS")
+    breakevens = sum(1 for r in results if r == "BREAKEVEN")
+    durations = [
+        d for d in (holding_duration_seconds(t["entry_at"], t["exit_at"]) for t in completed)
+        if d is not None
+    ]
+    open_count = sum(1 for t in trade_list if t["status"] != "CLOSED" and t["result"] == "OPEN")
+    closed_count = len(completed)
+
+    return {
+        "strategy": strategy_name,
+        "total_executions": len(executions),
+        "open_executions": open_count,
+        "closed_executions": closed_count,
+        "winning_trades": wins,
+        "losing_trades": losses,
+        "breakeven_trades": breakevens,
+        "win_rate": win_rate(wins, len(completed)) if completed else None,
+        "gross_profit": round(sum(p for p in pnls if p > 0), 2) if pnls else 0.0,
+        "gross_loss": round(sum(p for p in pnls if p < 0), 2) if pnls else 0.0,
+        "net_realized_pnl": round(sum(pnls), 2) if pnls else 0.0,
+        "profit_factor": profit_factor(pnls),
+        "expectancy": expectancy(pnls),
+        "average_winner": average_winner(pnls),
+        "average_loser": average_loser(pnls),
+        "largest_winner": largest_winner(pnls),
+        "largest_loser": largest_loser(pnls),
+        **streaks(results),
+        "average_holding_duration": (
+            round(sum(durations) / len(durations), 2) if durations else None
+        ),
+        "trades": sorted(trade_list, key=lambda t: t["entry_at"], reverse=True),
+    }
