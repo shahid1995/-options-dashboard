@@ -169,6 +169,8 @@ export function journalDisplayRows(analytics) {
       result: row.result,
       resultColor: badge.color,
       legs,
+      tags: row.tags ?? null,
+      notes: row.notes ?? null,
     };
   });
 }

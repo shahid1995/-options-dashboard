@@ -542,8 +542,23 @@ class JournalRowOut(BaseModel):
     realized_pnl: float
     result: str  # WIN | LOSS | BREAKEVEN
     legs: list[dict]
+    tags: list[str] | None = None
+    notes: str | None = None
 
 
+class TradeAnnotationsIn(BaseModel):
+    """PUT /paper/analytics/trades/{execution_id}/annotations — update trade annotations."""
+
+    tags: list[str] | None = Field(default=None)
+    notes: str | None = Field(default=None, max_length=2000)
+
+class TradeAnnotationsOut(BaseModel):
+    """Response after updating trade annotations."""
+
+    execution_id: str
+    tags: list[str] | None = None
+    notes: str | None = None
+
 class AnalyticsWarningOut(BaseModel):
     code: str
     discrepancies: list[dict] = []

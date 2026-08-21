@@ -77,6 +77,8 @@ def init_db():
     ensure_column(engine, "strategy_template_legs", "formula_version", "INTEGER DEFAULT 1")
     # Phase 6.10: V2 execution audit trail
     ensure_column(engine, "strategy_executions", "execution_metadata", "TEXT NULL")
+    ensure_column(engine, "strategy_executions", "tags", "TEXT NULL")
+    ensure_column(engine, "strategy_executions", "notes", "TEXT NULL")
     # Existing databases predate the Phase 5.0 journal-linkage columns.
     ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")

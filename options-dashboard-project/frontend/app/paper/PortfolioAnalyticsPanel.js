@@ -31,6 +31,7 @@ import {
   calculatePortfolioRiskControls,
   calculateStrategyAllocation,
 } from "@/lib/calculations/capitalAllocation";
+import { updateTradeAnnotations } from "@/lib/api";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
@@ -84,6 +85,30 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
   const marked = useMemo(() => (positionsWithLtp ?? []).map(normalizeMarkedPosition), [positionsWithLtp]);
   const conc = useMemo(() => concentration(marked), [marked]);
   const exposure = useMemo(() => markedExposure(marked), [marked]);
+
+  // Phase 7.0: trade annotation editing state
+  const [editingAnnotations, setEditingAnnotations] = useState(null);
+  const [annotationDraft, setAnnotationDraft] = useState({ tags: "", notes: "" });
+  const [annotationSaving, setAnnotationSaving] = useState(false);
+  const [annotationFeedback, setAnnotationFeedback] = useState(null);
+
+  const saveAnnotations = async () => {
+    if (!editingAnnotations) return;
+    setAnnotationSaving(true);
+    setAnnotationFeedback(null);
+    try {
+      const tags = annotationDraft.tags.split(",").map((t) => t.trim()).filter(Boolean);
+      await updateTradeAnnotations(editingAnnotations.executionId, { tags, notes: annotationDraft.notes || null });
+      setAnnotationFeedback({ type: "success", message: "Saved" });
+      setTimeout(() => setEditingAnnotations(null), 600);
+      // Trigger a reload by dispatching a custom event — the parent page will handle it
+      window.dispatchEvent(new CustomEvent("annotations-updated"));
+    } catch (e) {
+      setAnnotationFeedback({ type: "error", message: e?.response?.data?.detail || "Save failed" });
+    } finally {
+      setAnnotationSaving(false);
+    }
+  };
   const marksAvailable = marked.some((p) => p.currentLtp != null);
 
   // Phase 6.3: capital-efficiency metrics (portfolio level, since inception).
@@ -555,6 +580,7 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
                 <th style={{ padding: "5px 6px" }}>P&L</th>
                 <th style={{ padding: "5px 6px" }}>Premium ROI</th>
                 <th style={{ padding: "5px 6px" }}>Result</th>
+                <th style={{ padding: "5px 6px" }}>Tags / Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -584,6 +610,29 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
                         {r.result}
                       </span>
                     </td>
+                    <td style={{ padding: "5px 6px", fontSize: 10 }}>
+                      {r.tags && r.tags.length > 0 ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                          {r.tags.map((t, i) => (
+                            <span key={i} style={{ fontSize: 9, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 4, padding: "1px 5px", color: C.muted }}>{t}</span>
+                          ))}
+                        </div>
+                      ) : r.notes ? (
+                        <span style={{ color: C.faint, fontStyle: "italic" }} title={r.notes}>📝</span>
+                      ) : (
+                        <span style={{ color: C.faint }}>—</span>
+                      )}
+                      <button
+                        onClick={() => {
+                          setEditingAnnotations({ executionId: r.executionId, tags: r.tags, notes: r.notes });
+                          setAnnotationDraft({ tags: (r.tags ?? []).join(", "), notes: r.notes ?? "" });
+                          setAnnotationFeedback(null);
+                        }}
+                        style={{ fontSize: 9, color: C.accent, background: "none", border: "none", cursor: "pointer", padding: "2px 4px", marginTop: 2 }}
+                      >
+                        edit
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -595,6 +644,42 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
       {(dq.warnings ?? []).length > 0 && (
         <div style={{ marginTop: 12, fontSize: 10.5, color: C.gold, lineHeight: 1.5 }}>
           ⚠️ {dq.warnings.map((w) => w.code).join(", ")} — the backend reconciliation found discrepancies. Data is shown as stored; nothing was silently corrected.
+        </div>
+      )}
+
+      {/* Phase 7.0: Annotation edit modal */}
+      {editingAnnotations && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }} onClick={() => setEditingAnnotations(null)}>
+          <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 20, width: 380, maxWidth: "90vw" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>Trade Annotations</div>
+            <label style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 4 }}>Tags (comma-separated)</label>
+            <input
+              value={annotationDraft.tags}
+              onChange={(e) => setAnnotationDraft((d) => ({ ...d, tags: e.target.value }))}
+              placeholder="e.g. earnings, high-conviction"
+              style={{ width: "100%", fontSize: 12, padding: "6px 8px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, boxSizing: "border-box" }}
+            />
+            <label style={{ fontSize: 11, color: C.muted, display: "block", marginTop: 10, marginBottom: 4 }}>Notes</label>
+            <textarea
+              value={annotationDraft.notes}
+              onChange={(e) => setAnnotationDraft((d) => ({ ...d, notes: e.target.value }))}
+              placeholder="Trade notes..."
+              rows={3}
+              maxLength={2000}
+              style={{ width: "100%", fontSize: 12, padding: "6px 8px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, resize: "vertical", boxSizing: "border-box" }}
+            />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+              <span style={{ fontSize: 10, color: annotationFeedback?.type === "error" ? C.red : annotationFeedback?.type === "success" ? C.green : C.faint }}>
+                {annotationFeedback?.message ?? ""}
+              </span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setEditingAnnotations(null)} style={{ fontSize: 11, padding: "5px 12px", background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, cursor: "pointer" }}>Cancel</button>
+                <button onClick={saveAnnotations} disabled={annotationSaving} style={{ fontSize: 11, padding: "5px 12px", background: C.accent, border: "none", borderRadius: 6, color: "#fff", cursor: annotationSaving ? "wait" : "pointer" }}>
+                  {annotationSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

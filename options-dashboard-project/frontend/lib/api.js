@@ -119,6 +119,10 @@ export const getPositionsValuation = () =>
 export const getPaperAnalytics = (params) =>
   api.get("/paper/analytics", { params }).then((r) => r.data);
 
+// ---- Phase 7.0: trade annotations (tags & notes) ----
+export const updateTradeAnnotations = (executionId, data) =>
+  api.put(`/paper/analytics/trades/${executionId}/annotations`, data).then((r) => r.data);
+
 // ---- Phase 6.0: capital & margin foundation ----
 // Server-authoritative capital summary: premium outlay, broker margin,
 // estimated capital, paper capital — each with source/status. Read-only.

@@ -26,12 +26,39 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from statistics import median
+import json
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import PaperAccount, PaperOrder, PaperTransaction, Position, StrategyExecution
 from app.services.paper_execution import DEFAULT_STARTING_CAPITAL, reconcile
+
+
+def _parse_tags(raw: str | None) -> list[str] | None:
+    """Parse a JSON array of tag strings from the database column.
+
+    Returns None when the column is empty/null. Returns an empty list when
+    the column contains ``[]``. Returns a filtered list of non-empty strings
+    when the column contains valid JSON. Falls back to None for malformed data.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(t) for t in parsed if t]
+        return None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def serialize_tags(tags: list[str] | None) -> str | None:
+    """Serialize a list of tag strings to a JSON string for storage."""
+    if not tags:
+        return None
+    cleaned = [str(t).strip() for t in tags if t and str(t).strip()]
+    return json.dumps(cleaned) if cleaned else None
 
 # ---- Pure classification ----------------------------------------------------
 
@@ -422,6 +449,8 @@ def get_analytics(
                 "realized_pnl": round(sum(p.realized_pnl for p in ex_positions), 2),
                 "result": classify_result(round(sum(p.realized_pnl for p in ex_positions), 2)),
                 "legs": [o for o in orders if o.execution_id == ex.execution_id],
+                "tags": _parse_tags(ex.tags),
+                "notes": ex.notes,
             }
         )
 
@@ -491,6 +520,8 @@ def get_analytics(
                 "realized_pnl": t["realized_pnl"],
                 "result": t["result"],
                 "legs": [_leg_summary(o) for o in t["legs"]],
+                "tags": t.get("tags"),
+                "notes": t.get("notes"),
             }
         )
 

@@ -127,6 +127,9 @@ class StrategyExecution(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
     # Phase 6.10: V2 execution audit trail (JSON in Text for SQLite compat)
     execution_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Phase 7.0: trade annotations
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of strings
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (UniqueConstraint("user_id", "client_order_id", name="uq_execution_client_order"),)
 
