@@ -280,6 +280,33 @@ class StrategyLegExposure(Base):
     )
 
 
+class ExitExposureAllocation(Base):
+    """Junction table: maps exit orders to the exposure reductions they caused.
+
+    One exit can reduce multiple exposures (FIFO spanning exposures).
+    One exposure can be reduced by multiple partial exits.
+    This is a many-to-many relationship.
+
+    ``exit_order_id`` → PaperOrder (exit, kind='exit')
+    ``exposure_id``   → StrategyLegExposure (the entry exposure reduced)
+    ``quantity``      → lots removed from the exposure by this exit
+
+    Written in the SAME transaction as the exit fill by
+    ``apply_exit_allocations()``.  Historical exits (before Phase 7.2A)
+    have no allocation rows — analytics falls back to the legacy dict
+    lookup for those.
+    """
+
+    __tablename__ = "exit_exposure_allocations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    exit_order_id: Mapped[int] = mapped_column(Integer, index=True)
+    exposure_id: Mapped[int] = mapped_column(Integer, index=True)
+    quantity: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class BulkExitRecord(Base):
     """Idempotency record for ONE bulk exit operation (Phase 5.2).
 

@@ -214,13 +214,34 @@ def allocate_exit(
 # ---- Exit maintenance -------------------------------------------------------
 
 
-def apply_exit_allocations(db: Session, allocations: list[tuple[StrategyLegExposure, int]], now: datetime) -> None:
-    """Persist an exit's exposure decrements (same transaction as the fill)."""
+def apply_exit_allocations(
+    db: Session,
+    allocations: list[tuple[StrategyLegExposure, int]],
+    now: datetime,
+    *,
+    exit_order_id: int | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Persist an exit's exposure decrements (same transaction as the fill).
+
+    When ``exit_order_id`` and ``user_id`` are provided, also persists
+    ``ExitExposureAllocation`` rows so analytics can unambiguously
+    attribute each exit to the exposures it reduced.
+    """
+    from app.models import ExitExposureAllocation
+
     for exposure, take in allocations:
         exposure.remaining_quantity -= take
         if exposure.remaining_quantity == 0:
             exposure.status = "closed"
         exposure.updated_at = now
+        if exit_order_id is not None and user_id is not None:
+            db.add(ExitExposureAllocation(
+                user_id=user_id,
+                exit_order_id=exit_order_id,
+                exposure_id=exposure.id,
+                quantity=take,
+            ))
     db.flush()
 
 
@@ -233,6 +254,7 @@ def maintain_exposure_on_exit(
     now: datetime,
     *,
     target_exposure_id: int | None = None,
+    exit_order_id: int | None = None,
 ) -> bool:
     """Best-effort attribution maintenance after an exit fill.
 
@@ -271,14 +293,16 @@ def maintain_exposure_on_exit(
         if quantity > target.remaining_quantity:
             return False
         # Direct allocation: reduce the specific exposure.
-        apply_exit_allocations(db, [(target, quantity)], now)
+        apply_exit_allocations(db, [(target, quantity)], now,
+                               exit_order_id=exit_order_id, user_id=user_id)
         return True
 
     try:
         allocations = allocate_exit(exposures, prior_net_quantity, quantity)
     except LegExposureError:
         return False
-    apply_exit_allocations(db, allocations, now)
+    apply_exit_allocations(db, allocations, now,
+                           exit_order_id=exit_order_id, user_id=user_id)
     return True
 
 
