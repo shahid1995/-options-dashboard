@@ -300,7 +300,7 @@ The dashboard must consume shared market-data and calculation services. It must 
 | Phase 6.8 — Dynamic Template Resolution Architecture | ✅ Complete |
 | Phase 6.9 — Dynamic Template Execution Safety Bridge | ✅ Complete |
 | Phase 6.10 — Template Execution Audit Trail and Retry Safety | ✅ Complete |
-| Phase 6.11 — Production Deployment Readiness / CORS Correction | 🔄 In Progress |
+| Phase 6.11 — Production Deployment Readiness / CORS Correction | ✅ Complete |
 | Phase 7 — Journal & performance analytics | ⏳ Planned |
 | Phase 8 — Backtesting | ⏳ Planned |
 | Phase 9 — Strategy scanner | ⏳ Planned |
@@ -311,9 +311,15 @@ The dashboard must consume shared market-data and calculation services. It must 
 
 ### Current verified checkpoint
 
-`391b8f06a7ec5691a6c9eb824ea06320d6ea83e5` — Phase 6.10: Template Execution Audit Trail and Retry Safety.
+`f49a50914a1f8489a3e968e6a61c59a152095682` — Phase 6.11: Production Deployment Readiness / CORS Correction.
 
 Tests: 995 backend + 946 frontend. Production build: PASS.
+
+Production deployment:
+- Backend: https://options-dashboard-production-fb47.up.railway.app
+- Frontend: https://options-dashboard-sigma-coral.vercel.app
+- Database: Railway PostgreSQL
+- Architecture: Railway backend + Railway PostgreSQL + Vercel frontend
 
 ## 11. Development workflow with FreeBuff
 
@@ -376,9 +382,9 @@ Important regression cases include:
 
 As of 2026-08-21:
 
-All phases through 6.10 are complete and verified. Phase 6.11 (CORS correction + deployment readiness) is in progress.
+All phases through 6.11 are complete. Production deployment is operational.
 
-Latest verified commit: `391b8f06a7ec5691a6c9eb824ea06320d6ea83e5`
+Latest verified commit: `f49a50914a1f8489a3e968e6a61c59a152095682`
 
 ### Current architecture summary
 
@@ -393,7 +399,7 @@ Latest verified commit: `391b8f06a7ec5691a6c9eb824ea06320d6ea83e5`
 - **Template execution:** preview → confirmation → server resolution → validation → audit metadata
 - **Idempotency:** clientOrderId-based at both execution and exit boundaries
 - **LIVE execution:** DISABLED — Paper is the safe execution environment
-- **Deployment target:** Railway backend + PostgreSQL / Vercel frontend
+- **Deployment:** Railway backend + Railway PostgreSQL + Vercel frontend (operational)
 
 ### Key architectural features completed
 

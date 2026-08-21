@@ -6,7 +6,16 @@ _Last updated: 2026-08-21_
 
 **Phase 6.11 — Production Deployment Readiness / CORS Correction**
 
-Status: 🔄 In Progress — deployment-readiness corrective milestone (CORS PUT/DELETE blocker identified and fixed)
+Status: ✅ **COMPLETE — DEPLOYED AND VERIFIED**
+
+Checkpoint: `f49a50914a1f8489a3e968e6a61c59a152095682`
+
+### Production deployment
+
+- **Backend:** https://options-dashboard-production-fb47.up.railway.app
+- **Frontend:** https://options-dashboard-sigma-coral.vercel.app
+- **Database:** Railway PostgreSQL
+- **Deployment architecture:** Railway backend + Railway PostgreSQL + Vercel frontend
 
 ### What was built
 
@@ -24,6 +33,45 @@ CORS middleware now permits all HTTP methods used by the application:
 - Credentials allowed for configured origin
 - Actual `GET /health` has CORS headers
 - Actual `POST /` has CORS headers
+
+### Production verification status
+
+**A. Production infrastructure/API verification — COMPLETE**
+
+- Backend `/health` endpoint responding (`{"status":"ok"}`)
+- Frontend deployed and loading correctly (HTTP 200)
+- Frontend `NEXT_PUBLIC_API_URL` points to Railway backend
+- CORS PUT preflight returns `allow-methods: GET, POST, PUT, DELETE, OPTIONS` on production
+- CORS DELETE preflight works on production
+- OPTIONS preflight works on production
+- Production Vercel origin accepted by CORS
+- Unrelated origins rejected by CORS
+- Phase 6.8 dynamic template endpoints deployed (`/paper/templates/{id}/resolve`)
+- Phase 6.9 preview/execute endpoints deployed (`/paper/templates/{id}/execute/preview`, `/paper/templates/{id}/execute`)
+- Phase 6.10 `execution_metadata` field present in production `ExecutionOut` schema
+- `TemplateExecuteRequestIn` schema has `confirmed_strikes`, `confirmed_expiries`, `client_order_id`
+- OAuth redirect correctly configured to Railway callback URL
+- WebSocket endpoint reachable and authentication-protected (HTTP 403 without session)
+- No LIVE execution endpoints exist — LIVE execution remains DISABLED
+- No secrets exposed to frontend bundle
+- All 33 API endpoints registered and require authentication
+- PostgreSQL migration/schema initialization verified (idempotent `ensure_column` for `execution_metadata`)
+
+**B. Authenticated user smoke tests — manual verification required**
+
+The following require interactive browser-based testing with real Upstox OAuth credentials:
+
+- Complete Upstox OAuth login flow
+- Authenticated option-chain loading with live data
+- Strategy Builder CRUD with authenticated session (create, read, update, delete, duplicate)
+- Dynamic template resolution with authenticated session
+- Paper execution lifecycle (preview → confirm → execute)
+- `execution_metadata` after real authenticated execution
+- Retry/idempotency with real authenticated execution
+- Position/exit workflow (single exit, bulk exit)
+- Authenticated WebSocket live updates
+
+These are not failures — they are items requiring interactive browser testing with real broker credentials.
 
 ---
 
@@ -283,6 +331,10 @@ ChatGPT review: ⏳ pending
 | Phase 6.5.0.1 — Strategy Leg Attribution Architecture | 🔄 Implemented | New persistent StrategyLegExposure attribution model (per-execution, per-leg remaining), deterministic dominant-side FIFO exit allocation, position-capacity reconciliation (never over net position, never guessed), strategy-scoped journal-close fix with regression tests, conservative idempotent startup backfill, user isolation, no execution/UI — pending review |
 | Phase 6.5.0.2 — Broker-Neutral Connectivity Foundation | 🔄 Implemented | Canonical broker domain (models/enums/errors/capabilities/protocols), BrokerGateway/Registry, UpstoxAdapter boundary, read-only migration (profile/funds/margin/market status/chain/contracts) behind the adapter, V3 order preparation (payload + response mappers, tested, NOT wired), native-slicing safety (execution_policy + multi-id results), no live execution / no second broker / no DB changes — pending review |
 | Phase 6.5.0.3 — Execution Intent + Execution Router Foundation | 🔄 Implemented | Broker-neutral ExecutionIntent/ExecutionTarget/ExecutionResult domain objects, execution error taxonomy, side inversion (BUY→SELL, SELL→BUY), exit-intent→execution-intent conversion, stale-target protection, ExecutionRouter (PAPER→existing paper engine, LIVE→DISABLED), idempotency, user isolation, no new persistence, no live execution, no broker imports in domain — pending review |
+| Phase 6.8 — Dynamic Template Resolution Architecture | ✅ Complete | 6.8A-E: dynamic resolver, template schema, resolution API, builder, lifecycle |
+| Phase 6.9 — Dynamic Template Execution Safety Bridge | ✅ Complete | Server-authoritative execution, preview/confirm/execute, one-strike-step tolerance |
+| Phase 6.10 — Template Execution Audit Trail and Retry Safety | ✅ Complete | execution_metadata, deterministic clientOrderId, retry handling |
+| Phase 6.11 — Production Deployment / CORS Correction | ✅ Complete | CORS PUT/DELETE/OPTIONS fix, Railway + Vercel production deployment verified |
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
@@ -293,17 +345,19 @@ ChatGPT review: ⏳ pending
 
 ## Latest verified implementation commit
 
+`f49a50914a1f8489a3e968e6a61c59a152095682` — Phase 6.11: Production Deployment Readiness / CORS Correction (deployed and infrastructure verified).
+
 `391b8f06a7ec5691a6c9eb824ea06320d6ea83e5` — Phase 6.10: Template Execution Audit Trail and Retry Safety (verified and pushed).
 
 `3c9fac6112582e709bae8b01fbab5b00a4b1816b` — Phase 6.9: Server-authoritative dynamic template execution.
 
 `b7f6eb23e16d462cf73a6580f76934c84cf32bf4` — Phase 6.8E: Dynamic template lifecycle (merged into main).
 
-**Phase 6.11** — CORS correction + deployment readiness documentation (in progress).
-
 Previous baselines: Phase 6.9 verified at 967 backend + 939 frontend. Phase 6.10 verified at 984 backend + 946 frontend.
 
 Current verified: 995 backend + 946 frontend + production build PASS.
+
+Production deployment: Railway backend + Railway PostgreSQL + Vercel frontend. Production infrastructure verification complete. Authenticated browser smoke tests remain manual.
 
 ## Phase 5.2.1 implementation
 
