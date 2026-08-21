@@ -559,6 +559,92 @@ class TradeAnnotationsOut(BaseModel):
     tags: list[str] | None = None
     notes: str | None = None
 
+class TradeLegDetailOut(BaseModel):
+    """One leg of a strategy execution with entry/exit details."""
+
+    symbol: str
+    expiry: str
+    strike: float
+    option_type: str
+    action: str
+    quantity: int
+    lot_size: int
+    entry_price: float | None = None
+    exit_price: float | None = None
+    entry_status: str | None = None
+    realized_pnl: float | None = None
+    remaining_quantity: int | None = None
+
+
+class TradeDetailOut(BaseModel):
+    """GET /paper/analytics/trades/:id — complete trade detail."""
+
+    execution_id: str
+    strategy: str
+    symbol: str
+    status: str
+    result: str | None = None
+    entry_at: datetime
+    exit_at: datetime | None = None
+    duration_seconds: float | None = None
+    duration_label: str | None = None
+    entry_net: float
+    realized_pnl: float | None = None
+    total_quantity: int = 0
+    total_exposure: float = 0.0
+    open_position_count: int = 0
+    closed_position_count: int = 0
+    entry_order_count: int = 0
+    exit_order_count: int = 0
+    legs: list[TradeLegDetailOut] = []
+    execution_metadata: dict | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+
+
+class StrategyTradeRowOut(BaseModel):
+    """One execution row in a strategy's trade list."""
+
+    execution_id: str
+    symbol: str
+    status: str
+    result: str | None = None
+    entry_at: datetime
+    exit_at: datetime | None = None
+    realized_pnl: float | None = None
+    duration_seconds: float | None = None
+    duration_label: str | None = None
+    tags: list[str] | None = None
+
+
+class StrategyDetailOut(BaseModel):
+    """GET /paper/analytics/strategies/:name — strategy detail with aggregate metrics."""
+
+    strategy: str
+    total_executions: int
+    open_executions: int
+    closed_executions: int
+    winning_trades: int
+    losing_trades: int
+    breakeven_trades: int
+    win_rate: float | None = None
+    gross_profit: float
+    gross_loss: float
+    net_realized_pnl: float
+    profit_factor: float | None = None
+    expectancy: float | None = None
+    average_winner: float | None = None
+    average_loser: float | None = None
+    largest_winner: float | None = None
+    largest_loser: float | None = None
+    current_win_streak: int = 0
+    current_loss_streak: int = 0
+    max_win_streak: int = 0
+    max_loss_streak: int = 0
+    average_holding_duration: float | None = None
+    trades: list[StrategyTradeRowOut] = []
+
+
 class AnalyticsWarningOut(BaseModel):
     code: str
     discrepancies: list[dict] = []

@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import StrategyExecution
 from app.routers.deps import get_session_id
-from app.schemas import TradeAnnotationsIn, TradeAnnotationsOut
-from app.services.performance import _parse_tags, serialize_tags
+from app.schemas import TradeAnnotationsIn, TradeAnnotationsOut, TradeDetailOut, StrategyDetailOut
+from app.services.performance import _parse_tags, serialize_tags, get_trade_detail, get_strategy_detail
 from app.services.token_store import get_token
 
 router = APIRouter(prefix="/paper", tags=["annotations"])
@@ -76,3 +76,37 @@ def update_trade_annotations(
         tags=_parse_tags(exec_record.tags),
         notes=exec_record.notes,
     )
+
+
+@router.get(
+    "/analytics/trades/{execution_id}",
+    response_model=TradeDetailOut,
+)
+def trade_detail(
+    execution_id: str,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """GET /paper/analytics/trades/:id — complete trade detail drill-down."""
+    user_id, _access_token = require_session(session_id)
+    detail = get_trade_detail(user_id, execution_id, db)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return detail
+
+
+@router.get(
+    "/analytics/strategies/{strategy_name}",
+    response_model=StrategyDetailOut,
+)
+def strategy_detail(
+    strategy_name: str,
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """GET /paper/analytics/strategies/:name — strategy detail with aggregate metrics."""
+    user_id, _access_token = require_session(session_id)
+    detail = get_strategy_detail(user_id, strategy_name, db)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    return detail
