@@ -93,11 +93,13 @@ def _create_execution(db_session, user_id, exec_id, strategy_tag="Bull Call Spre
         closed_at=datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc) if not is_open else None,
     )
     db_session.add(pos)
+    db_session.flush()  # ensure pos.id is available
 
     entry_order = PaperOrder(
         user_id=user_id,
         client_order_id=f"entry-{exec_id}",
         execution_id=exec_id,
+        position_id=pos.id,
         kind="entry",
         symbol="NIFTY",
         expiry="2026-08-07",
@@ -116,7 +118,8 @@ def _create_execution(db_session, user_id, exec_id, strategy_tag="Bull Call Spre
         exit_order = PaperOrder(
             user_id=user_id,
             client_order_id=f"exit-{exec_id}",
-            execution_id=exec_id,
+            execution_id=None,
+            position_id=pos.id,
             kind="exit",
             symbol="NIFTY",
             expiry="2026-08-07",

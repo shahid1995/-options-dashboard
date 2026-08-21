@@ -647,15 +647,55 @@ def get_trade_detail(user_id: str, execution_id: str, db: Session) -> dict | Non
     # Duration
     dur = holding_duration_seconds(ex.entry_at, ex.exit_at)
 
-    # Entry/exit orders
+    # Entry orders (linked via execution_id)
     entry_orders = [o for o in orders if o.kind == "entry" and o.status == "FILLED"]
-    exit_orders = [o for o in orders if o.kind == "exit" and o.status == "FILLED"]
+    # Exit orders: exit orders have execution_id=NULL so we must query by position_id.
+    position_ids = [p.id for p in positions]
+    exit_orders = (
+        list(
+            db.scalars(
+                select(PaperOrder).where(
+                    PaperOrder.user_id == user_id,
+                    PaperOrder.kind == "exit",
+                    PaperOrder.status == "FILLED",
+                    PaperOrder.position_id.in_(position_ids),
+                )
+            ).all()
+        )
+        if position_ids
+        else []
+    )
 
-    # Build exit lookup: position_id + action -> exit order
+    # Build exit lookup: position_id + action -> exit order (legacy fallback)
     exit_by_position_action = {}
     for eo in exit_orders:
         key = (eo.position_id, eo.action)
         exit_by_position_action[key] = eo
+
+    # Phase 7.2A: authoritative exit attribution via ExitExposureAllocation.
+    # Batch-fetch allocation records for ALL exposures of this execution.
+    from app.models import ExitExposureAllocation
+
+    exposure_ids = [e.id for e in exposures]
+    allocations = (
+        list(db.scalars(
+            select(ExitExposureAllocation).where(
+                ExitExposureAllocation.user_id == user_id,
+                ExitExposureAllocation.exposure_id.in_(exposure_ids),
+            )
+        ).all())
+        if exposure_ids
+        else []
+    )
+    # Build: exposure_id -> list of (exit_order, quantity)
+    alloc_by_exposure: dict[int, list[tuple[PaperOrder, int]]] = {}
+    exit_order_by_id = {o.id: o for o in exit_orders}
+    for alloc in allocations:
+        exit_order = exit_order_by_id.get(alloc.exit_order_id)
+        if exit_order is not None:
+            alloc_by_exposure.setdefault(alloc.exposure_id, []).append(
+                (exit_order, alloc.quantity)
+            )
 
     # Leg details with per-leg P&L — use StrategyLegExposure for authoritative attribution
     # Build order lookup by id for quick access
@@ -668,9 +708,22 @@ def get_trade_detail(user_id: str, execution_id: str, db: Session) -> dict | Non
             entry_order = order_by_id.get(exp.order_id)
             if entry_order is None:
                 continue
-            # Exit is matched by position_id + opposite action
+
+            # Phase 7.2A: use persisted allocation records when available.
             exit_action = "sell" if exp.action == "buy" else "buy"
-            matching_exit = exit_by_position_action.get((exp.position_id, exit_action))
+            exp_allocs = alloc_by_exposure.get(exp.id, [])
+
+            if exp_allocs:
+                # Authoritative: allocation records exist for this exposure.
+                # Use the LAST allocation's exit order for display (most recent exit).
+                last_exit_order = exp_allocs[-1][0]
+                matching_exit = last_exit_order
+            else:
+                # Fallback for historical data without allocation records.
+                matching_exit = exit_by_position_action.get(
+                    (exp.position_id, exit_action)
+                )
+
             legs.append({
                 "symbol": exp.symbol,
                 "expiry": exp.expiry,

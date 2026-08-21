@@ -656,6 +656,7 @@ def exit_position(
     maintain_exposure_on_exit(
         db, user_id, position, prior_net_quantity, qty, now,
         target_exposure_id=target_exposure_id,
+        exit_order_id=order.id,
     )
 
     if position.strategy_execution_id:
