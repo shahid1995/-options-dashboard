@@ -620,3 +620,472 @@ class TestLegacyFallback:
         leg = detail["legs"][0]
         assert leg["exit_price"] == 101.0
         assert leg["realized_pnl"] == 50.0
+
+
+# ---- Test 9: Integration test — real exit_position() path ----
+
+class TestProductionExitPath:
+    """Verify that the real exit_position() function creates ExitExposureAllocation."""
+
+    def test_exit_position_creates_allocation(self, db_session, logged_in):
+        """Calling exit_position() directly creates allocation records."""
+        from app.services.paper_execution import exit_position
+        from app.schemas import ExitRequestIn
+
+        # Setup: execution + exposure + entry order
+        global _strike_counter
+        _strike_counter += 1
+        strike = float(_strike_counter)
+
+        ex = StrategyExecution(
+            user_id=logged_in, execution_id="prod-001",
+            client_order_id="client-prod-001", strategy_tag="Prod Strat",
+            symbol="NIFTY", status="FILLED", entry_net=100.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex)
+        db_session.flush()
+
+        pos = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", net_quantity=50,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="prod-001",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos)
+        db_session.flush()
+
+        entry = PaperOrder(
+            user_id=logged_in, client_order_id="entry-prod-001",
+            execution_id="prod-001", position_id=pos.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", action="buy",
+            quantity=50, lot_size=50, status="FILLED",
+            filled_quantity=50, fill_price=100.0,
+        )
+        db_session.add(entry)
+        db_session.flush()
+
+        exposure = StrategyLegExposure(
+            user_id=logged_in, execution_id="prod-001",
+            position_id=pos.id, order_id=entry.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", action="buy",
+            original_quantity=50, remaining_quantity=50,
+            status="open",
+        )
+        db_session.add(exposure)
+        db_session.commit()
+
+        # Execute the real production exit path
+        req = ExitRequestIn(client_order_id="exit-prod-001", quantity=20)
+        result = exit_position(logged_in, pos.id, req, db_session, 101.0)
+
+        # Verify exit order was created
+        assert result.order is not None
+        exit_order_id = result.order.id
+
+        # Verify ExitExposureAllocation was created by the production path
+        allocs = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exposure.id)
+            .all()
+        )
+        assert len(allocs) == 1, f"Expected 1 allocation, got {len(allocs)}"
+        assert allocs[0].exit_order_id == exit_order_id
+        assert allocs[0].exposure_id == exposure.id
+        assert allocs[0].quantity == 20
+
+        # Verify remaining quantity
+        db_session.refresh(exposure)
+        assert exposure.remaining_quantity == 30
+
+        # Verify trade detail uses the allocation
+        detail = get_trade_detail(logged_in, "prod-001", db_session)
+        assert detail is not None
+        leg = detail["legs"][0]
+        assert leg["exit_price"] == 101.0
+        assert leg["remaining_quantity"] == 30
+
+    def test_multiple_partial_exits_via_production(self, db_session, logged_in):
+        """Three partial exits via exit_position() create three allocation records."""
+        from app.services.paper_execution import exit_position
+        from app.schemas import ExitRequestIn
+
+        global _strike_counter
+        _strike_counter += 1
+        strike = float(_strike_counter)
+
+        ex = StrategyExecution(
+            user_id=logged_in, execution_id="prod-002",
+            client_order_id="client-prod-002", strategy_tag="Prod Strat 2",
+            symbol="NIFTY", status="FILLED", entry_net=100.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex)
+        db_session.flush()
+
+        pos = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", net_quantity=100,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="prod-002",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos)
+        db_session.flush()
+
+        entry = PaperOrder(
+            user_id=logged_in, client_order_id="entry-prod-002",
+            execution_id="prod-002", position_id=pos.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", action="buy",
+            quantity=100, lot_size=50, status="FILLED",
+            filled_quantity=100, fill_price=100.0,
+        )
+        db_session.add(entry)
+        db_session.flush()
+
+        exposure = StrategyLegExposure(
+            user_id=logged_in, execution_id="prod-002",
+            position_id=pos.id, order_id=entry.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike, option_type="call", action="buy",
+            original_quantity=100, remaining_quantity=100,
+            status="open",
+        )
+        db_session.add(exposure)
+        db_session.commit()
+
+        # Three partial exits
+        exit_prices = [101.0, 103.0, 105.0]
+        exit_qtys = [30, 40, 20]
+        for i, (ep, eq) in enumerate(zip(exit_prices, exit_qtys)):
+            req = ExitRequestIn(client_order_id=f"exit-prod-002-{i}", quantity=eq)
+            exit_position(logged_in, pos.id, req, db_session, ep)
+
+        # Verify three allocation records exist
+        allocs = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exposure.id)
+            .all()
+        )
+        assert len(allocs) == 3
+        total_allocated = sum(a.quantity for a in allocs)
+        assert total_allocated == 90  # 30 + 40 + 20
+
+        # Verify remaining quantity
+        db_session.refresh(exposure)
+        assert exposure.remaining_quantity == 10
+
+        # Verify each allocation points to a different exit order
+        exit_ids = {a.exit_order_id for a in allocs}
+        assert len(exit_ids) == 3, "Each exit should have a unique order ID"
+
+        # Verify trade detail shows the last exit
+        detail = get_trade_detail(logged_in, "prod-002", db_session)
+        leg = detail["legs"][0]
+        assert leg["exit_price"] == 105.0  # last exit
+        assert leg["remaining_quantity"] == 10
+
+
+class TestSharedPositionRegression:
+    """Regression test for the original shared-position attribution bug."""
+
+    def test_two_executions_separate_exits_via_production(self, db_session, logged_in):
+        """Two executions with separate exits — each correctly attributed."""
+        from app.services.paper_execution import exit_position
+        from app.schemas import ExitRequestIn
+
+        global _strike_counter
+        _strike_counter += 1
+        strike_a = float(_strike_counter)
+        _strike_counter += 1
+        strike_b = float(_strike_counter)
+
+        # Execution A
+        ex_a = StrategyExecution(
+            user_id=logged_in, execution_id="reg-a",
+            client_order_id="client-reg-a", strategy_tag="Strat A",
+            symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex_a)
+        db_session.flush()
+
+        pos_a = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", net_quantity=50,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="reg-a",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos_a)
+        db_session.flush()
+
+        entry_a = PaperOrder(
+            user_id=logged_in, client_order_id="entry-reg-a",
+            execution_id="reg-a", position_id=pos_a.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", action="buy",
+            quantity=50, lot_size=50, status="FILLED",
+            filled_quantity=50, fill_price=100.0,
+        )
+        db_session.add(entry_a)
+        db_session.flush()
+
+        exp_a = StrategyLegExposure(
+            user_id=logged_in, execution_id="reg-a",
+            position_id=pos_a.id, order_id=entry_a.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", action="buy",
+            original_quantity=50, remaining_quantity=50,
+            status="open",
+        )
+        db_session.add(exp_a)
+        db_session.flush()
+
+        # Execution B
+        ex_b = StrategyExecution(
+            user_id=logged_in, execution_id="reg-b",
+            client_order_id="client-reg-b", strategy_tag="Strat B",
+            symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex_b)
+        db_session.flush()
+
+        pos_b = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", net_quantity=50,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="reg-b",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos_b)
+        db_session.flush()
+
+        entry_b = PaperOrder(
+            user_id=logged_in, client_order_id="entry-reg-b",
+            execution_id="reg-b", position_id=pos_b.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", action="buy",
+            quantity=50, lot_size=50, status="FILLED",
+            filled_quantity=50, fill_price=100.0,
+        )
+        db_session.add(entry_b)
+        db_session.flush()
+
+        exp_b = StrategyLegExposure(
+            user_id=logged_in, execution_id="reg-b",
+            position_id=pos_b.id, order_id=entry_b.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", action="buy",
+            original_quantity=50, remaining_quantity=50,
+            status="open",
+        )
+        db_session.add(exp_b)
+        db_session.commit()
+
+        # Exit A: 20 lots @ 101
+        req_a = ExitRequestIn(client_order_id="exit-reg-a", quantity=20)
+        result_a = exit_position(logged_in, pos_a.id, req_a, db_session, 101.0)
+        exit_a_id = result_a.order.id
+
+        # Exit B: 30 lots @ 103
+        req_b = ExitRequestIn(client_order_id="exit-reg-b", quantity=30)
+        result_b = exit_position(logged_in, pos_b.id, req_b, db_session, 103.0)
+        exit_b_id = result_b.order.id
+
+        # Verify allocation records
+        allocs_a = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exp_a.id)
+            .all()
+        )
+        allocs_b = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exp_b.id)
+            .all()
+        )
+        assert len(allocs_a) == 1
+        assert allocs_a[0].exit_order_id == exit_a_id
+        assert allocs_a[0].quantity == 20
+
+        assert len(allocs_b) == 1
+        assert allocs_b[0].exit_order_id == exit_b_id
+        assert allocs_b[0].quantity == 30
+
+        # Verify remaining quantities
+        db_session.refresh(exp_a)
+        db_session.refresh(exp_b)
+        assert exp_a.remaining_quantity == 30
+        assert exp_b.remaining_quantity == 20
+
+        # Verify trade detail correctly attributes exits
+        detail_a = get_trade_detail(logged_in, "reg-a", db_session)
+        leg_a = detail_a["legs"][0]
+        assert leg_a["exit_price"] == 101.0, f"Expected 101.0, got {leg_a['exit_price']}"
+        assert leg_a["remaining_quantity"] == 30
+
+        detail_b = get_trade_detail(logged_in, "reg-b", db_session)
+        leg_b = detail_b["legs"][0]
+        assert leg_b["exit_price"] == 103.0, f"Expected 103.0, got {leg_b['exit_price']}"
+        assert leg_b["remaining_quantity"] == 20
+
+    def test_interleaved_exits_via_production(self, db_session, logged_in):
+        """Interleaved exits: Exit A, Exit B, Exit A again — correct attribution."""
+        from app.services.paper_execution import exit_position
+        from app.schemas import ExitRequestIn
+
+        global _strike_counter
+        _strike_counter += 1
+        strike_a = float(_strike_counter)
+        _strike_counter += 1
+        strike_b = float(_strike_counter)
+
+        # Execution A
+        ex_a = StrategyExecution(
+            user_id=logged_in, execution_id="intlv-a",
+            client_order_id="client-intlv-a", strategy_tag="Strat A",
+            symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex_a)
+        db_session.flush()
+
+        pos_a = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", net_quantity=50,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="intlv-a",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos_a)
+        db_session.flush()
+
+        entry_a = PaperOrder(
+            user_id=logged_in, client_order_id="entry-intlv-a",
+            execution_id="intlv-a", position_id=pos_a.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", action="buy",
+            quantity=50, lot_size=50, status="FILLED",
+            filled_quantity=50, fill_price=100.0,
+        )
+        db_session.add(entry_a)
+        db_session.flush()
+
+        exp_a = StrategyLegExposure(
+            user_id=logged_in, execution_id="intlv-a",
+            position_id=pos_a.id, order_id=entry_a.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_a, option_type="call", action="buy",
+            original_quantity=50, remaining_quantity=50,
+            status="open",
+        )
+        db_session.add(exp_a)
+        db_session.flush()
+
+        # Execution B
+        ex_b = StrategyExecution(
+            user_id=logged_in, execution_id="intlv-b",
+            client_order_id="client-intlv-b", strategy_tag="Strat B",
+            symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=None,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex_b)
+        db_session.flush()
+
+        pos_b = Position(
+            user_id=logged_in, symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", net_quantity=50,
+            average_entry_price=100.0, lot_size=50, realized_pnl=0.0,
+            status="open", strategy_execution_id="intlv-b",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos_b)
+        db_session.flush()
+
+        entry_b = PaperOrder(
+            user_id=logged_in, client_order_id="entry-intlv-b",
+            execution_id="intlv-b", position_id=pos_b.id,
+            kind="entry", symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", action="buy",
+            quantity=50, lot_size=50, status="FILLED",
+            filled_quantity=50, fill_price=100.0,
+        )
+        db_session.add(entry_b)
+        db_session.flush()
+
+        exp_b = StrategyLegExposure(
+            user_id=logged_in, execution_id="intlv-b",
+            position_id=pos_b.id, order_id=entry_b.id,
+            symbol="NIFTY", expiry="2026-08-07",
+            strike=strike_b, option_type="call", action="buy",
+            original_quantity=50, remaining_quantity=50,
+            status="open",
+        )
+        db_session.add(exp_b)
+        db_session.commit()
+
+        # Interleaved exits:
+        # Exit A #1: 20 lots @ 101
+        req_a1 = ExitRequestIn(client_order_id="exit-intlv-a1", quantity=20)
+        result_a1 = exit_position(logged_in, pos_a.id, req_a1, db_session, 101.0)
+        exit_a1_id = result_a1.order.id
+
+        # Exit B: 30 lots @ 103
+        req_b = ExitRequestIn(client_order_id="exit-intlv-b", quantity=30)
+        result_b = exit_position(logged_in, pos_b.id, req_b, db_session, 103.0)
+        exit_b_id = result_b.order.id
+
+        # Exit A #2: 10 lots @ 105
+        req_a2 = ExitRequestIn(client_order_id="exit-intlv-a2", quantity=10)
+        result_a2 = exit_position(logged_in, pos_a.id, req_a2, db_session, 105.0)
+        exit_a2_id = result_a2.order.id
+
+        # Verify Exposure A has 2 allocations (Exit A#1 + Exit A#2)
+        allocs_a = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exp_a.id)
+            .all()
+        )
+        assert len(allocs_a) == 2
+        alloc_exit_ids_a = {a.exit_order_id for a in allocs_a}
+        assert exit_a1_id in alloc_exit_ids_a
+        assert exit_a2_id in alloc_exit_ids_a
+        total_a = sum(a.quantity for a in allocs_a)
+        assert total_a == 30  # 20 + 10
+
+        # Verify Exposure B has 1 allocation (Exit B)
+        allocs_b = list(
+            db_session.query(ExitExposureAllocation)
+            .filter_by(user_id=logged_in, exposure_id=exp_b.id)
+            .all()
+        )
+        assert len(allocs_b) == 1
+        assert allocs_b[0].exit_order_id == exit_b_id
+        assert allocs_b[0].quantity == 30
+
+        # Verify remaining quantities
+        db_session.refresh(exp_a)
+        db_session.refresh(exp_b)
+        assert exp_a.remaining_quantity == 20  # 50 - 20 - 10
+        assert exp_b.remaining_quantity == 20  # 50 - 30
+
+        # Verify trade detail
+        detail_a = get_trade_detail(logged_in, "intlv-a", db_session)
+        leg_a = detail_a["legs"][0]
+        assert leg_a["remaining_quantity"] == 20
+
+        detail_b = get_trade_detail(logged_in, "intlv-b", db_session)
+        leg_b = detail_b["legs"][0]
+        assert leg_b["exit_price"] == 103.0
+        assert leg_b["remaining_quantity"] == 20
