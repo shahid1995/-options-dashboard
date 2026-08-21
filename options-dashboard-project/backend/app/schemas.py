@@ -573,6 +573,7 @@ class TradeLegDetailOut(BaseModel):
     exit_price: float | None = None
     entry_status: str | None = None
     realized_pnl: float | None = None
+    remaining_quantity: int | None = None
 
 
 class TradeDetailOut(BaseModel):

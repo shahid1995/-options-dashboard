@@ -31,7 +31,7 @@ import json
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import PaperAccount, PaperOrder, PaperTransaction, Position, StrategyExecution
+from app.models import PaperAccount, PaperOrder, PaperTransaction, Position, StrategyExecution, StrategyLegExposure
 from app.services.paper_execution import DEFAULT_STARTING_CAPITAL, reconcile
 
 
@@ -607,12 +607,27 @@ def get_trade_detail(user_id: str, execution_id: str, db: Session) -> dict | Non
 
     positions = list(
         db.scalars(
-            select(Position).where(Position.strategy_execution_id == execution_id)
+            select(Position).where(
+                Position.strategy_execution_id == execution_id,
+                Position.user_id == user_id,
+            )
         ).all()
     )
     orders = list(
         db.scalars(
-            select(PaperOrder).where(PaperOrder.execution_id == execution_id)
+            select(PaperOrder).where(
+                PaperOrder.execution_id == execution_id,
+                PaperOrder.user_id == user_id,
+            )
+        ).all()
+    )
+    # Phase 7.1: authoritative per-leg attribution via StrategyLegExposure
+    exposures = list(
+        db.scalars(
+            select(StrategyLegExposure).where(
+                StrategyLegExposure.execution_id == execution_id,
+                StrategyLegExposure.user_id == user_id,
+            )
         ).all()
     )
 
@@ -636,32 +651,59 @@ def get_trade_detail(user_id: str, execution_id: str, db: Session) -> dict | Non
     entry_orders = [o for o in orders if o.kind == "entry" and o.status == "FILLED"]
     exit_orders = [o for o in orders if o.kind == "exit" and o.status == "FILLED"]
 
-    # Leg details with per-leg P&L
+    # Build exit lookup: position_id + action -> exit order
+    exit_by_position_action = {}
+    for eo in exit_orders:
+        key = (eo.position_id, eo.action)
+        exit_by_position_action[key] = eo
+
+    # Leg details with per-leg P&L — use StrategyLegExposure for authoritative attribution
+    # Build order lookup by id for quick access
+    order_by_id = {o.id: o for o in orders}
+
     legs = []
-    for o in orders:
-        if o.kind != "entry":
-            continue
-        # Find matching exit for this leg
-        matching_exit = None
-        for eo in exit_orders:
-            if (eo.symbol == o.symbol and eo.expiry == o.expiry
-                    and eo.strike == o.strike and eo.option_type == o.option_type
-                    and eo.action != o.action):
-                matching_exit = eo
-                break
-        legs.append({
-            "symbol": o.symbol,
-            "expiry": o.expiry,
-            "strike": o.strike,
-            "option_type": o.option_type,
-            "action": o.action,
-            "quantity": o.quantity,
-            "lot_size": o.lot_size,
-            "entry_price": o.fill_price,
-            "exit_price": matching_exit.fill_price if matching_exit else None,
-            "entry_status": o.status,
-            "realized_pnl": matching_exit.realized_pnl if matching_exit else None,
-        })
+    if exposures:
+        # Authoritative path: use StrategyLegExposure.order_id to find entry order
+        for exp in exposures:
+            entry_order = order_by_id.get(exp.order_id)
+            if entry_order is None:
+                continue
+            # Exit is matched by position_id + opposite action
+            exit_action = "sell" if exp.action == "buy" else "buy"
+            matching_exit = exit_by_position_action.get((exp.position_id, exit_action))
+            legs.append({
+                "symbol": exp.symbol,
+                "expiry": exp.expiry,
+                "strike": exp.strike,
+                "option_type": exp.option_type,
+                "action": exp.action,
+                "quantity": exp.original_quantity,
+                "lot_size": entry_order.lot_size,
+                "entry_price": entry_order.fill_price,
+                "exit_price": matching_exit.fill_price if matching_exit else None,
+                "entry_status": entry_order.status,
+                "realized_pnl": matching_exit.realized_pnl if matching_exit else None,
+                "remaining_quantity": exp.remaining_quantity,
+            })
+    else:
+        # Fallback: no exposure data — use entry orders directly
+        for o in entry_orders:
+            exit_action = "sell" if o.action == "buy" else "buy"
+            matching_exit = exit_by_position_action.get((o.position_id, exit_action))
+            legs.append({
+                "symbol": o.symbol,
+                "expiry": o.expiry,
+                "strike": o.strike,
+                "option_type": o.option_type,
+                "action": o.action,
+                "quantity": o.quantity,
+                "lot_size": o.lot_size,
+                "entry_price": o.fill_price,
+                "exit_price": matching_exit.fill_price if matching_exit else None,
+                "entry_status": o.status,
+                "realized_pnl": matching_exit.realized_pnl if matching_exit else None,
+                "remaining_quantity": None,
+            })
 
     # Position summary
     total_quantity = sum(abs(p.net_quantity) for p in positions)

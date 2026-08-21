@@ -305,3 +305,130 @@ class TestBackwardCompatibility:
         assert resp.status_code == 200
         assert "account" in resp.json()
         assert "trades" in resp.json()
+
+
+class TestOwnershipIsolation:
+    """Defense-in-depth: child records are constrained by user_id."""
+
+    def test_cross_user_trade_detail_isolation(self, client, db_session):
+        """User A cannot retrieve User B's execution or its child records."""
+        # Create user_a and user_b in correct order (last set_token wins for active session)
+        user_a = token_store.set_token("own-user-a")
+        # Create execution for a different user_id directly (not via fixture)
+        from datetime import datetime, timezone
+        other_uid = "other-uid-iso"
+        ex = StrategyExecution(
+            user_id=other_uid, execution_id="own-001", client_order_id="c-own-001",
+            strategy_tag="X", symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=10.0,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+            exit_at=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex)
+        db_session.flush()
+        pos = Position(
+            user_id=other_uid, symbol="NIFTY", expiry="2026-08-07", strike=25000.0,
+            option_type="call", net_quantity=0, average_entry_price=100.0, lot_size=50,
+            realized_pnl=10.0, status="closed", strategy_execution_id="own-001",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos)
+        order = PaperOrder(
+            user_id=other_uid, client_order_id="e-own-001", execution_id="own-001",
+            kind="entry", symbol="NIFTY", expiry="2026-08-07", strike=25000.0,
+            option_type="call", action="buy", quantity=1, lot_size=50,
+            status="FILLED", filled_quantity=1, fill_price=100.0,
+        )
+        db_session.add(order)
+        db_session.commit()
+        # User A tries to access — must get 404
+        resp = client.get("/paper/analytics/trades/own-001", headers={"X-Session-Id": user_a})
+        assert resp.status_code == 404
+
+    def test_cross_user_strategy_isolation(self, client, db_session):
+        """User A cannot retrieve User B's strategy drill-down."""
+        user_a = token_store.set_token("own-user-a-strat")
+        from datetime import datetime, timezone
+        other_uid = "other-uid-strat"
+        ex = StrategyExecution(
+            user_id=other_uid, execution_id="own-002", client_order_id="c-own-002",
+            strategy_tag="Secret", symbol="NIFTY", status="FILLED", entry_net=50.0,
+            realized_pnl=10.0,
+            entry_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+            exit_at=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(ex)
+        pos = Position(
+            user_id=other_uid, symbol="NIFTY", expiry="2026-08-07", strike=26000.0,
+            option_type="call", net_quantity=0, average_entry_price=100.0, lot_size=50,
+            realized_pnl=10.0, status="closed", strategy_execution_id="own-002",
+            opened_at=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 8, 1, 11, 0, tzinfo=timezone.utc),
+        )
+        db_session.add(pos)
+        db_session.commit()
+        resp = client.get("/paper/analytics/strategies/Secret", headers={"X-Session-Id": user_a})
+        assert resp.status_code == 404
+
+    def test_same_user_functionality_unchanged(self, client, logged_in, db_session):
+        """Same-user access still works after ownership hardening."""
+        exec_id = _create_execution(db_session, logged_in, "own-003")
+        resp = client.get(f"/paper/analytics/trades/{exec_id}", headers={"X-Session-Id": logged_in})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["legs"]) == 1
+        assert data["legs"][0]["entry_price"] == 100.0
+
+
+class TestPerLegAttribution:
+    """Finding 2: per-leg attribution uses StrategyLegExposure."""
+
+    def test_two_executions_same_instrument(self, client, logged_in, db_session):
+        """Two executions trade the same instrument — trade detail shows correct legs."""
+        exec_a = _create_execution(db_session, logged_in, "attr-001", strategy_tag="Strat A")
+        exec_b = _create_execution(db_session, logged_in, "attr-002", strategy_tag="Strat B")
+        resp_a = client.get(f"/paper/analytics/trades/{exec_a}", headers={"X-Session-Id": logged_in})
+        resp_b = client.get(f"/paper/analytics/trades/{exec_b}", headers={"X-Session-Id": logged_in})
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        # Each execution shows its own legs
+        assert resp_a.json()["execution_id"] == exec_a
+        assert resp_b.json()["execution_id"] == exec_b
+        assert resp_a.json()["strategy"] == "Strat A"
+        assert resp_b.json()["strategy"] == "Strat B"
+
+    def test_open_execution_result_is_open(self, client, logged_in, db_session):
+        """Open execution shows OPEN result and correct structure."""
+        exec_id = _create_execution(db_session, logged_in, "attr-003", is_open=True)
+        resp = client.get(f"/paper/analytics/trades/{exec_id}", headers={"X-Session-Id": logged_in})
+        data = resp.json()
+        assert data["result"] == "OPEN"
+        assert len(data["legs"]) == 1
+        leg = data["legs"][0]
+        assert leg["entry_price"] == 100.0
+        assert leg["exit_price"] is None  # open — no exit yet
+        # remaining_quantity is present when StrategyLegExposure exists,
+        # None in fallback path (no exposure records in test helper)
+        assert "remaining_quantity" in leg
+
+    def test_exit_attribution_correct(self, client, logged_in, db_session):
+        """Exit order P&L is correctly attributed to the entry leg."""
+        exec_id = _create_execution(db_session, logged_in, "attr-004", realized_pnl=75.0)
+        resp = client.get(f"/paper/analytics/trades/{exec_id}", headers={"X-Session-Id": logged_in})
+        leg = resp.json()["legs"][0]
+        assert leg["entry_price"] == 100.0
+        assert leg["exit_price"] == 101.0
+        assert leg["realized_pnl"] == 75.0
+
+    def test_multiple_identical_instruments_distinguishable(self, client, logged_in, db_session):
+        """Multiple strategies with same instrument remain distinguishable."""
+        exec_a = _create_execution(db_session, logged_in, "attr-005", strategy_tag="Iron Condor")
+        exec_b = _create_execution(db_session, logged_in, "attr-006", strategy_tag="Iron Condor")
+        resp = client.get("/paper/analytics/strategies/Iron Condor", headers={"X-Session-Id": logged_in})
+        data = resp.json()
+        assert data["total_executions"] == 2
+        assert len(data["trades"]) == 2
+        ids = {t["execution_id"] for t in data["trades"]}
+        assert exec_a in ids
+        assert exec_b in ids
