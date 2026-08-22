@@ -61,11 +61,11 @@ export default function PublicFooter() {
             >
               OD
             </span>
-            <span style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: 1.2, color: C.text }}>
+            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.2, color: C.text }}>
               OPTIONS DASHBOARD
             </span>
           </div>
-          <p style={{ fontSize: 12, color: C.faint, lineHeight: 1.65, margin: 0 }}>
+          <p style={{ fontSize: 13, color: C.faint, lineHeight: 1.65, margin: 0 }}>
             A professional options analysis and paper-trading platform for traders
             who want to turn market data into structured decisions.
           </p>
@@ -75,7 +75,7 @@ export default function PublicFooter() {
         <div style={{ display: "flex", gap: 48, flexWrap: "wrap" }}>
           {FOOTER_COLS.map((col) => (
             <div key={col.heading} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 120 }}>
-              <div style={{ fontSize: 10.5, letterSpacing: 1.5, color: C.faint, fontWeight: 600, marginBottom: 4 }}>
+              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, fontWeight: 600, marginBottom: 4 }}>
                 {col.heading.toUpperCase()}
               </div>
               {col.links.map((link) => (
@@ -99,7 +99,7 @@ export default function PublicFooter() {
           justifyContent: "space-between",
           flexWrap: "wrap",
           gap: 8,
-          fontSize: 11,
+          fontSize: 12,
           color: C.faint,
         }}
       >

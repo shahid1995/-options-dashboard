@@ -82,10 +82,10 @@ function PayoffChart() {
       <path d={`${pathD} L${points[points.length - 1].x},${zeroY} L${points[0].x},${zeroY} Z`} fill="rgba(76,175,125,0.12)" clipPath="url(#payoff-profit)" />
       <path d={`${pathD} L${points[points.length - 1].x},${zeroY} L${points[0].x},${zeroY} Z`} fill="rgba(225,82,82,0.12)" clipPath="url(#payoff-right)" />
       <path d={pathD} fill="none" stroke={C.gold} strokeWidth={2} strokeLinejoin="round" />
-      <text x={padding.left} y={height - 6} fill={C.faint} fontSize={9}>{fmtIN(minStrike)}</text>
-      <text x={width - padding.right} y={height - 6} fill={C.faint} fontSize={9} textAnchor="end">{fmtIN(maxStrike)}</text>
-      <text x={padding.left - 4} y={padding.top + 4} fill={C.faint} fontSize={9} textAnchor="end">{fmtIN(maxPnl)}</text>
-      <text x={padding.left - 4} y={height - padding.bottom + 4} fill={C.faint} fontSize={9} textAnchor="end">{fmtIN(minPnl)}</text>
+      <text x={padding.left} y={height - 6} fill={C.faint} fontSize={10}>{fmtIN(minStrike)}</text>
+      <text x={width - padding.right} y={height - 6} fill={C.faint} fontSize={10} textAnchor="end">{fmtIN(maxStrike)}</text>
+      <text x={padding.left - 4} y={padding.top + 4} fill={C.faint} fontSize={10} textAnchor="end">{fmtIN(maxPnl)}</text>
+      <text x={padding.left - 4} y={height - padding.bottom + 4} fill={C.faint} fontSize={10} textAnchor="end">{fmtIN(minPnl)}</text>
     </svg>
   );
 }
@@ -115,14 +115,14 @@ export default function StrategyLabClientPage() {
           {/* Strategy header */}
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
             <h3 style={{ fontSize: 18, fontWeight: 800, color: C.gold, margin: 0 }}>IRON CONDOR</h3>
-            <span style={{ fontSize: 12, color: C.muted }}>NIFTY &middot; 25,500 Straddle &middot; 200pt Wings</span>
+            <span style={{ fontSize: 13, color: C.muted }}>NIFTY &middot; 25,500 Straddle &middot; 200pt Wings</span>
           </div>
 
           {/* Legs table */}
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: isMobile ? "auto" : "hidden", marginBottom: 24 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ color: C.faint, fontSize: 10.5, letterSpacing: 1 }}>
+                <tr style={{ color: C.faint, fontSize: 11, letterSpacing: 1 }}>
                   <th scope="col" style={{ padding: "10px 16px", textAlign: "left" }}>ACTION</th>
                   <th scope="col" style={{ padding: "10px 16px" }}>STRIKE</th>
                   <th scope="col" style={{ padding: "10px 16px" }}>TYPE</th>
@@ -160,26 +160,26 @@ export default function StrategyLabClientPage() {
           {/* Metrics */}
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 14, marginBottom: 24 }}>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", textAlign: "center" }}>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>MAX PROFIT</div>
+              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>MAX PROFIT</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: C.green }}>+&#x20B9;{fmtIN(MAX_PROFIT)}</div>
             </div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", textAlign: "center" }}>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>MAX LOSS</div>
+              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>MAX LOSS</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: C.red }}>&#x20B9;{fmtIN(MAX_LOSS)}</div>
             </div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", textAlign: "center" }}>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>BREAKEVEN LOW</div>
+              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>BREAKEVEN LOW</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: C.gold }}>{fmtIN(BREAKEVEN_LOW)}</div>
             </div>
             <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 18px", textAlign: "center" }}>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>BREAKEVEN HIGH</div>
+              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>BREAKEVEN HIGH</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: C.gold }}>{fmtIN(BREAKEVEN_HIGH)}</div>
             </div>
           </div>
 
           {/* Payoff chart */}
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "24px 20px", marginBottom: 24 }}>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 14 }}>PAYOFF AT EXPIRY</div>
+            <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 14 }}>PAYOFF AT EXPIRY</div>
             <div style={{ display: "flex", justifyContent: "center", overflow: "hidden" }}>
               <PayoffChart />
             </div>
@@ -187,11 +187,11 @@ export default function StrategyLabClientPage() {
 
           {/* Greeks */}
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px" }}>
-            <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 14 }}>POSITION GREEKS</div>
+            <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 14 }}>POSITION GREEKS</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, textAlign: "center" }}>
               {GREEKS.map((g) => (
                 <div key={g.label}>
-                  <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>{g.label}</div>
+                  <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>{g.label}</div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: g.color }}>{g.value}</div>
                 </div>
               ))}
@@ -210,7 +210,7 @@ export default function StrategyLabClientPage() {
                 <div className="od-card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 18px", width: isMobile ? "calc(50% - 6px)" : 150, textAlign: "center" }}>
                   <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.gold, marginBottom: 6 }}>{step.num}</div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 6 }}>{step.title}</div>
-                  <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>{step.desc}</div>
+                  <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{step.desc}</div>
                 </div>
                 {i < WORKFLOW.length - 1 && !isMobile && (
                   <span style={{ color: C.faint, fontSize: 18 }}>&rarr;</span>

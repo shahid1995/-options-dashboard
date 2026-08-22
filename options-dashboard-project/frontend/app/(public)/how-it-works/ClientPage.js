@@ -99,7 +99,7 @@ export default function HowItWorksClientPage() {
                 <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.65, margin: "0 0 8px" }}>
                   {step.desc}
                 </p>
-                <p style={{ fontSize: 12.5, color: C.faint, lineHeight: 1.6, margin: 0 }}>
+                <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
                   {step.detail}
                 </p>
               </div>

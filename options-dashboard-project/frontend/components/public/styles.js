@@ -38,7 +38,7 @@ html { scroll-behavior: smooth; }
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 .od-btn-ghost:hover { border-color: ${C.gold}; background: rgba(201, 161, 90, 0.07); transform: translateY(-1px); }
-.od-link { color: ${C.muted}; text-decoration: none; font-size: 13.5px; transition: color 0.15s ease; }
+.od-link { color: ${C.muted}; text-decoration: none; font-size: 14px; transition: color 0.15s ease; }
 .od-link:hover { color: ${C.gold}; }
 .od-card { transition: transform 0.18s ease, border-color 0.18s ease; }
 .od-card:hover { transform: translateY(-3px); border-color: rgba(201, 161, 90, 0.45) !important; }
@@ -78,7 +78,7 @@ export const sectionPad = (isMobile) => ({
 // Common "illustrative data" disclaimer style
 export const DEMO_LABEL_STYLE = {
   display: "inline-block",
-  fontSize: 10,
+  fontSize: 11,
   letterSpacing: 1,
   color: C.faint,
   background: "rgba(90, 99, 118, 0.2)",

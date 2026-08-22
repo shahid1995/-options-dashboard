@@ -33,8 +33,8 @@ export default function FeatureCard({ icon, title, desc, style }) {
           {icon}
         </div>
       )}
-      <div style={{ fontSize: 15.5, fontWeight: 700, color: C.text }}>{title}</div>
-      <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.65 }}>{desc}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.text }}>{title}</div>
+      <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.65 }}>{desc}</div>
     </div>
   );
 }

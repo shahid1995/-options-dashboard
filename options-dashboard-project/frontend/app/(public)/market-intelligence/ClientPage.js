@@ -25,8 +25,8 @@ function BarDemo({ label, value, max, color }) {
   return (
     <div style={{ marginBottom: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontSize: 11, color: C.muted }}>{label}</span>
-        <span style={{ fontSize: 11, fontWeight: 600, color: C.text, fontVariantNumeric: "tabular-nums" }}>{fmtIN(value)}</span>
+        <span style={{ fontSize: 11.5, color: C.muted }}>{label}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: C.text, fontVariantNumeric: "tabular-nums" }}>{fmtIN(value)}</span>
       </div>
       <div style={{ height: 8, background: "rgba(36,43,58,0.8)", borderRadius: 4, overflow: "hidden" }}>
         <div className="od-bar-fill" style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 4 }} />
@@ -69,7 +69,7 @@ export default function MarketIntelligenceClientPage() {
                 }}
               >
                 <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 1, color: C.gold, marginBottom: 6 }}>{d.label}</div>
-                <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5 }}>{d.desc}</div>
+                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{d.desc}</div>
               </div>
             ))}
           </div>
@@ -85,7 +85,7 @@ export default function MarketIntelligenceClientPage() {
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 20, marginBottom: 40 }}>
               {/* Positioning card */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "22px 20px" }}>
-                <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>POSITIONING</div>
+                <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>POSITIONING</div>
                 <BarDemo label="CALL OI" value={184250} max={210000} color={C.red} />
                 <BarDemo label="PUT OI" value={217800} max={210000} color={C.green} />
                 <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, padding: "10px 0", borderTop: `1px solid ${C.border}` }}>
@@ -100,18 +100,18 @@ export default function MarketIntelligenceClientPage() {
 
               {/* Volatility card */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "22px 20px" }}>
-                <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>VOLATILITY</div>
+                <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>VOLATILITY</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, textAlign: "center" }}>
                   <div>
-                    <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>ATM IV</div>
+                    <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>ATM IV</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.gold }}>14.2%</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>VIX</div>
+                    <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>VIX</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.text }}>13.8</div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>VEGA</div>
+                    <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>VEGA</div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: C.red }}>-18.4</div>
                   </div>
                 </div>
@@ -119,7 +119,7 @@ export default function MarketIntelligenceClientPage() {
 
               {/* Greeks card */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "22px 20px" }}>
-                <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>GREEKS (ATM)</div>
+                <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>GREEKS (ATM)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                   {[
                     { label: "DELTA", value: "0.52", color: C.text },
@@ -128,7 +128,7 @@ export default function MarketIntelligenceClientPage() {
                     { label: "VEGA", value: "18.40", color: C.green },
                   ].map((g) => (
                     <div key={g.label} style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>{g.label}</div>
+                      <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 4 }}>{g.label}</div>
                       <div style={{ fontSize: 16, fontWeight: 700, color: g.color }}>{g.value}</div>
                     </div>
                   ))}
@@ -137,7 +137,7 @@ export default function MarketIntelligenceClientPage() {
 
               {/* Market Structure card */}
               <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: "22px 20px" }}>
-                <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>MARKET STRUCTURE</div>
+                <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 16, fontWeight: 600 }}>MARKET STRUCTURE</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: 12, color: C.muted }}>Resistance</span>
@@ -161,11 +161,11 @@ export default function MarketIntelligenceClientPage() {
             <div style={{ marginTop: 20 }}>
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: 13,
                   letterSpacing: 1,
-                  color: C.faint,
+                  color: C.muted,
                   marginBottom: 14,
-                  fontStyle: "italic",
+                  fontStyle: "normal",
                 }}
               >
                 RESEARCH DIRECTION &middot; FUTURE CAPABILITIES
@@ -182,7 +182,7 @@ export default function MarketIntelligenceClientPage() {
                     }}
                   >
                     <div style={{ fontSize: 14, fontWeight: 700, color: C.muted, marginBottom: 6 }}>{r.title}</div>
-                    <div style={{ fontSize: 12.5, color: C.faint, lineHeight: 1.6 }}>{r.desc}</div>
+                    <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{r.desc}</div>
                   </div>
                 ))}
               </div>

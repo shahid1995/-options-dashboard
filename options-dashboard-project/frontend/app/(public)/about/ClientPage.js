@@ -63,7 +63,7 @@ export default function AboutClientPage() {
                 }}
               >
                 <div style={{ fontSize: 15.5, fontWeight: 700, color: C.gold, marginBottom: 8 }}>{p.title}</div>
-                <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.65 }}>{p.desc}</div>
+                <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.65 }}>{p.desc}</div>
               </div>
             ))}
           </div>
@@ -74,7 +74,7 @@ export default function AboutClientPage() {
       <section style={{ borderTop: `1px solid ${C.border}`, background: "linear-gradient(180deg, rgba(18,22,31,0.5), rgba(11,14,20,0.2))" }}>
         <div style={sectionPad(isMobile)}>
           <div style={{ maxWidth: 640, margin: "0 auto", textAlign: "center" }}>
-            <p style={{ fontSize: 16, color: C.muted, lineHeight: 1.75, margin: 0 }}>
+            <p style={{ fontSize: 16, color: C.text, lineHeight: 1.75, margin: 0 }}>
               Our goal is to build tools that help traders investigate the options market
               systematically and make their own informed decisions. The platform provides
               the data, the analysis tools and the testing environment &mdash; the trading
@@ -110,7 +110,7 @@ export default function AboutClientPage() {
                 }}
               >
                 <div style={{ fontSize: 15, fontWeight: 700, color: C.gold, marginBottom: 6 }}>{p.title}</div>
-                <div style={{ fontSize: 13.5, color: C.muted, lineHeight: 1.6 }}>{p.desc}</div>
+                <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.6 }}>{p.desc}</div>
               </div>
             ))}
           </div>

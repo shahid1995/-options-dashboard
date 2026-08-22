@@ -53,7 +53,7 @@ function FeatureGroup({ heading, features, id }) {
     <div style={{ marginBottom: 48 }} id={id}>
       <h3
         style={{
-          fontSize: 13,
+          fontSize: 15,
           letterSpacing: 2,
           color: C.gold,
           fontWeight: 700,
@@ -99,13 +99,12 @@ export default function FeaturesClientPage() {
           <div style={{ marginTop: 8 }}>
             <h3
               style={{
-                fontSize: 12,
+                fontSize: 13,
                 letterSpacing: 2,
-                color: C.faint,
+                color: C.muted,
                 fontWeight: 600,
                 marginBottom: 14,
                 textTransform: "uppercase",
-                fontStyle: "italic",
               }}
             >
               Research Direction
@@ -122,7 +121,7 @@ export default function FeaturesClientPage() {
                   }}
                 >
                   <div style={{ fontSize: 15.5, fontWeight: 700, color: C.muted, marginBottom: 8 }}>{f.title}</div>
-                  <div style={{ fontSize: 13, color: C.faint, lineHeight: 1.6 }}>{f.desc}</div>
+                  <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{f.desc}</div>
                 </div>
               ))}
             </div>

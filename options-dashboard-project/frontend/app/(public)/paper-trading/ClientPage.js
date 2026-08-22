@@ -82,19 +82,19 @@ export default function PaperTradingClientPage() {
           >
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 24, textAlign: "center" }}>
               <div>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>SIMULATED CAPITAL</div>
+                <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>SIMULATED CAPITAL</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.gold }}>&#x20B9;5,00,000</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>TODAY&apos;S P&L</div>
+                <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>TODAY&apos;S P&L</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.green }}>+&#x20B9;4,820</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>OPEN POSITIONS</div>
+                <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>OPEN POSITIONS</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.text }}>4</div>
               </div>
               <div>
-                <div style={{ fontSize: 10, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>WIN RATE</div>
+                <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, marginBottom: 4 }}>WIN RATE</div>
                 <div style={{ fontSize: 24, fontWeight: 800, color: C.gold }}>68%</div>
               </div>
             </div>
@@ -110,12 +110,12 @@ export default function PaperTradingClientPage() {
               marginBottom: 24,
             }}
           >
-            <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 11, letterSpacing: 1, color: C.faint }}>
+            <div style={{ padding: "12px 18px", borderBottom: `1px solid ${C.border}`, fontSize: 11.5, letterSpacing: 1, color: C.faint }}>
               SAMPLE POSITIONS
             </div>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
-                <tr style={{ color: C.faint, fontSize: 10.5, letterSpacing: 0.5 }}>
+                <tr style={{ color: C.faint, fontSize: 11, letterSpacing: 0.5 }}>
                   <th scope="col" style={{ padding: "8px 16px", textAlign: "left" }}>STRATEGY</th>
                   <th scope="col" style={{ padding: "8px 16px" }}>LEG</th>
                   <th scope="col" style={{ padding: "8px 16px" }}>ACTION</th>
@@ -130,8 +130,8 @@ export default function PaperTradingClientPage() {
                   { strategy: "Bull Put Spread", leg: "BANKNIFTY 53500 PE", action: "BUY", pnl: "-850", color: C.red },
                 ].map((row, i) => (
                   <tr key={i} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "10px 16px", fontSize: 12 }}>{row.strategy}</td>
-                    <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 12 }}>{row.leg}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 13 }}>{row.strategy}</td>
+                    <td style={{ padding: "10px 16px", textAlign: "center", fontSize: 13 }}>{row.leg}</td>
                     <td style={{ padding: "10px 16px", textAlign: "center" }}>
                       <span
                         style={{
@@ -183,8 +183,8 @@ export default function PaperTradingClientPage() {
             background: "rgba(18, 22, 31, 0.5)",
           }}
         >
-          <div style={{ fontSize: 11, letterSpacing: 1, color: C.faint, marginBottom: 10 }}>IMPORTANT DISCLAIMER</div>
-          <p style={{ fontSize: 13, color: C.muted, lineHeight: 1.7, margin: 0 }}>
+          <div style={{ fontSize: 11.5, letterSpacing: 1, color: C.faint, marginBottom: 10 }}>IMPORTANT DISCLAIMER</div>
+          <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.7, margin: 0 }}>
             Paper trading is simulated. It does not represent actual execution or guarantee future trading results.
             No real broker orders are placed. Past paper-trading performance is not indicative of real trading outcomes.
           </p>

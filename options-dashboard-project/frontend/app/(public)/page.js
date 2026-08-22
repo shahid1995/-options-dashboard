@@ -93,7 +93,7 @@ function MockChain() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 4, background: C.green, boxShadow: "0 0 8px rgba(76,175,125,0.9)", animation: "od-glow 2s ease-in-out infinite" }} />
           <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.5 }}>{sym}</span>
-          <span style={{ fontSize: 10.5, color: C.faint, letterSpacing: 1 }}>{EXCHANGES[sym]} INDEX</span>
+          <span style={{ fontSize: 11, color: C.faint, letterSpacing: 1 }}>{EXCHANGES[sym]} INDEX</span>
         </div>
         <div style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
           <span className="od-pulse" style={{ color: C.green, fontSize: 10 }}>&#9679;</span> LIVE
@@ -103,21 +103,21 @@ function MockChain() {
       {/* Spot */}
       <div style={{ padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `1px solid ${C.border}` }}>
         <div>
-          <div style={{ fontSize: 10, color: C.faint, letterSpacing: 1 }}>SPOT</div>
+          <div style={{ fontSize: 11, color: C.faint, letterSpacing: 1 }}>SPOT</div>
           <div style={{ fontSize: 21, fontWeight: 800, color: C.gold }}>{fmtIN(state.spot, 2)}</div>
         </div>
         <div style={{ textAlign: "right" }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: up ? C.green : C.red }}>
             {up ? "\u25B2" : "\u25BC"} {up ? "+" : ""}{chgPct.toFixed(2)}%
           </div>
-          <div style={{ fontSize: 10, color: C.faint }}>vs previous tick</div>
+          <div style={{ fontSize: 11, color: C.faint }}>vs previous tick</div>
         </div>
       </div>
 
       {/* Chain table */}
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
         <thead>
-          <tr style={{ color: C.faint, fontSize: 9.5, letterSpacing: 0.5 }}>
+          <tr style={{ color: C.faint, fontSize: 10.5, letterSpacing: 0.5 }}>
             <th scope="col" style={{ padding: "7px 16px", textAlign: "left" }}>CALLS</th>
             <th scope="col" style={{ padding: 7, textAlign: "center", color: C.gold }}>STRIKE</th>
             <th scope="col" style={{ padding: "7px 16px", textAlign: "right" }}>PUTS</th>
@@ -141,7 +141,7 @@ function MockChain() {
       </table>
 
       {/* Footer */}
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 16px", borderTop: `1px solid ${C.border}`, fontSize: 10.5, color: C.muted }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 16px", borderTop: `1px solid ${C.border}`, fontSize: 11, color: C.muted }}>
         <span>MAX PAIN <span style={{ color: C.gold, fontWeight: 700 }}>{fmtIN(atm)}</span></span>
         <span>PCR (OI) <span style={{ color: C.text, fontWeight: 700 }}>1.08</span></span>
         <span>SESSION <span style={{ color: C.green, fontWeight: 700 }}>OPEN</span></span>
@@ -164,7 +164,7 @@ function TickerTape() {
           <span key={it.key} style={{ display: "inline-flex", alignItems: "baseline", gap: 8, padding: "9px 22px", fontSize: 12, whiteSpace: "nowrap" }}>
             <span style={{ color: C.text, fontWeight: 700, letterSpacing: 0.5 }}>{it.sym}</span>
             <span style={{ color: C.gold, fontVariantNumeric: "tabular-nums" }}>{fmtIN(it.val, 2)}</span>
-            <span style={{ color: C.faint, fontSize: 10.5 }}>LOT {it.lot}</span>
+            <span style={{ color: C.faint, fontSize: 11 }}>LOT {it.lot}</span>
           </span>
         ))}
       </div>
@@ -391,7 +391,7 @@ export default function HomePage() {
                   <span style={{ fontSize: 16, color: C.gold }}>{pillar.icon}</span>
                 </div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>{pillar.title}</div>
-                <div style={{ fontSize: 13.5, color: C.muted, lineHeight: 1.6 }}>{pillar.desc}</div>
+                <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.6 }}>{pillar.desc}</div>
               </a>
             ))}
           </div>
@@ -422,7 +422,7 @@ export default function HomePage() {
               >
                 <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.gold, marginBottom: 6 }}>{step.num}</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>{step.title}</div>
-                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>{step.desc}</div>
+                <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{step.desc}</div>
               </div>
               {i < WORKFLOW_STEPS.length - 1 && (
                 <div style={{ color: C.faint, fontSize: 18, padding: isMobile ? "8px 0" : "0", textAlign: "center" }}>

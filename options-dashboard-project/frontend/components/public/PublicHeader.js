@@ -98,7 +98,7 @@ export default function PublicHeader() {
               <span style={{ display: "block", fontSize: 13.5, fontWeight: 800, letterSpacing: 1.2, color: C.text, lineHeight: 1.2 }}>
                 OPTIONS DASHBOARD
               </span>
-              <span style={{ display: "block", fontSize: 9.5, color: C.faint, letterSpacing: 1, lineHeight: 1.2 }}>
+              <span style={{ display: "block", fontSize: 11, color: C.faint, letterSpacing: 1, lineHeight: 1.2 }}>
                 NSE &middot; BSE INDEX OPTIONS
               </span>
             </span>
@@ -117,7 +117,7 @@ export default function PublicHeader() {
                       background: "none",
                       border: "none",
                       color: C.muted,
-                      fontSize: 13.5,
+                      fontSize: 14,
                       cursor: "pointer",
                       display: "flex",
                       alignItems: "center",
@@ -152,7 +152,7 @@ export default function PublicHeader() {
                           style={{
                             display: "block",
                             padding: "8px 18px",
-                            fontSize: 13.5,
+                            fontSize: 14,
                             color: C.muted,
                             textDecoration: "none",
                             transition: "color 0.15s, background 0.15s",
@@ -175,7 +175,7 @@ export default function PublicHeader() {
             <a
               href={loginUrl()}
               style={{
-                fontSize: 13,
+                fontSize: 14,
                 color: C.muted,
                 textDecoration: "none",
                 padding: "6px 12px",
@@ -190,7 +190,7 @@ export default function PublicHeader() {
             <a
               className="od-btn-gold"
               href={loginUrl()}
-              style={{ padding: "7px 16px", fontSize: 13 }}
+              style={{ padding: "7px 16px", fontSize: 14 }}
             >
               Get Started
             </a>
