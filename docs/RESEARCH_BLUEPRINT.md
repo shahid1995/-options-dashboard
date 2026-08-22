@@ -3,7 +3,7 @@
 **Status:** Research architecture frozen through Step 5  
 **Date:** 2026-08-21  
 **Project:** NIFTY options research / options dashboard  
-**Canonical purpose:** Preserve the research plan, assumptions, data rules, and methodology so future conversations can resume without losing context.
+**Canonical purpose:** Preserve the research plan, assumptions, data rules, methodology, and product/UX principles so future conversations can resume without losing context.
 
 > This document is the canonical handoff for the market-respected-level research work. It is intentionally separate from production application code.
 
@@ -21,6 +21,7 @@ The eventual live output should look conceptually like:
 - probability of breakout/failure
 - market-regime classification
 - confidence/quality score
+- human-readable explanation of the evidence
 
 No claim of 90%+ accuracy is allowed unless it survives the validation framework defined below.
 
@@ -34,7 +35,140 @@ Do not use future market information as a predictor.
 
 Future price action may be used only to create the outcome label for an event that was already observable at time T.
 
-## 2. Data Availability / Free-Only Constraint
+## 2. Product / UX Design Principles
+
+The research engine and eventual dashboard should follow a **conclusion-first, evidence-underneath** philosophy. The inspiration is the product-design approach seen on Pleurat: clear work presentation, reusable design systems, consistent navigation, and tools that expose useful context without forcing users through unnecessary complexity. Pleurat explicitly emphasizes design systems, workflow improvement, consistency, and user-centric product design. citeturn1search0turn1search1
+
+These are principles, not a request to copy Pleurat's visual style.
+
+### 2.1 Show the conclusion first
+
+The primary user experience should answer:
+
+1. **WHAT is happening?**
+2. **HOW strong is it?**
+3. **WHY does the engine believe it?**
+4. **WHAT would invalidate it?**
+5. **WHAT are the alternative outcomes?**
+6. **HOW confident is the model?**
+
+Raw OI, Greeks, volume, IV, GEX, VIX, and other fields should support the conclusion rather than overwhelm the primary screen.
+
+### 2.2 Progressive disclosure
+
+The future interface should expose information in layers:
+
+**Level 1 — Market conclusion**
+
+- current NIFTY
+- strongest nearby level(s)
+- respect probability
+- break probability
+- directional interpretation, when justified
+- confidence
+
+**Level 2 — Evidence summary**
+
+- price structure
+- option-price structure
+- Greeks
+- volume
+- verified OI
+- GEX
+- IV/VIX regime
+
+**Level 3 — Raw evidence**
+
+- strike-by-strike values
+- timestamped changes
+- trajectories
+- migrations
+- distributions
+
+**Level 4 — Mathematical/model evidence**
+
+- feature value
+- normalization
+- learned contribution/weight
+- sample size
+- historical analogue count
+- model/version
+- data-quality flags
+
+A beginner should be able to understand Level 1, while an advanced researcher should be able to inspect Levels 2–4.
+
+### 2.3 Market intelligence, not indicator dumping
+
+The product should translate observable market data into interpretable market structures.
+
+Prefer:
+
+> **25,220 — high-probability resistance zone; 82% historical respect probability; gamma and option-flow structure are the strongest supporting evidence.**
+
+over:
+
+> CE OI +12.4%, PE OI -7.2%, Gamma +18%, IV +2.1%, VIX -1.8%.
+
+The raw values remain available, but interpretation is the primary product layer.
+
+### 2.4 Reusable design system
+
+Define reusable components early so future modules remain visually and behaviorally consistent.
+
+Candidate components:
+
+- price card
+- level card
+- probability card
+- signal card
+- confidence badge
+- regime badge
+- strike row
+- OI profile
+- gamma/GEX profile
+- divergence panel
+- event marker
+- explanation drawer
+- historical analogue card
+- data-quality indicator
+
+The same component language should eventually work across Market Intelligence, Strategy Builder, Paper Trading, Research Lab, Journal, and future live-trading surfaces.
+
+### 2.5 Tell the market story
+
+The dashboard should eventually present the current session as a structured market story rather than a disconnected collection of widgets:
+
+`Current NIFTY -> candidate levels -> historical level state -> current option structure -> dealer/gamma state inference -> regime -> expected behavior -> alternative outcomes`
+
+The interface should make the causal/evidentiary chain visible without claiming access to private market-maker positions.
+
+### 2.6 Explain uncertainty
+
+The engine must never hide uncertainty behind a single score.
+
+A level result should be able to expose:
+
+- respect probability
+- break probability
+- confidence/quality
+- comparable historical sample size
+- regime
+- strongest supporting features
+- conflicting features
+- invalidation condition
+- data-quality limitations
+
+### 2.7 Product differentiation principle
+
+The project should not compete by being merely another option-chain dashboard.
+
+The intended product progression is:
+
+`Raw market data -> market-structure engine -> evidence -> probability -> explanation -> decision support`
+
+This is the product-level expression of the research architecture.
+
+## 3. Data Availability / Free-Only Constraint
 
 The project should prioritize genuinely free data/tools and must not assume a paid market-data vendor.
 
@@ -46,9 +180,9 @@ Important distinction:
 - Intraday historical full-chain OI: **not assumed to be freely available**. It must be independently verified before becoming a required predictor.
 - India VIX historical data: available from NSE and can be used for daily/regime features.
 
-If a field cannot be obtained reliably and freely, store it as unavailable/null rather than fabricate, interpolate, or silently substitute it.
+If a field cannot be obtained reliably and freely, store it as unavailable/null rather than fabricate, interpolate, or silently substitute.
 
-## 3. Pilot Before Scaling
+## 4. Pilot Before Scaling
 
 Never begin with years of data.
 
@@ -65,7 +199,7 @@ Then expand progressively:
 
 A failed pilot means data acquisition/integrity is fixed before research expands.
 
-## 4. Master Timeline
+## 5. Master Timeline
 
 NIFTY 3-minute candles are the master timeline.
 
@@ -86,7 +220,7 @@ Required underlying fields:
 - volume, if available
 - derived volatility/range fields
 
-## 5. Option Contract Universe
+## 6. Option Contract Universe
 
 For each selected historical expiry, preserve contract metadata:
 
@@ -101,7 +235,7 @@ The pilot should initially use a manageable matrix such as ATM +/- 10 strikes, b
 
 At approximately 75 three-minute observations in a session, ATM +/- 10 with CE+PE gives roughly 3,150 option observations per day before adding extra fields.
 
-## 6. Dynamic ATM Rule
+## 7. Dynamic ATM Rule
 
 ATM is recalculated independently at every snapshot.
 
@@ -128,7 +262,7 @@ Example:
 
 The model should learn structural position, not memorize absolute strike numbers.
 
-## 7. Event Detection and Labeling
+## 8. Event Detection and Labeling
 
 The underlying swing engine identifies candidate swing highs/lows and eventually confirmed structural events.
 
@@ -145,7 +279,7 @@ Predictor snapshots are taken only from information available at or before T:
 
 Future observations after T are reserved exclusively for outcome labels.
 
-## 8. Objective Level Outcome Definitions
+## 9. Objective Level Outcome Definitions
 
 A candidate level is not simply called support/resistance because it looks correct on a chart.
 
@@ -182,7 +316,7 @@ Initial outcome classes:
 
 Thresholds should be volatility-normalized rather than fixed-point wherever possible.
 
-## 9. Volatility Normalization
+## 10. Volatility Normalization
 
 A fixed 20-point move has different meaning under different volatility regimes.
 
@@ -196,7 +330,7 @@ Conceptually:
 
 India VIX can additionally be used as a regime variable.
 
-## 10. Level Clustering / Dot-to-Dot Research
+## 11. Level Clustering / Dot-to-Dot Research
 
 Historical swing levels are treated as observations rather than manually drawn lines.
 
@@ -212,7 +346,7 @@ At time T:
 
 Future events cannot contribute to the predictor state at T.
 
-## 11. Level-Relative Option Map
+## 12. Level-Relative Option Map
 
 For every candidate level, calculate the relationship between option strikes and the candidate level:
 
@@ -222,7 +356,7 @@ This allows us to test whether option-market structure concentrates around the e
 
 Both ATM-relative and level-relative representations should be retained.
 
-## 12. Feature Families
+## 13. Feature Families
 
 Features are organized into families before modeling.
 
@@ -301,7 +435,7 @@ Features are organized into families before modeling.
 - VIX acceleration
 - relative ATR
 
-## 13. Feature Trajectory Representation
+## 14. Feature Trajectory Representation
 
 Absolute values alone are insufficient.
 
@@ -316,7 +450,7 @@ For each important variable X, retain:
 
 This allows the research to detect buildup/decay rather than only static levels.
 
-## 14. Initial Statistical Discovery
+## 15. Initial Statistical Discovery
 
 Split events into outcome groups such as Respect vs Failure.
 
@@ -334,7 +468,7 @@ Correlation alone is not sufficient.
 
 A feature with a nonlinear relationship may have weak linear correlation while remaining highly informative.
 
-## 15. Interaction Research
+## 16. Interaction Research
 
 Explicitly test combinations because individual variables may be weak while their joint state is strong.
 
@@ -349,7 +483,7 @@ Examples to investigate:
 
 These are hypotheses to test, not assumed truths.
 
-## 16. Model Ladder / Ablation
+## 17. Model Ladder / Ablation
 
 Build models incrementally so the contribution of each data family is measurable.
 
@@ -365,7 +499,7 @@ Suggested sequence:
 
 If a data family adds no robust out-of-sample value, it should not be retained merely because it sounds sophisticated.
 
-## 17. Baselines
+## 18. Baselines
 
 Every advanced model must beat simple benchmarks such as:
 
@@ -378,7 +512,7 @@ Every advanced model must beat simple benchmarks such as:
 
 The complex system is successful only if it demonstrates incremental predictive value over these baselines.
 
-## 18. Regime Conditioning
+## 19. Regime Conditioning
 
 A single universal formula is not assumed.
 
@@ -396,7 +530,7 @@ The target formulation may become:
 
 rather than one fixed formula for every market condition.
 
-## 19. Validation / Leakage Prevention
+## 20. Validation / Leakage Prevention
 
 Never randomly mix adjacent time-series observations between train and test.
 
@@ -411,7 +545,7 @@ Example structure:
 
 The exact dates depend on the clean dataset.
 
-## 20. Robustness Requirements
+## 21. Robustness Requirements
 
 No formula is accepted as robust without surviving:
 
@@ -428,7 +562,7 @@ No formula is accepted as robust without surviving:
 
 Parameter stability is required. A narrow magic threshold is evidence of possible overfitting.
 
-## 21. Final Live-System Concept
+## 22. Final Live-System Concept
 
 The eventual live engine should conceptually operate as:
 
@@ -436,7 +570,7 @@ The eventual live engine should conceptually operate as:
 
 The system should explain why a level received its score rather than outputting an opaque number.
 
-## 22. Data Integrity Rules
+## 23. Data Integrity Rules
 
 - Never fabricate historical OI.
 - Never silently fill missing market observations.
@@ -447,7 +581,7 @@ The system should explain why a level received its score rather than outputting 
 - Record missing-data quality explicitly.
 - Do not let a low-quality snapshot enter model training without a documented rule.
 
-## 23. Proposed Research Tables
+## 24. Proposed Research Tables
 
 ### `nifty_candles`
 
@@ -500,7 +634,7 @@ The system should explain why a level received its score rather than outputting 
 - VIX/regime features
 - data-quality flags
 
-## 24. Current Research State
+## 25. Current Research State
 
 Completed conceptually:
 
@@ -520,8 +654,12 @@ Completed conceptually:
 - regime framework defined
 - walk-forward validation framework defined
 - robustness requirements defined
+- product/UX principle defined: conclusion first, evidence underneath
+- progressive disclosure defined
+- reusable component/design-system principle defined
+- market-story presentation defined
 
-## 25. Immediate Next Step: Step 6
+## 26. Immediate Next Step: Step 6
 
 **Do not jump into modeling yet.**
 
@@ -542,7 +680,7 @@ For every candidate variable, define:
 
 Only after this mathematical specification is frozen should implementation against the pilot dataset begin.
 
-## 26. Conversation Handoff
+## 27. Conversation Handoff
 
 This blueprint preserves the decisions from the research conversation that led to this stage.
 
@@ -551,7 +689,7 @@ https://chatgpt.com/share/6a87f63e-84e8-83e8-8d91-fbc368b6f2b0
 
 When resuming the work, read this file first and continue from **Step 6 — Mathematical Feature Dictionary** unless a later research document supersedes it.
 
-## 27. Non-Goals
+## 28. Non-Goals
 
 This research does not claim to literally identify the private positions of market makers.
 
