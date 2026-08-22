@@ -425,6 +425,54 @@ class StrategyTemplateLeg(Base):
     template: Mapped["StrategyTemplate"] = relationship(back_populates="legs")
 
 
+class GexSnapshot(Base):
+    """One stored GEX snapshot (Phase 7.3 data foundation).
+
+    Persists the complete GEX state at one instant so that historical ΔGEX,
+    migration, and decomposition can be computed without re-fetching the
+    chain.  Every field that was used to compute GEX is preserved so the
+    calculation is reproducible.
+
+    ``spot``, ``call_gex``, ``put_gex``, ``net_gex`` are chain-level totals.
+    ``strike_data`` is a JSON array containing per-strike broker-observed
+    gamma, OI, IV and the resulting GEX — enough to reconstruct canonical
+    chain rows and reproduce the exact GEX calculation.
+
+    ``expiry_data`` is a JSON array of per-expiry totals.
+    ``methodology_metadata`` records the formula, sign convention, and
+    unit contract used at capture time.
+    """
+
+    __tablename__ = "gex_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Identity
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    expiry: Mapped[str] = mapped_column(String(10))
+    # Market state at capture
+    spot: Mapped[float] = mapped_column(Float)
+    # Methodology
+    methodology: Mapped[str] = mapped_column(String(32), default="GEX_STANDARD_V1")
+    sign_convention: Mapped[str] = mapped_column(String(32), default="NAIVE_DEALER_CONVENTION")
+    # Chain-level totals (computed at capture time)
+    call_gex: Mapped[float | None] = mapped_column(Float, nullable=True)
+    put_gex: Mapped[float | None] = mapped_column(Float, nullable=True)
+    net_gex: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Data quality
+    availability_status: Mapped[str] = mapped_column(String(16))  # available|partial|unavailable|invalid
+    valid_strike_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_strike_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Capture metadata
+    chain_age_ms: Mapped[float | None] = mapped_column(Float, nullable=True)  # ms since broker quote
+    captured_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    # Strike-level detail (JSON for SQLite compat)
+    strike_data: Mapped[str] = mapped_column(Text, default="[]")
+    # Expiry-level detail (JSON)
+    expiry_data: Mapped[str] = mapped_column(Text, default="[]")
+    # Methodology metadata (JSON)
+    methodology_metadata: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class IVObservation(Base):
     """One stored implied-volatility observation (Phase 4.1 data foundation).
 

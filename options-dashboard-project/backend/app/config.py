@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     IV_HISTORY_ENABLED: bool = False
     IV_HISTORY_SAMPLE_SECONDS: int = 300
     IV_HISTORY_RETENTION_DAYS: int = 90
+    # Historical GEX snapshots (Phase 7.3): persistence model and repository.
+    # Collection is DISABLED by default.  A future phase that enables it must
+    # honour these bounds to avoid uncontrolled database growth.
+    GEX_HISTORY_ENABLED: bool = False
+    GEX_HISTORY_SAMPLE_SECONDS: int = 300  # 5-minute snapshot interval
+    GEX_HISTORY_RETENTION_DAYS: int = 90   # matches IV history retention
 
     class Config:
         env_file = ".env"
