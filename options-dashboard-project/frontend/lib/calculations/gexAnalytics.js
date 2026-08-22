@@ -62,6 +62,9 @@ export const FRESHNESS = Object.freeze({
   OLD: "old",             // 30+ min
 });
 
+/** Strategy Builder interface version */
+export const STRATEGY_BUILDER_VERSION = "strategyBuilderInputs_v1";
+
 /** Freshness thresholds in milliseconds */
 const FRESH_THRESHOLD_MS = 300_000;    // 5 min
 const RECENT_THRESHOLD_MS = 600_000;   // 10 min
@@ -274,6 +277,7 @@ export function computeGexAnalytics(source, options = {}) {
     profileLabel,
 
     // Strategy Builder interface
+    strategyBuilderVersion: STRATEGY_BUILDER_VERSION,
     strategyBuilderReady,
     strategyBuilderInputs,
   };
@@ -357,6 +361,7 @@ function unavailableAnalytics(reason) {
     expiryDecomposition: { history: [], current: null, status: "unavailable" },
     callGexShareHistory: { current: null, history: [], status: "unavailable" },
     profileLabel: { labels: ["UNAVAILABLE"], confidence: "experimental", status: "unavailable" },
+    strategyBuilderVersion: STRATEGY_BUILDER_VERSION,
     strategyBuilderReady: false,
     strategyBuilderInputs: {
       netGex: null, netGexSma: null, deltaGexSma: null, velocity: null,

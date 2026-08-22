@@ -59,10 +59,14 @@
 
 import { chainGex, rawGex, GEX_STATUS, GEX_METHOD_VERSION } from "./gex";
 import { modelGamma } from "./gexPhase72";
+import { timeToExpiry } from "./pricing.js";
 
 // ---- Constants ---------------------------------------------------------------
 
 export const GEX_HISTORY_VERSION = "GEX_HISTORY_V1";
+
+/** Canonical snapshot schema version */
+export const GEX_SNAPSHOT_SCHEMA_VERSION = "GEXSnapshot_v1";
 
 /** Default snapshot capture interval: 5 minutes */
 export const DEFAULT_SNAPSHOT_INTERVAL_MS = 300_000;
@@ -93,7 +97,8 @@ const MIN_T_FOR_BS = 1 / 365;
  * @param {object} [options]
  * @param {string} [options.symbol] — override symbol
  * @param {string[]} [options.scopeExpiries] — filter expiries
- * @returns {object|null} snapshot object, or null if spot is invalid
+ * @param {string} [options.valuationDate] — ISO YYYY-MM-DD for DTE computation
+ * @returns {object|null} snapshot object (GEXSnapshot_v1), or null if spot is invalid
  */
 export function captureGexSnapshot(chain, spot, timestamp, options = {}) {
   if (!Number.isFinite(spot) || spot <= 0) return null;
@@ -168,20 +173,50 @@ export function captureGexSnapshot(chain, spot, timestamp, options = {}) {
   // Chain age (ms since earliest quote_timestamp in the chain)
   const chainAgeMs = _computeChainAge(chain.chain);
 
+  // Compute DTE if valuationDate provided
+  const valuationDate = options.valuationDate ?? null;
+  let dte = null;
+  if (valuationDate && expiry) {
+    const tYears = timeToExpiry(valuationDate, expiry);
+    if (tYears != null && Number.isFinite(tYears) && tYears >= 0) {
+      dte = tYears * 365;
+    }
+  }
+
   return {
+    // Schema version
+    schemaVersion: GEX_SNAPSHOT_SCHEMA_VERSION,
+    snapshotId: null, // populated by backend persistence
+
+    // Temporal
+    capturedAt,
+    valuationDate,
+
+    // Market identity
     symbol,
-    expiry,
+    underlying: symbol,
     spot,
+
+    // Expiry
+    expiry,
+    dte,
+
+    // Methodology
     methodology: GEX_METHOD_VERSION,
     signConvention: "NAIVE_DEALER_CONVENTION",
+
+    // Chain-level GEX
     callGex: gexResult.callGex,
     putGex: gexResult.putGex,
     netGex: gexResult.netGex,
+
+    // Chain quality
     availabilityStatus: gexResult.availabilityStatus,
     validStrikeCount: gexResult.validStrikeCount,
     totalStrikeCount: gexResult.totalOptionCount,
     chainAgeMs,
-    capturedAt,
+
+    // Strike and expiry data
     strikeData,
     expiryData,
     methodologyMetadata,
@@ -858,6 +893,135 @@ export function snapshotDataQuality(snapshot) {
     chainAgeMs: snapshot.chainAgeMs ?? null,
     expiry: snapshot.expiry ?? null,
     methodology: snapshot.methodology ?? null,
+  };
+}
+
+// ---- Snapshot validation ----------------------------------------------------
+
+/**
+ * Validate a GEX snapshot and report data-quality issues.
+ *
+ * Returns a deterministic validation result without modifying the snapshot.
+ * Null means unavailable; never silently converts null to zero.
+ *
+ * @param {object} snapshot — candidate snapshot
+ * @returns {{ valid: boolean, issues: string[], warnings: string[], snapshotVersion: string|null }}
+ */
+export function validateGexSnapshot(snapshot) {
+  const issues = [];
+  const warnings = [];
+
+  if (!snapshot || typeof snapshot !== "object") {
+    return { valid: false, issues: ["NOT_OBJECT"], warnings: [], snapshotVersion: null };
+  }
+
+  // Schema version
+  const sv = snapshot.schemaVersion ?? null;
+  if (sv === null) {
+    warnings.push("MISSING_SCHEMA_VERSION");
+  } else if (sv !== GEX_SNAPSHOT_SCHEMA_VERSION) {
+    issues.push("UNKNOWN_SCHEMA_VERSION:" + sv);
+  }
+
+  // CapturedAt
+  const cat = snapshot.capturedAt;
+  if (cat == null) {
+    issues.push("MISSING_CAPTURED_AT");
+  } else {
+    const ms = new Date(cat).getTime();
+    if (!Number.isFinite(ms)) {
+      issues.push("INVALID_CAPTURED_AT");
+    } else if (ms < 0) {
+      issues.push("NEGATIVE_TIMESTAMP");
+    }
+  }
+
+  // Spot
+  const spot = snapshot.spot;
+  if (spot == null || !Number.isFinite(spot)) {
+    issues.push("MISSING_OR_INVALID_SPOT");
+  } else if (spot <= 0) {
+    issues.push("NON_POSITIVE_SPOT");
+  }
+
+  // Net GEX
+  const netGex = snapshot.netGex;
+  if (netGex != null && !Number.isFinite(netGex)) {
+    issues.push("INVALID_NET_GEX");
+  }
+
+  // Call / Put GEX
+  const callGex = snapshot.callGex;
+  const putGex = snapshot.putGex;
+  if (callGex != null && !Number.isFinite(callGex)) {
+    issues.push("INVALID_CALL_GEX");
+  }
+  if (putGex != null && !Number.isFinite(putGex)) {
+    issues.push("INVALID_PUT_GEX");
+  }
+
+  // Symbol
+  const symbol = snapshot.symbol ?? snapshot.underlying;
+  if (!symbol || typeof symbol !== "string" || symbol.trim().length === 0) {
+    issues.push("MISSING_SYMBOL");
+  }
+
+  // Expiry
+  if (snapshot.expiry != null && typeof snapshot.expiry !== "string") {
+    issues.push("INVALID_EXPIRY_TYPE");
+  }
+
+  // Methodology
+  if (snapshot.methodology == null) {
+    warnings.push("MISSING_METHODOLOGY");
+  }
+
+  // Strike data
+  const sd = snapshot.strikeData;
+  if (sd != null) {
+    if (!Array.isArray(sd)) {
+      issues.push("STRIKE_DATA_NOT_ARRAY");
+    } else {
+      for (let i = 0; i < sd.length; i++) {
+        const s = sd[i];
+        if (s == null || typeof s !== "object") {
+          issues.push("INVALID_STRIKE_ENTRY:" + i);
+          continue;
+        }
+        if (s.strike == null || !Number.isFinite(s.strike)) {
+          issues.push("INVALID_STRIKE_VALUE:" + i);
+        }
+        // Check for NaN/Infinity in key fields
+        for (const field of ["callGamma", "callOi", "putGamma", "putOi", "callGex", "putGex", "netGex"]) {
+          const v = s[field];
+          if (v != null && !Number.isFinite(v)) {
+            warnings.push("NON_FINITE_" + field.toUpperCase() + "_AT_STRIKE_" + s.strike);
+          }
+        }
+      }
+    }
+  }
+
+  // Expiry data
+  const ed = snapshot.expiryData;
+  if (ed != null && !Array.isArray(ed)) {
+    issues.push("EXPIRY_DATA_NOT_ARRAY");
+  }
+
+  // Duplicate detection (informational)
+  // Cannot detect duplicates from a single snapshot; this is for batch validation
+
+  // DTE
+  const dte = snapshot.dte;
+  if (dte != null && (!Number.isFinite(dte) || dte < 0)) {
+    warnings.push("INVALID_DTE");
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+    warnings,
+    snapshotVersion: sv,
   };
 }
 
