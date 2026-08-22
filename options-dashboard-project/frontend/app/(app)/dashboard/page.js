@@ -6,6 +6,7 @@ import { useChainFeed } from "@/lib/useChainFeed";
 import { putCallRatio, maxPainStrike, maxOI, oiTotals } from "@/lib/analytics";
 import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMobile } from "@/lib/ui";
+import { MetricCard } from "@/components/app/styles";
 import { loadJSON, saveJSON } from "@/lib/storage";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
@@ -222,19 +223,21 @@ export default function Dashboard() {
         )}
       </div>
 
-      <div style={{ display: "flex", gap: 18, marginBottom: 14, flexWrap: "wrap", fontSize: 12.5 }}>
+      {/* Phase 2.1d: MetricCard grid */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, marginBottom: 14 }}>
         {spot != null && (
-          <Metric label="Spot" value={fmtIN(spot, 2)} color={C.gold} />
+          <MetricCard label="SPOT" value={fmtIN(spot, 2)} color={C.gold} />
         )}
-        <Metric
+        <MetricCard
           label="PCR (OI)"
           value={pcr != null ? pcr.toFixed(2) : "-"}
           color={pcr == null ? C.muted : pcr > 1 ? C.green : pcr < 0.8 ? C.red : C.text}
-          hint="Put OI ÷ Call OI. >1 leans bullish, <0.8 leans bearish."
+          hint="Put OI ÷ Call OI"
         />
-        <Metric label="Max Pain" value={maxPain != null ? fmtIN(maxPain) : "-"} color={C.gold} hint="Expiry price where option writers lose the least." />
-        {totals && <Metric label="Call OI" value={fmtIN(totals.callOI)} color={C.red} />}
-        {totals && <Metric label="Put OI" value={fmtIN(totals.putOI)} color={C.green} />}
+        <MetricCard label="MAX PAIN" value={maxPain != null ? fmtIN(maxPain) : "-"} color={C.gold} hint="Writer-wins strike" />
+        <MetricCard label="IV" value="—" color={C.faint} hint="Coming in Phase 2.2" />
+        {totals && <MetricCard label="CALL OI" value={fmtIN(totals.callOI)} color={C.red} />}
+        {totals && <MetricCard label="PUT OI" value={fmtIN(totals.putOI)} color={C.green} />}
       </div>
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -355,7 +358,8 @@ export default function Dashboard() {
   );
 }
 
-function Metric({ label, value, color, hint }) {
+/* Metric component kept for internal table cells and watchlist items */
+function InlineMetric({ label, value, color, hint }) {
   return (
     <span title={hint} style={{ color: C.muted }}>
       {label}: <span style={{ color: color || C.text, fontWeight: 600 }}>{value}</span>

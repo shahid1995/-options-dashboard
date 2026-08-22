@@ -35,7 +35,7 @@ import { updateTradeAnnotations, getStrategyDetail } from "@/lib/api";
 import TradeDetailModal from "./TradeDetailModal";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
-const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
+const sectionTitle = { fontSize: 12, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
 const dash = (v) => (v == null || Number.isNaN(v) ? "—" : v);
 
 // Phase 6.4 — data-quality badges are neutral status chips (§20/§37), never
@@ -61,8 +61,8 @@ const ALLOC_BASIS_LABELS = {
 function Metric({ label, value, color = C.text, hint }) {
   return (
     <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-      <div style={{ fontSize: 9.5, color: C.faint, letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 2, whiteSpace: "nowrap" }}>{dash(value)}</div>
+      <div style={{ fontSize: 10.5, color: C.faint, letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color, marginTop: 2, whiteSpace: "nowrap" }}>{dash(value)}</div>
       {hint && <div style={{ fontSize: 9.5, color: C.faint, marginTop: 1 }}>{hint}</div>}
     </div>
   );
@@ -508,8 +508,8 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={curve}>
               <CartesianGrid stroke={C.border} strokeDasharray="3 3" />
-              <XAxis dataKey="date" stroke={C.faint} fontSize={10} tickFormatter={(v) => v.slice(5)} />
-              <YAxis stroke={C.faint} fontSize={10} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} width={72} />
+              <XAxis dataKey="date" stroke={C.faint} fontSize={10.5} tickFormatter={(v) => v.slice(5)} />
+              <YAxis stroke={C.faint} fontSize={10.5} domain={["auto", "auto"]} tickFormatter={(v) => `₹${fmtIN(v, 2)}`} width={72} />
               <ReferenceLine y={summary.startingCapital ?? 0} stroke={C.faint} strokeDasharray="4 2" />
               <Tooltip
                 contentStyle={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 11 }}

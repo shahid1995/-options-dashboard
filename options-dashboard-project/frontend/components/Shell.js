@@ -3,37 +3,61 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { C, useIsMobile } from "@/lib/ui";
 
-const NAV_ITEMS = [
-  { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: "📊" },
-  { key: "market", href: "/market", label: "Market", icon: "📈" },
-  { key: "orders", href: "/orders", label: "Orders", icon: "📋" },
-  { key: "positions", href: "/positions", label: "Positions", icon: "📐" },
-  { key: "strategies", href: "/strategies", label: "Strategies", icon: "⚡" },
-  { key: "portfolio", href: "/portfolio", label: "Portfolio", icon: "💼" },
-  { key: "activity", href: "/activity", label: "Activity", icon: "🕐" },
-  { key: "brokers", href: "/brokers", label: "Brokers", icon: "🔗" },
-  { key: "settings", href: "/settings", label: "Settings", icon: "⚙️" },
+/**
+ * Phase 2.1 — Restructured navigation
+ * 4 workflow-aligned sections, 7 primary routes, 3 legacy redirects
+ */
+const NAV_SECTIONS = [
+  {
+    label: "MARKET",
+    items: [
+      { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: "📊" },
+    ],
+  },
+  {
+    label: "BUILD",
+    items: [
+      { key: "paper", href: "/paper", label: "Strategy Builder", icon: "⚡" },
+    ],
+  },
+  {
+    label: "MANAGE",
+    items: [
+      { key: "positions", href: "/positions", label: "Positions", icon: "📐" },
+      { key: "portfolio", href: "/portfolio", label: "Portfolio", icon: "💼" },
+      { key: "orders", href: "/orders", label: "Orders", icon: "📋" },
+    ],
+  },
+  {
+    label: "SYSTEM",
+    items: [
+      { key: "brokers", href: "/brokers", label: "Brokers", icon: "🔗" },
+      { key: "settings", href: "/settings", label: "Settings", icon: "⚙️" },
+    ],
+  },
 ];
 
-// Legacy route mapping: map old paths to active nav keys
+/**
+ * Legacy route mapping — maps old paths to active nav keys.
+ * Old routes still resolve (no broken links) but highlight the correct nav item.
+ */
 const ROUTE_KEY_MAP = {
   "/dashboard": "dashboard",
-  "/market": "market",
-  "/orders": "orders",
+  "/paper": "paper",
   "/positions": "positions",
-  "/strategies": "strategies",
   "/portfolio": "portfolio",
-  "/activity": "activity",
+  "/orders": "orders",
   "/brokers": "brokers",
   "/settings": "settings",
-  "/paper": "strategies",
+  // Legacy redirects
+  "/market": "dashboard",
+  "/strategies": "paper",
+  "/activity": "orders",
 };
 
 function getActiveKey(pathname) {
   if (!pathname) return "dashboard";
-  // Exact match first
   if (ROUTE_KEY_MAP[pathname]) return ROUTE_KEY_MAP[pathname];
-  // Prefix match (e.g. /orders/123 → orders)
   for (const [route, key] of Object.entries(ROUTE_KEY_MAP)) {
     if (pathname.startsWith(route + "/")) return key;
   }
@@ -50,7 +74,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar }) {
         top: 0,
         left: 0,
         right: 0,
-        height: 44,
+        height: 48,
         background: C.surface,
         borderBottom: `1px solid ${C.border}`,
         display: "flex",
@@ -168,14 +192,14 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar }) {
 function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
   return (
     <nav
-      className="shell-sidebar"
+      className={`shell-sidebar${isOpen ? " shell-open" : ""}`}
       style={{
         position: "fixed",
-        top: 44,
+        top: 48,
         left: 0,
         bottom: 0,
-        width: isOpen ? 200 : 0,
-        minWidth: isOpen ? 200 : 0,
+        width: isOpen ? 220 : 0,
+        minWidth: isOpen ? 220 : 0,
         background: C.surface,
         borderRight: isOpen ? `1px solid ${C.border}` : "none",
         overflow: "hidden",
@@ -191,39 +215,55 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
           display: "flex",
           flexDirection: "column",
           gap: 2,
-          minWidth: 200,
+          minWidth: 220,
         }}
       >
-        {NAV_ITEMS.map((item) => {
-          const isActive = activeKey === item.key;
-          return (
-            <a
-              key={item.key}
-              href={item.href}
-              onClick={isMobile ? onClose : undefined}
+        {NAV_SECTIONS.map((section) => (
+          <div key={section.label}>
+            <div
               style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "8px 16px",
-                fontSize: 13,
-                fontWeight: isActive ? 600 : 400,
-                color: isActive ? C.gold : C.muted,
-                textDecoration: "none",
-                background: isActive ? "rgba(201,161,90,0.08)" : "transparent",
-                borderLeft: isActive
-                  ? `2px solid ${C.gold}`
-                  : "2px solid transparent",
-                transition: "background 0.15s, color 0.15s",
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: 1.5,
+                color: C.faint,
+                padding: "12px 16px 4px",
+                textTransform: "uppercase",
               }}
             >
-              <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>
-                {item.icon}
-              </span>
-              <span>{item.label}</span>
-            </a>
-          );
-        })}
+              {section.label}
+            </div>
+            {section.items.map((item) => {
+              const isActive = activeKey === item.key;
+              return (
+                <a
+                  key={item.key}
+                  href={item.href}
+                  onClick={isMobile ? onClose : undefined}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 16px",
+                    fontSize: 13,
+                    fontWeight: isActive ? 600 : 400,
+                    color: isActive ? C.gold : C.muted,
+                    textDecoration: "none",
+                    background: isActive ? "rgba(201,161,90,0.08)" : "transparent",
+                    borderLeft: isActive
+                      ? `2px solid ${C.gold}`
+                      : "2px solid transparent",
+                    transition: "background 0.15s, color 0.15s",
+                  }}
+                >
+                  <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>
+                    {item.icon}
+                  </span>
+                  <span>{item.label}</span>
+                </a>
+              );
+            })}
+          </div>
+        ))}
       </div>
     </nav>
   );
@@ -249,7 +289,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
     if (isMobile) setSidebarOpen(false);
   }, [pathname, isMobile]);
 
-  const contentMarginLeft = isMobile ? 0 : sidebarOpen ? 200 : 0;
+  const contentMarginLeft = isMobile ? 0 : sidebarOpen ? 220 : 0;
 
   return (
     <>
@@ -280,7 +320,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
         <div
           style={{
             position: "fixed",
-            top: 44,
+            top: 48,
             left: 0,
             right: 0,
             bottom: 0,
@@ -294,9 +334,9 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
       {/* Main content */}
       <main
         style={{
-          marginTop: 44,
+          marginTop: 48,
           marginLeft: contentMarginLeft,
-          minHeight: "calc(100vh - 44px)",
+          minHeight: "calc(100vh - 48px)",
           transition: "margin-left 0.2s ease",
           padding: 16,
         }}

@@ -12,7 +12,7 @@ import {
 } from "@/lib/brokerDiagnostics";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
-const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
+const sectionTitle = { fontSize: 12, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
 
 const STATUS_COLORS = {
   [DIAGNOSTIC_STATUS.AVAILABLE]: C.green,
@@ -95,8 +95,8 @@ function DetailField({ label, value }) {
   if (value == null || value === "") return null;
   return (
     <div style={{ padding: "4px 0", borderBottom: `1px solid ${C.border}` }}>
-      <div style={{ fontSize: 8.5, letterSpacing: 1, color: C.faint }}>{label}</div>
-      <div style={{ fontSize: 11, fontWeight: 700, color: C.text, marginTop: 1, wordBreak: "break-word" }}>{String(value)}</div>
+      <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint }}>{label}</div>
+      <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text, marginTop: 1, wordBreak: "break-word" }}>{String(value)}</div>
     </div>
   );
 }

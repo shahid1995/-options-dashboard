@@ -8,7 +8,7 @@ export default function SettingsPage() {
         <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0, marginBottom: 4 }}>
           Settings
         </h1>
-        <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>
+        <p style={{ fontSize: 13, color: C.muted, margin: 0 }}>
           Application preferences and account settings
         </p>
       </div>
@@ -20,7 +20,7 @@ export default function SettingsPage() {
           color: C.muted,
           fontSize: 13,
           border: `1px solid ${C.border}`,
-          borderRadius: 8,
+          borderRadius: 10,
           background: C.surface,
         }}
       >

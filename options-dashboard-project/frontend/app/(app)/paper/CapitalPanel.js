@@ -12,7 +12,7 @@ import {
 } from "@/lib/capital";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
-const sectionTitle = { fontSize: 11, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
+const sectionTitle = { fontSize: 12, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
 
 // Phase 5.2.1: financial values always display with two decimals (₹8,420.00).
 const money = (v) => (v == null ? "—" : `₹${fmtIN(v, 2)}`);
@@ -33,8 +33,8 @@ function Row({ label, value, source, status, note }) {
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.text }}>{label}</div>
-        <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.4, marginTop: 1 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{label}</div>
+        <div style={{ fontSize: 10, color: C.faint, letterSpacing: 0.4, marginTop: 1 }}>
           {source.toUpperCase()}
           {status === "partial" ? " · PARTIAL" : ""}
           {note ? ` · ${note.toUpperCase()}` : ""}
