@@ -159,17 +159,16 @@ A later classification derived from net GEX, gamma concentration, spot location 
 For an option at strike `K`, let:
 
 - `Gamma_i` = normalized live gamma for option `i`
-- `OI_i` = open interest in contracts/lots according to the broker-chain contract
-- `Q` = underlying/index contract multiplier (NIFTY lot size in contracts)
+- `OI_i` = open interest in **contracts** (see §11.1 for evidence)
 - `S` = current underlying spot/index value
 
-The first implementation will use the standard dollar/rupee-style 1%-move exposure form:
+The first implementation uses the standard dollar/rupee-style 1%-move exposure form:
 
 ```text
-Raw GEX_i = Gamma_i × OI_i × Q × S² × 0.01
+Raw GEX_i = Gamma_i × OI_i × S² × 0.01
 ```
 
-The exact unit interpretation must be documented in the implementation and tests. The system must never mix an OI definition in lots with a multiplier that already includes lot size.
+**No lot-size multiplier is applied.** The broker's `market_data.oi` field reports open interest in number of contracts. Multiplying by lot size would double-count. See §11.1 for the complete evidence chain.
 
 ### 6.1 Sign convention
 
@@ -324,25 +323,115 @@ The project already has explicit canonical Greek units. GEX must have the same d
 
 The implementation must document:
 
-- gamma unit
-- OI unit (lots vs contracts)
-- contract multiplier
-- spot unit
-- GEX output unit
+- gamma unit (per-point delta change)
+- OI unit (contracts — see §11.1)
+- spot unit (index points / underlying price)
+- GEX output unit (index-point × contracts × gamma)
 - 1% move factor
 
-A test must catch accidental double application of lot size.
+Lot size must NOT appear in the GEX formula. The broker's `market_data.oi` already represents contracts. A test must catch accidental re-introduction of lot-size multiplication.
 
 Example failure that must be prevented:
 
 ```text
-OI already represents contracts
+OI already represents contracts (number of open contracts)
         +
-lot_size multiplied again
-        = incorrect GEX
+lot_size multiplied again (e.g., × 65 for NIFTY)
+        = incorrect GEX (65× too large)
 ```
 
-The adapter-normalized data contract must make this distinction explicit.
+### 11.1 OI Unit Evidence — Upstox `market_data.oi` is Contracts
+
+The GEX formula does NOT include a lot-size multiplier because the Upstox broker's `market_data.oi` field reports open interest in **number of contracts**, not in lots. This was established through the following evidence chain:
+
+#### Evidence A — `lots_to_contracts()` proves Upstox order APIs expect contracts
+
+File: `backend/app/brokers/adapters/upstox/mapper.py`, line 226–232:
+
+```python
+def lots_to_contracts(quantity_lots: int, lot_size: int) -> int:
+    """Platform LOTS → broker contract quantity (lots × lot_size).
+
+    Upstox order/margin APIs expect contract units: 1 lot of NIFTY
+    (lot_size 65) → 65 contracts. Never pass lots directly to the broker.
+    """
+    return int(quantity_lots) * int(lot_size)
+```
+
+This docstring explicitly states Upstox order/margin APIs receive **contract units**. The function converts platform lots to contracts by multiplying by lot_size.
+
+#### Evidence B — Margin requests use contract units
+
+File: `backend/app/brokers/adapters/upstox/mapper.py`, line 250:
+
+```python
+"quantity": lots_to_contracts(inst["quantity"], inst["lot_size"]),
+```
+
+The margin calculator sends `lots_to_contracts()` output to Upstox. This proves Upstox's order/quantity APIs operate in **contract units**.
+
+#### Evidence C — Order placement uses contract units
+
+File: `backend/app/brokers/adapters/upstox/mapper.py`, line 396:
+
+```python
+"quantity": lots_to_contracts(request.quantity, request.instrument.lot_size),
+```
+
+Order placement also converts to contract units before sending to Upstox.
+
+#### Evidence D — OI is passed through unconverted from Upstox
+
+File: `backend/app/brokers/adapters/upstox/mapper.py`, line 335:
+
+```python
+oi = market.get("oi")
+```
+
+The option chain mapper reads `market_data.oi` directly from the Upstox response and maps it to the canonical `oi` field with **no unit conversion**. Since Upstox APIs operate in contract units (Evidence A–C), and OI is passed through unconverted, the OI value must already be in contract units.
+
+#### Evidence E — Canonical chain row does not carry lot_size
+
+The `transform_chain()` output structure:
+
+```python
+{
+    "ltp": ..., "oi": ..., "chg_oi": ..., "volume": ...,
+    "iv": ..., "delta": ..., "theta": ..., "gamma": ..., "vega": ..., "pop": ...
+}
+```
+
+There is no `lot_size` field in the canonical chain row. The GEX engine cannot obtain per-strike lot_size from the chain data.
+
+#### Evidence F — Indian market convention (NSE/BSE)
+
+Indian stock exchanges (NSE, BSE) report Open Interest in **number of outstanding contracts**, not in lots. This is the standard convention across:
+
+- NSE option chain snapshots
+- BSE option chain data
+- All broker API responses that source from exchange data
+
+The lot_size is a trading-order unit (minimum tradeable quantity) and does not affect the OI reporting unit.
+
+#### Evidence G — Canonical broker domain models confirm the unit boundary
+
+File: `backend/app/brokers/domain/models.py`, line 29:
+
+```python
+# quantities are LOTS everywhere; rupee exposure scales by lot_size.
+```
+
+This documents that the platform uses **lots** internally for order quantities, while the adapter boundary converts to/from broker **contract units**. The OI from the broker is in contract units; the adapter does not convert it because it is consumed as-is for analytics.
+
+#### Conclusion
+
+`Upstox market_data.oi` = **number of outstanding contracts**. The GEX formula is:
+
+```text
+GEX_i = gamma_i × OI_i × spot² × 0.01
+```
+
+No lot-size factor is applied. The static `LOT_SIZES` constant is not imported by the GEX engine. If a future broker adapter provides OI in a different unit, the adapter must normalize to contracts at the mapping boundary — not inside the GEX engine.
 
 ---
 
@@ -423,15 +512,20 @@ Example fixture:
 
 ```text
 Spot = 25,000
-Lot size = 65
 
 Strike 25,000 CE:
 Gamma = 0.002
-OI = 1,000
+OI = 1,000 (contracts)
+→ Raw GEX = 0.002 × 1000 × 25000² × 0.01 = 12,500,000
 
 Strike 25,000 PE:
 Gamma = 0.003
-OI = 500
+OI = 500 (contracts)
+→ Raw GEX = 0.003 × 500 × 25000² × 0.01 = 9,375,000
+
+Call GEX (signed) = +12,500,000
+Put GEX (signed)  = -9,375,000
+Net GEX           = +3,125,000
 ```
 
 Expected calculations must be recorded as exact test fixtures.
@@ -442,12 +536,13 @@ Tests must verify:
 
 - doubling OI doubles GEX
 - doubling gamma doubles GEX
-- doubling lot size doubles GEX
 - changing spot follows the S² factor
 - zero OI gives zero contribution
 - call sign is positive under baseline convention
 - put sign is negative under baseline convention
 - net GEX equals call GEX + put GEX
+- changing lot_size does NOT change GEX (proves lot_size is excluded)
+- rawGex has exactly 3 parameters (gamma, oi, spot — no lot_size)
 
 ### Level C — Aggregation properties
 

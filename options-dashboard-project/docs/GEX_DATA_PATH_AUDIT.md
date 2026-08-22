@@ -117,7 +117,9 @@ The GEX engine must not call Upstox directly. It should receive canonical data a
 
 For a 1% underlying move, the standard dollar/rupee exposure form is:
 
-`GEX_i = gamma_i × OI_i × lot_size × spot² × 0.01`
+`GEX_i = gamma_i × OI_i × spot² × 0.01`
+
+**Note:** No lot-size multiplier. `market_data.oi` from Upstox reports open interest in number of contracts, not lots. See GEX_V1_0_SPEC.md §11.1 for the complete evidence chain.
 
 For the initial inferred dealer-position convention:
 
