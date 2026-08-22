@@ -1,14 +1,141 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-21_
+_Last updated: 2026-08-22_
 
 ## Current phase
 
-**Phase 6.11 — Production Deployment Readiness / CORS Correction**
+**Phase 2.1 — App Shell + Design System Foundation**
 
-Status: ✅ **COMPLETE — DEPLOYED AND VERIFIED**
+Status: ✅ **COMPLETE — COMMITTED AND PUSHED**
 
-Checkpoint: `f49a50914a1f8489a3e968e6a61c59a152095682`
+Checkpoint: `4b60d020c253f20afec40ff9806f0a2e5908b090`
+
+---
+
+## Phase 2.1 — App Shell + Design System Foundation
+
+Status: ✅ **COMPLETE — COMMITTED AND PUSHED**
+
+Commit: `4b60d020c253f20afec40ff9806f0a2e5908b090`
+Branch: `main` (pushed to origin)
+
+### What was built
+
+**2.1a — App Shell + Typography:**
+- Restructured sidebar: 9 flat items → 4 workflow-aligned sections (MARKET / BUILD / MANAGE / SYSTEM) with 7 primary routes
+- Legacy route redirects preserved: /market → /dashboard, /strategies → /paper, /activity → /orders
+- TopBar: 44px → 48px, Sidebar: 200px → 220px (consistent mobile/desktop)
+- Fixed pre-existing mobile sidebar CSS bug (missing shell-open class)
+- New shared App design system: `frontend/components/app/styles.js` (MetricCard, panels, badges, buttons, tabs, grids)
+- Typography improvements across paper sub-components (CapitalPanel, BrokerConnectionPanel, PortfolioAnalyticsPanel)
+
+**2.1b — Portfolio Page:**
+- Replaced /portfolio stub with real page using CapitalPanel + PortfolioAnalyticsPanel
+- Independent API calls (getPaperCapital, getPaperAnalytics, getPaperPositionsFiltered)
+- Own auth check, loading/error states, refresh button
+
+**2.1c — Brokers Page:**
+- Replaced /brokers stub with real page using BrokerConnectionPanel
+- Independent API calls (getBrokerProfile, getPaperCapital, getMarketStatus)
+- Own auth check, loading/error states, refresh button
+
+**2.1d — Dashboard Shell:**
+- Inline metric row → responsive MetricCard grid (2-col mobile, auto-fill 150px desktop)
+- IV placeholder card ("—" / "Coming in Phase 2.2")
+- All existing option chain, watchlist, alerts, filters untouched
+
+### Files changed (12)
+
+| File | Change |
+|---|---|
+| `components/Shell.js` | Sidebar restructure, 48px TopBar, 220px sidebar, shell-open fix |
+| `components/app/styles.js` | **NEW** — App design system |
+| `app/(app)/portfolio/page.js` | Stub → real page |
+| `app/(app)/brokers/page.js` | Stub → real page |
+| `app/(app)/dashboard/page.js` | MetricCard grid + IV placeholder |
+| `app/(app)/paper/CapitalPanel.js` | Typography bumps |
+| `app/(app)/paper/BrokerConnectionPanel.js` | Typography bumps + formatting fix |
+| `app/(app)/paper/PortfolioAnalyticsPanel.js` | Typography bumps |
+| `app/(app)/market/page.js` | Redirect card update |
+| `app/(app)/strategies/page.js` | Redirect card update |
+| `app/(app)/activity/page.js` | Redirect card update |
+| `app/(app)/settings/page.js` | Typography bumps |
+
+### Verification
+
+- Tests: 946/946 passed (38 files)
+- Build: Compiled successfully, 18 static routes
+- Runtime: /dashboard, /portfolio, /brokers, /settings, /orders, /positions, /paper all verified
+- Mobile sidebar: Opens/closes correctly with 4 sections
+- Backend/API/DB/Auth/Trading-engine: Zero files touched
+
+### Not changed
+
+- `lib/ui.js` — zero changes
+- `app/(app)/paper/page.js` — zero changes
+- `app/(app)/orders/page.js` — zero changes
+- `app/(app)/positions/page.js` — zero changes
+- All public website files — zero changes
+- All backend, database, auth, broker, trading-engine files — zero changes
+
+---
+
+## Phase 2.0 — App Pages Audit
+
+Status: ✅ **COMPLETE**
+
+Audit report: `docs/APP_PAGES_PHASE_2_0_AUDIT.md`
+
+18-section audit of all 10 authenticated App pages covering: purpose, layout, components, data, interactions, navigation, responsive behavior, loading/empty/error states, API dependencies, auth requirements, visual inconsistencies, typography, information hierarchy, UX problems, missing functionality, redundant functionality, recommended improvements, and priorities.
+
+Key findings:
+- /paper is a 3,621-line monolith (P0)
+- Dashboard shows raw data with no intelligence (P0)
+- 5 of 10 pages are stubs (P1)
+- Typography same as pre-patch public site (P1)
+- Navigation promises 9 items, 3-4 work (P1)
+
+---
+
+## Phase 1.1 — Public Website Readability & Typography
+
+Status: ✅ **COMPLETE — COMMITTED AND PUSHED**
+
+Commit: `1d3e7b0d5d7cdcfd1151393e62734ed5dc9fe568`
+
+### What was built
+
+- Color tokens: C.muted #8892A6→#949CB0, C.faint #5A6376→#7B8398
+- Typography bumps across all 7 public pages + shared components
+- Minimum readable sizes enforced (body 13-14px, labels 11px, nav 14px)
+- Research Direction headings: non-italic, C.muted
+- FeatureCard descriptions: 14px
+- Footer: improved sizes/colors
+
+### Verification
+
+- Tests: 946/946 passed
+- Build: Successful
+- All 7 public routes: HTTP 200
+- Visual QA: desktop + mobile verified
+- Old colors eliminated, new colors present
+
+---
+
+## Phase 1 — Public Website V1.1
+
+Status: ✅ **COMPLETE — DEPLOYED**
+
+### What was built
+
+7-page public marketing website with dark + gold design identity:
+- Homepage with hero, MockChain, feature pillars, workflow, CTA
+- Features, Market Intelligence, Strategy Lab, Paper Trading, How It Works, About
+- Shared design system: PublicHeader, PublicFooter, SectionHeading, CTASection, FeatureCard, DemoMetric
+- TickerTape, Research Direction concept
+- Responsive (desktop + mobile)
+
+---
 
 ### Production deployment
 
@@ -307,6 +434,13 @@ ChatGPT review: ⏳ pending
 
 | Phase | Status | Notes |
 |---|---|---|
+| **Frontend/UX Workstream** | | |
+| PW-1 — Public Website V1.1 | ✅ Complete | 7-page marketing site with dark + gold identity, deployed on Vercel |
+| PW-1.1 — Public Website Readability | ✅ Complete | Color tokens, typography bumps, accessibility improvements across all public pages |
+| AP-2.0 — App Pages Audit | ✅ Complete | 18-section audit of all 10 authenticated App pages |
+| AP-2.1 — App Shell + Design System | ✅ Complete | 4-section sidebar, portfolio/broker extraction, MetricCard grid, typography foundation |
+| | | |
+| **Platform Workstream** | | |
 | Phase 0 — Repository audit | ✅ Complete | Existing architecture and responsibilities inspected |
 | Phase 0.5 — Strategy/calculation refactor | ✅ Complete | Reusable strategy and calculation domains created |
 | Phase 1 — Strategy Builder 2.0 | ✅ Complete | Strategy identity, validation, leg management, review-before-trade added |
@@ -343,7 +477,15 @@ ChatGPT review: ⏳ pending
 | Phase 12 — Multi-broker expansion | ⏳ Planned | Foundation pulled forward + implemented in Phase 6.5.0.2 (broker-neutral contracts, gateway/registry, Upstox adapter). Remaining: second broker (architectural proof test), additional adapters, persistent multi-broker connections, account-management UI, broker capability matrices |
 | Phase 13 — Community | ⏳ Planned | Not started |
 
-## Latest verified implementation commit
+## Latest verified implementation commits
+
+### Frontend/UX workstream
+
+`4b60d020c253f20afec40ff9806f0a2e5908b090` — AP-2.1: App Shell + Design System Foundation (committed, pushed, 946/946 tests, build PASS, runtime verified).
+
+`1d3e7b0d5d7cdcfd1151393e62734ed5dc9fe568` — PW-1.1: Public Website Readability & Typography (committed, pushed, 946/946 tests, build PASS).
+
+### Platform workstream
 
 `f49a50914a1f8489a3e968e6a61c59a152095682` — Phase 6.11: Production Deployment Readiness / CORS Correction (deployed and infrastructure verified).
 
