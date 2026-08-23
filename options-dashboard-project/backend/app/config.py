@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     GEX_HISTORY_ENABLED: bool = False
     GEX_HISTORY_SAMPLE_SECONDS: int = 300  # 5-minute snapshot interval
     GEX_HISTORY_RETENTION_DAYS: int = 90   # matches IV history retention
+    # Historical NIFTY candles (Phase 7.7 research)
+    CANDLE_RETENTION_DAYS: int = 365
+    CANDLE_INTERVAL: str = "3min"
 
     class Config:
         env_file = ".env"

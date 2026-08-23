@@ -500,3 +500,31 @@ class IVObservation(Base):
     spot: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[str] = mapped_column(String(32), default="upstox")
     observed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
+class NiftyCandle(Base):
+    """One historical NIFTY OHLCV candle (Phase 7.7 research foundation).
+
+    Stores intraday candle data for research: constructing forward outcomes,
+    detecting swing levels, and computing baseline price features.
+
+    ``interval" is the candle granularity (e.g. "3min", "5min", "1day").
+    ``open_time" is the candle open timestamp in UTC — the canonical
+    identity for deduplication via the unique constraint.
+    """
+
+    __tablename__ = "nifty_candles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="3min")
+    open_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("symbol", "interval", "open_time", name="uq_candle_identity"),
+    )
