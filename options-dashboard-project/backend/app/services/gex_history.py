@@ -80,6 +80,7 @@ def record_gex_snapshot(db: Session, snapshot: dict) -> int:
     strike_data = snapshot.get("strikeData") or []
     expiry_data = snapshot.get("expiryData") or []
     methodology_metadata = snapshot.get("methodologyMetadata") or {}
+    sweep_data = snapshot.get("sweepData")
 
     db.add(
         GexSnapshot(
@@ -99,6 +100,7 @@ def record_gex_snapshot(db: Session, snapshot: dict) -> int:
             strike_data=json.dumps(strike_data, ensure_ascii=False),
             expiry_data=json.dumps(expiry_data, ensure_ascii=False),
             methodology_metadata=json.dumps(methodology_metadata, ensure_ascii=False),
+            sweep_data=json.dumps(sweep_data, ensure_ascii=False) if sweep_data is not None else None,
         )
     )
     db.commit()
@@ -192,4 +194,5 @@ def _row_to_dict(row: GexSnapshot) -> dict:
         "strikeData": json.loads(row.strike_data) if row.strike_data else [],
         "expiryData": json.loads(row.expiry_data) if row.expiry_data else [],
         "methodologyMetadata": json.loads(row.methodology_metadata) if row.methodology_metadata else {},
+        "sweepData": json.loads(row.sweep_data) if row.sweep_data else None,
     }

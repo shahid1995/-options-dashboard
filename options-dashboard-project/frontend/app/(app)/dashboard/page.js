@@ -8,6 +8,7 @@ import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMobile } from "@/lib/ui";
 import { MetricCard } from "@/components/app/styles";
 import { loadJSON, saveJSON } from "@/lib/storage";
+import { useGexCapture } from "@/lib/useGexCapture";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
 const ALERTS_KEY = "options_dashboard_alerts_v1";
@@ -65,6 +66,13 @@ export default function Dashboard() {
   }, [loggedIn, symbol]);
 
   const { chain, lastUpdated, error, mode, sessionExpired } = useChainFeed(symbol, expiry, !!loggedIn);
+
+  // Phase 7.6: GEX snapshot capture (wire only — no UI changes)
+  const { analytics: gexAnalytics, captureCount: gexCaptureCount } = useGexCapture(chain, {
+    symbol,
+    persistToBackend: !!loggedIn,
+    loadHistory: !!loggedIn,
+  });
 
   const [centeredKey, setCenteredKey] = useState(null);
   const scrollRef = useRef(null);

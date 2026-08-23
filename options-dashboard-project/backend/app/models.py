@@ -471,6 +471,8 @@ class GexSnapshot(Base):
     expiry_data: Mapped[str] = mapped_column(Text, default="[]")
     # Methodology metadata (JSON)
     methodology_metadata: Mapped[str] = mapped_column(Text, default="{}")
+    # Phase 7.2 sweep enrichment (JSON, nullable)
+    sweep_data: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
 
 class IVObservation(Base):
