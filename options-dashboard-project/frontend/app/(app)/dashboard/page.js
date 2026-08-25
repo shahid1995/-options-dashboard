@@ -9,6 +9,7 @@ import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMo
 import { MetricCard } from "@/components/app/styles";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { useGexCapture } from "@/lib/useGexCapture";
+import GexProfileChart from "@/components/GexProfileChart";
 
 const WATCHLIST_KEY = "options_dashboard_watchlist_v1";
 const ALERTS_KEY = "options_dashboard_alerts_v1";
@@ -67,11 +68,12 @@ export default function Dashboard() {
 
   const { chain, lastUpdated, error, mode, sessionExpired } = useChainFeed(symbol, expiry, !!loggedIn);
 
-  // Phase 7.6: GEX snapshot capture (wire only — no UI changes)
-  const { analytics: gexAnalytics, captureCount: gexCaptureCount } = useGexCapture(chain, {
+  // Phase 7.6: GEX snapshot capture with sweep enrichment for gamma flip / walls
+  const { analytics: gexAnalytics, captureCount: gexCaptureCount, latestSnapshot: gexSnapshot } = useGexCapture(chain, {
     symbol,
     persistToBackend: !!loggedIn,
     loadHistory: !!loggedIn,
+    enableSweep: true,
   });
 
   const [centeredKey, setCenteredKey] = useState(null);
@@ -361,6 +363,13 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        <GexProfileChart
+          analytics={gexAnalytics}
+          latestSnapshot={gexSnapshot}
+          atmStrike={atmStrike}
+          isMobile={isMobile}
+        />
       </div>
     </div>
   );
