@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db import init_db
-from app.routers import annotations, auth, candles, chains, gex, historical_gex, paper, resolve, templates
+from app.routers import annotations, auth, candles, chains, gex, historical_gex, live_gex, paper, resolve, templates
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ app.include_router(gex.router, prefix="/gex", tags=["gex"])
 app.include_router(historical_gex.router, prefix="/gex", tags=["gex-history"])
 app.include_router(annotations.router, tags=["annotations"])
 app.include_router(candles.router, prefix="/candles", tags=["candles"])
+app.include_router(live_gex.router, prefix="/gex", tags=["gex-live"])
 
 
 @app.get("/health")
