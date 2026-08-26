@@ -556,7 +556,7 @@ class DataQualityOut(BaseModel):
     warnings: list[str]
 
 
-@app.get("/data-quality", response_model=DataQualityOut)
+@router.get("/data-quality", response_model=DataQualityOut)
 def gex_data_quality(
     startDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
     endDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
