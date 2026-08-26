@@ -28,6 +28,14 @@ VERIFY_TABLES = [
     "greeks_checkpoint",
 ]
 
+# Minimum row counts to consider a backup trustworthy.
+# A database below these thresholds after a completed backfill is suspicious.
+MIN_ROWS = {
+    "option_candles": 100_000,
+    "option_greeks": 100_000,
+    "historical_gex": 100_000,
+}
+
 
 def safe_backup(source_path: str, prefix: str = "backup") -> dict:
     """Create a timestamped backup of a SQLite database.
@@ -81,7 +89,16 @@ def safe_backup(source_path: str, prefix: str = "backup") -> dict:
 
     conn.close()
 
-    return {
+    # Sanity check: refuse to create a "good backup" of a suspiciously empty DB
+    warnings = []
+    for table, min_count in MIN_ROWS.items():
+        count = row_counts.get(table, 0)
+        if isinstance(count, int) and count < min_count:
+            warnings.append(
+                f"{table}: {count:,} rows (minimum {min_count:,}) — database may be wiped"
+            )
+
+    result = {
         "success": True,
         "source": str(source),
         "source_size": source.stat().st_size,
@@ -90,6 +107,9 @@ def safe_backup(source_path: str, prefix: str = "backup") -> dict:
         "integrity": integrity,
         "row_counts": row_counts,
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def main():
@@ -110,6 +130,10 @@ def main():
     print(f"Row counts:")
     for table, count in result["row_counts"].items():
         print(f"  {table}: {count}")
+    if result.get("warnings"):
+        print("\nWARNINGS:")
+        for w in result["warnings"]:
+            print(f"  {w}")
     print("OK")
 
 
