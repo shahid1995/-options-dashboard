@@ -7,6 +7,8 @@ persistence pattern as ``gex_history.py`` and ``iv_history.py``.
 Candles are user-scoped implicitly (the user's Upstox token is required
 to fetch them).  The table itself stores only market data — no credentials,
 no broker tokens, no trading logic.
+
+Phase 7.24.4: All timestamps are stored as naive IST (Asia/Kolkata).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.models import NiftyCandle
+from app.utils.market_time import to_ist_naive
 
 
 VALID_INTERVALS = {"1min", "3min", "5min", "15min", "30min", "1hour", "1day"}
@@ -58,13 +61,18 @@ def record_candles(db: Session, candles: list[dict]) -> int:
         if interval not in VALID_INTERVALS:
             continue
 
-        # Parse timestamp
+        # Parse timestamp → naive IST (Phase 7.24.4 convention)
         if isinstance(open_time, str):
-            try:
-                open_time = datetime.fromisoformat(open_time.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
+            parsed = to_ist_naive(open_time)
+            if parsed is None:
                 continue
-        elif not isinstance(open_time, datetime):
+            open_time = parsed
+        elif isinstance(open_time, datetime):
+            # Convert aware to naive IST; keep naive as-is (assumed IST)
+            if open_time.tzinfo is not None:
+                from app.utils.market_time import IST
+                open_time = open_time.astimezone(IST).replace(tzinfo=None)
+        else:
             continue
 
         ohlcv = {}
@@ -202,7 +210,7 @@ def _row_to_dict(row: NiftyCandle) -> dict:
         "id": row.id,
         "symbol": row.symbol,
         "interval": row.interval,
-        "openTime": row.open_time.isoformat() if row.open_time else None,
+        "openTime": (row.open_time.isoformat() + "Z") if row.open_time else None,
         "open": row.open,
         "high": row.high,
         "low": row.low,
