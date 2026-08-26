@@ -172,14 +172,21 @@ class GexCaptureService:
     chain, computes GEX, validates, and persists.  No background state is
     held by the service itself.
 
+    Circuit breaker: tracks consecutive failures; after 5 consecutive failures,
+    log a warning and reset counter on next success.
+
     Usage::
 
         service = GexCaptureService()
         result = service.capture_once(db, chain_data, expiry="2026-08-28")
     """
 
+    _CIRCUIT_BREAKER_THRESHOLD = 5
+
     def __init__(self, gex_service: LiveGexService | None = None):
         self._gex_service = gex_service or LiveGexService()
+        self._consecutive_failures: int = 0
+        self._last_success_at: float | None = None
 
     def capture_once(
         self,
@@ -226,9 +233,15 @@ class GexCaptureService:
         try:
             result = self._gex_service.calculate(chain)
         except Exception as exc:
+            self._consecutive_failures += 1
             logger.error(
                 "GEX capture failed: calculation error",
-                extra={"symbol": effective_symbol, "error": str(exc)},
+                extra={
+                    "event": "gex.capture.failed",
+                    "symbol": effective_symbol,
+                    "error": str(exc),
+                    "consecutive_failures": self._consecutive_failures,
+                },
                 exc_info=True,
             )
             return {"status": "error", "reason": "calculation_error", "symbol": effective_symbol}
@@ -274,13 +287,19 @@ class GexCaptureService:
                 "net_gex": result.net_gex,
             }
 
-        # Persist
+        # Persist with explicit error isolation
         try:
             stored = record_gex_snapshot(db, snapshot_dict)
             if stored == 0:
+                self._consecutive_failures += 1
                 logger.warning(
                     "GEX capture failed: persistence rejected",
-                    extra={"symbol": effective_symbol, "expiry": effective_expiry},
+                    extra={
+                        "event": "gex.capture.failed",
+                        "symbol": effective_symbol,
+                        "reason": "persistence_rejected",
+                        "consecutive_failures": self._consecutive_failures,
+                    },
                 )
                 return {"status": "error", "reason": "persistence_rejected", "symbol": effective_symbol}
 
@@ -288,9 +307,15 @@ class GexCaptureService:
             latest = get_gex_snapshots(db, symbol=effective_symbol, expiry=effective_expiry, limit=1)
             snap_id = latest[-1].get("id") if latest else None
 
+            # Reset circuit breaker on success
+            self._consecutive_failures = 0
+            import time as _time
+            self._last_success_at = _time.time()
+
             logger.info(
                 "GEX snapshot captured",
                 extra={
+                    "event": "gex.capture.completed",
                     "symbol": effective_symbol,
                     "expiry": effective_expiry,
                     "net_gex": result.net_gex,
@@ -317,9 +342,15 @@ class GexCaptureService:
             }
 
         except Exception as exc:
+            self._consecutive_failures += 1
             logger.error(
                 "GEX capture failed: persistence error",
-                extra={"symbol": effective_symbol, "error": str(exc)},
+                extra={
+                    "event": "gex.capture.failed",
+                    "symbol": effective_symbol,
+                    "error": str(exc),
+                    "consecutive_failures": self._consecutive_failures,
+                },
                 exc_info=True,
             )
             return {"status": "error", "reason": "persistence_error", "symbol": effective_symbol}

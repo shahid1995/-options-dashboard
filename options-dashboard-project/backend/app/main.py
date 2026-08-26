@@ -33,7 +33,16 @@ _stop_event = asyncio.Event()
 
 
 async def _gex_capture_loop():
-    """Background loop: capture GEX snapshots at the configured interval."""
+    """Background loop: capture GEX snapshots at the configured interval.
+
+    Resilience features:
+    - Single failed capture never kills the loop
+    - Repeated failures trigger exponential backoff (up to 5x interval)
+    - DB sessions are always closed even on unexpected errors
+    - Structured logging for observability
+    - Backoff resets after a successful capture
+    """
+    import time as _time
     from app.services.token_store import get_any_token
     from app.services.gex_capture import GexCaptureService, run_retention_cleanup
     from app.services.live_gex import LiveGexService
@@ -41,10 +50,12 @@ async def _gex_capture_loop():
     interval = getattr(settings, "GEX_HISTORY_SAMPLE_SECONDS", 60)
     capture_service = GexCaptureService()
     gex_service = LiveGexService()
+    consecutive_failures = 0
+    max_backoff_multiplier = 5
 
     logger.info(
         "GEX capture loop started",
-        extra={"interval_seconds": interval, "enabled": settings.GEX_HISTORY_ENABLED},
+        extra={"event": "gex.capture_loop.started", "interval_seconds": interval},
     )
 
     # Wait for initial interval before first capture (let app fully start)
@@ -56,11 +67,11 @@ async def _gex_capture_loop():
         pass
 
     while not _stop_event.is_set():
+        cycle_start = _time.time()
         try:
             # Get the current broker token (single-user: first active session)
             token = get_any_token()
             if token is None:
-                # No active session — skip this cycle
                 logger.debug("GEX capture skipped: no active broker session")
                 await _interruptible_sleep(interval)
                 continue
@@ -70,8 +81,6 @@ async def _gex_capture_loop():
             from app.brokers.domain.enums import BROKER_ID_UPSTOX
             from app.brokers.gateway import gateway
 
-            # Default to NIFTY with nearest expiry — in production this would
-            # be configurable per-user; for single-user MVP we capture NIFTY.
             symbol = "NIFTY"
             if symbol not in INSTRUMENT_KEYS:
                 await _interruptible_sleep(interval)
@@ -79,20 +88,20 @@ async def _gex_capture_loop():
 
             adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
 
-            # Get available expiries to find the nearest one
+            # Get available expiries
             try:
-                from app.brokers.domain.errors import BrokerError
                 contracts = await adapter.get_option_contracts(symbol)
                 expiries = contracts.get("expiries", [])
                 if not expiries:
                     logger.debug("GEX capture skipped: no expiries available")
                     await _interruptible_sleep(interval)
                     continue
-                expiry_date = expiries[0]  # nearest expiry
+                expiry_date = expiries[0]
             except Exception as exc:
+                consecutive_failures += 1
                 logger.warning(
                     "GEX capture skipped: failed to get expiries",
-                    extra={"error": str(exc)},
+                    extra={"event": "gex.capture_loop.failed", "error": str(exc), "consecutive_failures": consecutive_failures},
                 )
                 await _interruptible_sleep(interval)
                 continue
@@ -101,46 +110,66 @@ async def _gex_capture_loop():
             try:
                 chain = await adapter.get_option_chain(symbol, expiry_date)
             except Exception as exc:
+                consecutive_failures += 1
                 logger.warning(
                     "GEX capture skipped: chain fetch failed",
-                    extra={"symbol": symbol, "expiry": expiry_date, "error": str(exc)},
+                    extra={"event": "gex.capture_loop.failed", "symbol": symbol, "error": str(exc), "consecutive_failures": consecutive_failures},
                 )
                 await _interruptible_sleep(interval)
                 continue
 
-            # Capture and persist
+            # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
                 result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol)
-                if result.get("status") == "captured":
+                status = result.get("status")
+
+                if status == "captured":
+                    consecutive_failures = 0  # Reset backoff on success
                     logger.info(
                         "Background GEX snapshot captured",
                         extra={
+                            "event": "gex.capture_loop.completed",
                             "symbol": symbol,
                             "expiry": expiry_date,
                             "net_gex": result.get("net_gex"),
                             "snapshot_id": result.get("snapshot_id"),
+                            "duration_ms": round((_time.time() - cycle_start) * 1000, 0),
                         },
                     )
+                else:
+                    consecutive_failures += 1
+                    logger.debug(
+                        "GEX capture not successful",
+                        extra={"event": "gex.capture_loop.skipped", "status": status, "reason": result.get("reason")},
+                    )
 
-                # Periodic retention cleanup (every 10 captures)
-                # Simplified: always run; prune_gex_snapshots is fast and idempotent
+                # Retention cleanup — always safe and idempotent
                 run_retention_cleanup(db)
 
             finally:
-                db.close()
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
         except asyncio.CancelledError:
             break
         except Exception as exc:
+            consecutive_failures += 1
             logger.error(
                 "GEX capture loop error",
-                extra={"error": str(exc)},
+                extra={"event": "gex.capture_loop.error", "error": str(exc), "consecutive_failures": consecutive_failures},
                 exc_info=True,
             )
 
-        # Wait for next interval (interruptible)
-        await _interruptible_sleep(interval)
+        # Apply backoff on repeated failures
+        effective_interval = interval
+        if consecutive_failures > 0:
+            backoff_multiplier = min(consecutive_failures, max_backoff_multiplier)
+            effective_interval = interval * backoff_multiplier
+
+        await _interruptible_sleep(effective_interval)
 
     logger.info("GEX capture loop stopped")
 

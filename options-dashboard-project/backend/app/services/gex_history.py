@@ -33,6 +33,8 @@ def _utcnow() -> datetime:
 def record_gex_snapshot(db: Session, snapshot: dict) -> int:
     """Persist one GEX snapshot; return 1 if stored, 0 if invalid.
 
+    Uses explicit commit with rollback-on-failure for transaction safety.
+
     Expected shape::
 
         {
@@ -82,29 +84,33 @@ def record_gex_snapshot(db: Session, snapshot: dict) -> int:
     methodology_metadata = snapshot.get("methodologyMetadata") or {}
     sweep_data = snapshot.get("sweepData")
 
-    db.add(
-        GexSnapshot(
-            symbol=symbol,
-            expiry=str(expiry),
-            spot=float(spot),
-            methodology=str(snapshot.get("methodology", "GEX_STANDARD_V1")),
-            sign_convention=str(snapshot.get("signConvention", "NAIVE_DEALER_CONVENTION")),
-            call_gex=_safe_float(snapshot.get("callGex")),
-            put_gex=_safe_float(snapshot.get("putGex")),
-            net_gex=_safe_float(snapshot.get("netGex")),
-            availability_status=status,
-            valid_strike_count=int(snapshot.get("validStrikeCount", 0)),
-            total_strike_count=int(snapshot.get("totalStrikeCount", 0)),
-            chain_age_ms=_safe_float(snapshot.get("chainAgeMs")),
-            captured_at=captured_at,
-            strike_data=json.dumps(strike_data, ensure_ascii=False),
-            expiry_data=json.dumps(expiry_data, ensure_ascii=False),
-            methodology_metadata=json.dumps(methodology_metadata, ensure_ascii=False),
-            sweep_data=json.dumps(sweep_data, ensure_ascii=False) if sweep_data is not None else None,
+    try:
+        db.add(
+            GexSnapshot(
+                symbol=symbol,
+                expiry=str(expiry),
+                spot=float(spot),
+                methodology=str(snapshot.get("methodology", "GEX_STANDARD_V1")),
+                sign_convention=str(snapshot.get("signConvention", "NAIVE_DEALER_CONVENTION")),
+                call_gex=_safe_float(snapshot.get("callGex")),
+                put_gex=_safe_float(snapshot.get("putGex")),
+                net_gex=_safe_float(snapshot.get("netGex")),
+                availability_status=status,
+                valid_strike_count=int(snapshot.get("validStrikeCount", 0)),
+                total_strike_count=int(snapshot.get("totalStrikeCount", 0)),
+                chain_age_ms=_safe_float(snapshot.get("chainAgeMs")),
+                captured_at=captured_at,
+                strike_data=json.dumps(strike_data, ensure_ascii=False),
+                expiry_data=json.dumps(expiry_data, ensure_ascii=False),
+                methodology_metadata=json.dumps(methodology_metadata, ensure_ascii=False),
+                sweep_data=json.dumps(sweep_data, ensure_ascii=False) if sweep_data is not None else None,
+            )
         )
-    )
-    db.commit()
-    return 1
+        db.commit()
+        return 1
+    except Exception:
+        db.rollback()
+        raise
 
 
 def get_gex_snapshots(
@@ -143,11 +149,18 @@ def get_latest_snapshot(
 
 
 def prune_gex_snapshots(db: Session, retention_days: int = 90) -> int:
-    """Delete snapshots older than ``retention_days``; return rows deleted."""
+    """Delete snapshots older than ``retention_days``; return rows deleted.
+
+    Uses explicit commit with rollback-on-failure for safety.
+    """
     cutoff = _utcnow() - timedelta(days=max(1, retention_days))
-    result = db.execute(delete(GexSnapshot).where(GexSnapshot.captured_at < cutoff))
-    db.commit()
-    return result.rowcount or 0
+    try:
+        result = db.execute(delete(GexSnapshot).where(GexSnapshot.captured_at < cutoff))
+        db.commit()
+        return result.rowcount or 0
+    except Exception:
+        db.rollback()
+        raise
 
 
 def count_gex_snapshots(db: Session, symbol: str | None = None) -> int:

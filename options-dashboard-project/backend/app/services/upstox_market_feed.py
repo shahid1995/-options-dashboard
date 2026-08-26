@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 import time
 from datetime import datetime, timezone
 from enum import Enum
@@ -77,12 +78,18 @@ logger = logging.getLogger(__name__)
 # Subscription mode for GEX — "full" provides LTP, OI, Greeks, IV, depth
 GEX_SUBSCRIPTION_MODE = "full"
 
-# Reconnect settings
-DEFAULT_RECONNECT_INTERVAL_SECONDS = 2
-DEFAULT_RECONNECT_RETRY_COUNT = 10
+# Reconnect settings — exponential backoff with jitter
+DEFAULT_RECONNECT_BASE_SECONDS = 1.0
+DEFAULT_RECONNECT_MAX_SECONDS = 30.0
+DEFAULT_RECONNECT_MAX_ATTEMPTS = 10
 
-# Stale data threshold (seconds) — if no tick received for this long, mark stale
-STALE_THRESHOLD_SECONDS = 30
+# Stale data thresholds (seconds)
+STALE_TICK_THRESHOLD_SECONDS = 10
+STALE_CHAIN_THRESHOLD_SECONDS = 15
+STALE_GEX_THRESHOLD_SECONDS = 30
+
+# Structured event names for observability
+EVENT_PREFIX = "gex.websocket"
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +106,8 @@ class FeedState(str, Enum):
     STALE = "stale"
     MARKET_CLOSED = "market_closed"
     AUTH_FAILED = "auth_failed"
+    STOPPING = "stopping"
+    ERROR = "error"
 
 
 # ---------------------------------------------------------------------------
@@ -225,8 +234,14 @@ class UpstoxMarketFeed:
         self._underlying_key: Optional[str] = None
         self._subscribed_keys: set[str] = set()
         self._last_tick_time: float = 0.0
+        self._last_spot_time: float = 0.0
+        self._last_gex_calc_time: float = 0.0
         self._on_tick_callbacks: list[Callable] = []
         self._contract_specs: dict = {}  # instrument_key → {strike, option_type, ...}
+        self._reconnect_attempts: int = 0
+        self._max_reconnect_attempts: int = DEFAULT_RECONNECT_MAX_ATTEMPTS
+        self._reconnect_base: float = DEFAULT_RECONNECT_BASE_SECONDS
+        self._reconnect_max: float = DEFAULT_RECONNECT_MAX_SECONDS
 
     @property
     def state(self) -> FeedState:
@@ -236,9 +251,76 @@ class UpstoxMarketFeed:
     def underlying_spot(self) -> Optional[float]:
         return self._underlying_spot
 
+    @property
+    def last_tick_age_seconds(self) -> float | None:
+        if self._last_tick_time == 0:
+            return None
+        return round(time.time() - self._last_tick_time, 1)
+
+    @property
+    def last_spot_age_seconds(self) -> float | None:
+        if self._last_spot_time == 0:
+            return None
+        return round(time.time() - self._last_spot_time, 1)
+
+    def freshness_status(self) -> dict:
+        """Canonical freshness metadata for GEX pipeline integration."""
+        now = time.time()
+        tick_age = (now - self._last_tick_time) if self._last_tick_time > 0 else None
+        spot_age = (now - self._last_spot_time) if self._last_spot_time > 0 else None
+        gex_age = (now - self._last_gex_calc_time) if self._last_gex_calc_time > 0 else None
+
+        if self._state == FeedState.MARKET_CLOSED:
+            status = "market_closed"
+        elif self._state == FeedState.AUTH_FAILED:
+            status = "auth_required"
+        elif self._state == FeedState.ERROR:
+            status = "error"
+        elif self._state in (FeedState.DISCONNECTED, FeedState.CONNECTING):
+            status = "disconnected"
+        elif self._state == FeedState.RECONNECTING:
+            status = "reconnecting"
+        elif tick_age is not None and tick_age > STALE_TICK_THRESHOLD_SECONDS:
+            status = "stale"
+        elif self._state == FeedState.LIVE:
+            status = "live"
+        elif self._state == FeedState.CONNECTED:
+            status = "connected"
+        else:
+            status = "unknown"
+
+        return {
+            "status": status,
+            "state": self._state.value,
+            "tick_age_seconds": round(tick_age, 1) if tick_age is not None else None,
+            "spot_age_seconds": round(spot_age, 1) if spot_age is not None else None,
+            "gex_age_seconds": round(gex_age, 1) if gex_age is not None else None,
+            "chain_age_ms": round(tick_age * 1000, 0) if tick_age is not None else None,
+            "reconnect_attempts": self._reconnect_attempts,
+            "instruments_tracked": len(self._ticks),
+        }
+
     def on_tick(self, callback: Callable):
         """Register a callback for each received tick."""
         self._on_tick_callbacks.append(callback)
+
+    def _compute_reconnect_delay(self) -> float:
+        """Exponential backoff with jitter for reconnection."""
+        delay = min(
+            self._reconnect_base * (2 ** self._reconnect_attempts),
+            self._reconnect_max,
+        )
+        jitter = delay * 0.25 * random.random()  # up to 25% jitter
+        return delay + jitter
+
+    def _check_market_hours(self) -> bool:
+        """Quick local check: is the NSE derivatives market likely open?"""
+        try:
+            from app.services.market_status import calendar_status, INDEX_DERIVATIVES
+            status = calendar_status(segment=INDEX_DERIVATIVES)
+            return status.status == "open"
+        except Exception:
+            return True  # if we can't determine, allow connection attempt
 
     async def connect(
         self,
@@ -259,13 +341,26 @@ class UpstoxMarketFeed:
             logger.warning("Feed already connected, ignoring connect()")
             return
 
+        # Check market hours — don't connect when market is closed
+        if not self._check_market_hours():
+            self._state = FeedState.MARKET_CLOSED
+            logger.info(
+                "Upstox market feed skipped: market closed",
+                extra={"event": f"{EVENT_PREFIX}.market_closed", "symbol": symbol},
+            )
+            return
+
         self._state = FeedState.CONNECTING
         self._contract_specs = contract_specs or {}
+        self._reconnect_attempts = 0
 
         # Determine underlying index key
         self._underlying_key = INSTRUMENT_KEYS.get(symbol)
         if not self._underlying_key:
-            logger.error("Unknown symbol for feed", extra={"symbol": symbol})
+            logger.error(
+                "Unknown symbol for feed",
+                extra={"event": f"{EVENT_PREFIX}.error", "symbol": symbol},
+            )
             self._state = FeedState.DISCONNECTED
             return
 
@@ -283,11 +378,11 @@ class UpstoxMarketFeed:
                 api_client, all_keys, GEX_SUBSCRIPTION_MODE
             )
 
-            # Enable auto-reconnect
+            # Enable auto-reconnect with backoff
             self._streamer.auto_reconnect(
                 enable=True,
-                interval=DEFAULT_RECONNECT_INTERVAL_SECONDS,
-                retry_count=DEFAULT_RECONNECT_RETRY_COUNT,
+                interval=int(DEFAULT_RECONNECT_BASE_SECONDS),
+                retry_count=DEFAULT_RECONNECT_MAX_ATTEMPTS,
             )
 
             # Register event handlers
@@ -303,6 +398,7 @@ class UpstoxMarketFeed:
             logger.info(
                 "Upstox market feed connecting",
                 extra={
+                    "event": f"{EVENT_PREFIX}.connect",
                     "symbol": symbol,
                     "expiry": expiry_date,
                     "instruments": len(all_keys),
@@ -313,31 +409,40 @@ class UpstoxMarketFeed:
         except ApiException as e:
             logger.error(
                 "Upstox feed connection failed",
-                extra={"error": str(e)},
+                extra={"event": f"{EVENT_PREFIX}.auth_failed", "error": str(e)},
             )
             self._state = FeedState.AUTH_FAILED
         except Exception as e:
             logger.error(
                 "Upstox feed unexpected error",
-                extra={"error": str(e)},
+                extra={"event": f"{EVENT_PREFIX}.error", "error": str(e)},
                 exc_info=True,
             )
-            self._state = FeedState.DISCONNECTED
+            self._state = FeedState.ERROR
 
     async def disconnect(self):
         """Disconnect from the WebSocket feed."""
+        self._state = FeedState.STOPPING
         if self._streamer:
             try:
                 self._streamer.disconnect()
             except Exception:
                 pass
         self._state = FeedState.DISCONNECTED
-        logger.info("Upstox market feed disconnected")
+        self._reconnect_attempts = 0
+        logger.info(
+            "Upstox market feed disconnected",
+            extra={"event": f"{EVENT_PREFIX}.disconnected"},
+        )
 
     def _handle_open(self):
         """Called when the WebSocket connection opens."""
         self._state = FeedState.CONNECTED
-        logger.info("Upstox market feed connected")
+        self._reconnect_attempts = 0  # Reset on successful connection
+        logger.info(
+            "Upstox market feed connected",
+            extra={"event": f"{EVENT_PREFIX}.connected"},
+        )
 
     def _handle_message(self, message):
         """Called for each incoming market data message.
@@ -390,7 +495,8 @@ class UpstoxMarketFeed:
     def _handle_live_feed(self, message: dict):
         """Handle live market data tick."""
         feeds = message.get("feeds", {})
-        self._last_tick_time = time.time()
+        now = time.time()
+        self._last_tick_time = now
 
         for instrument_key, feed_data in feeds.items():
             self._process_instrument_tick(instrument_key, feed_data)
@@ -402,13 +508,21 @@ class UpstoxMarketFeed:
             spot = ltpc.get("ltp")
             if spot is not None and isinstance(spot, (int, float)) and math.isfinite(spot) and spot > 0:
                 self._underlying_spot = spot
+                self._last_spot_time = now
+
+        # Transition to LIVE once we have first tick with spot
+        if self._state == FeedState.CONNECTED and self._underlying_spot is not None:
+            self._state = FeedState.LIVE
 
         # Fire callbacks
         for cb in self._on_tick_callbacks:
             try:
                 cb(feeds)
             except Exception as e:
-                logger.warning("Tick callback error", extra={"error": str(e)})
+                logger.warning(
+                    "Tick callback error",
+                    extra={"event": f"{EVENT_PREFIX}.callback_error", "error": str(e)},
+                )
 
     def _process_instrument_tick(self, instrument_key: str, feed_data: dict):
         """Process a single instrument's tick data."""
@@ -483,24 +597,62 @@ class UpstoxMarketFeed:
 
     def _handle_close(self):
         """Called when the WebSocket closes."""
+        if self._state == FeedState.STOPPING:
+            return  # Intentional shutdown — don't reconnect
         self._state = FeedState.DISCONNECTED
-        logger.info("Upstox market feed connection closed")
+        logger.info(
+            "Upstox market feed connection closed",
+            extra={"event": f"{EVENT_PREFIX}.disconnected"},
+        )
 
     def _handle_error(self, error):
         """Called on WebSocket error."""
-        logger.warning("Upstox market feed error", extra={"error": str(error)})
-        self._state = FeedState.RECONNECTING
+        error_str = str(error)
+        # Detect auth failures — stop reconnecting
+        if "401" in error_str or "unauthorized" in error_str.lower() or "token" in error_str.lower():
+            self._state = FeedState.AUTH_FAILED
+            logger.warning(
+                "Upstox feed auth failure — not reconnecting",
+                extra={"event": f"{EVENT_PREFIX}.auth_failed"},
+            )
+        else:
+            logger.warning(
+                "Upstox market feed error",
+                extra={"event": f"{EVENT_PREFIX}.error", "error": error_str},
+            )
+            self._state = FeedState.RECONNECTING
 
     def _handle_reconnecting(self):
         """Called when auto-reconnect starts."""
+        self._reconnect_attempts += 1
+        delay = self._compute_reconnect_delay()
+
+        if self._reconnect_attempts > self._max_reconnect_attempts:
+            self._state = FeedState.ERROR
+            logger.error(
+                "Upstox feed reconnect exhausted — giving up",
+                extra={
+                    "event": f"{EVENT_PREFIX}.reconnect_exhausted",
+                    "attempts": self._reconnect_attempts,
+                },
+            )
+            return
+
         self._state = FeedState.RECONNECTING
-        logger.info("Upstox market feed reconnecting")
+        logger.info(
+            "Upstox market feed reconnecting",
+            extra={
+                "event": f"{EVENT_PREFIX}.reconnecting",
+                "attempt": self._reconnect_attempts,
+                "delay_seconds": round(delay, 1),
+            },
+        )
 
     def is_stale(self) -> bool:
         """Check if the feed data is stale (no ticks received recently)."""
         if self._last_tick_time == 0:
             return True
-        return (time.time() - self._last_tick_time) > STALE_THRESHOLD_SECONDS
+        return (time.time() - self._last_tick_time) > STALE_TICK_THRESHOLD_SECONDS
 
     def get_tick(self, instrument_key: str) -> InstrumentTick | None:
         """Get the latest tick for an instrument."""
@@ -606,10 +758,9 @@ class UpstoxMarketFeed:
             "underlying_spot": self._underlying_spot,
             "instruments_tracked": len(self._ticks),
             "subscribed_keys": len(self._subscribed_keys),
-            "last_tick_age_seconds": (
-                round(time.time() - self._last_tick_time, 1)
-                if self._last_tick_time > 0
-                else None
-            ),
+            "last_tick_age_seconds": self.last_tick_age_seconds,
+            "last_spot_age_seconds": self.last_spot_age_seconds,
             "is_stale": self.is_stale(),
+            "freshness": self.freshness_status(),
+            "reconnect_attempts": self._reconnect_attempts,
         }

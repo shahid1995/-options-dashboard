@@ -40,10 +40,20 @@ export default function GexPage() {
   const [flip, setFlip] = useState(null);
   const [walls, setWalls] = useState(null);
   const [quality, setQuality] = useState(null);
+  const [lastFetchTime, setLastFetchTime] = useState(null);
 
   // Loading/error states
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState({});
+
+  // Data freshness indicator
+  const dataFreshness = useMemo(() => {
+    if (!lastFetchTime) return { label: "NO DATA", color: C.faint };
+    const ageSec = (Date.now() - lastFetchTime) / 1000;
+    if (ageSec < 30) return { label: "LIVE", color: C.green };
+    if (ageSec < 120) return { label: `UPDATED ${Math.floor(ageSec)}s AGO`, color: C.gold };
+    return { label: `STALE (${Math.floor(ageSec)}s)`, color: C.red };
+  }, [lastFetchTime]);
 
   // Check auth
   useEffect(() => {
@@ -87,7 +97,16 @@ export default function GexPage() {
       setFlip(results.flip || null);
       setWalls(results.walls || null);
       setQuality(results.quality || null);
+      setLastFetchTime(Date.now());
       setLoading(false);
+
+      // Auto-refresh every 60 seconds if page is visible
+      const refreshTimer = setInterval(() => {
+        if (!document.hidden) {
+          fetchData();
+        }
+      }, 60000);
+      return () => clearInterval(refreshTimer);
     };
 
     fetchData();
@@ -142,8 +161,23 @@ export default function GexPage() {
         >
           GEX INTELLIGENCE
         </h1>
-        <div style={{ fontSize: 11, color: C.faint }}>
-          Market-structure analytics · Not trading signals
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{
+            fontSize: 9,
+            fontWeight: 700,
+            padding: "2px 8px",
+            borderRadius: 4,
+            background: dataFreshness.color === C.green ? "rgba(34,197,94,0.15)" :
+                        dataFreshness.color === C.gold ? "rgba(201,161,90,0.15)" :
+                        dataFreshness.color === C.red ? "rgba(239,68,68,0.15)" : "transparent",
+            color: dataFreshness.color,
+            letterSpacing: 0.5,
+          }}>
+            {dataFreshness.label}
+          </div>
+          <div style={{ fontSize: 11, color: C.faint }}>
+            Market-structure analytics · Not trading signals
+          </div>
         </div>
       </div>
 
@@ -201,6 +235,7 @@ export default function GexPage() {
               quality={quality}
               errors={errors}
               isMobile={isMobile}
+              lastFetchTime={lastFetchTime}
             />
           )}
           {activeTab === "history" && (
@@ -226,7 +261,7 @@ export default function GexPage() {
 
 /* ── Overview Tab ─────────────────────────────────────────────────── */
 
-function OverviewTab({ history, regime, flip, walls, quality, errors, isMobile }) {
+function OverviewTab({ history, regime, flip, walls, quality, errors, isMobile, lastFetchTime }) {
   const latestTimestamp = history?.timestamps?.length
     ? history.timestamps[history.timestamps.length - 1]
     : null;
@@ -351,7 +386,14 @@ function OverviewTab({ history, regime, flip, walls, quality, errors, isMobile }
 
       {/* Data Quality Card */}
       <div style={{ ...AppPanel, gridColumn: isMobile ? "auto" : "1 / -1" }}>
-        <div style={SectionTitle}>DATA QUALITY</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={SectionTitle}>DATA QUALITY</div>
+          {lastFetchTime && (
+            <div style={{ fontSize: 9, color: C.faint }}>
+              Last updated: {new Date(lastFetchTime).toLocaleTimeString()}
+            </div>
+          )}
+        </div>
         <GexDataQualityPanel quality={quality} compact />
       </div>
     </div>
