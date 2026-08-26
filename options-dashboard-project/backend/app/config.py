@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Collection is DISABLED by default.  A future phase that enables it must
     # honour these bounds to avoid uncontrolled database growth.
     GEX_HISTORY_ENABLED: bool = False
-    GEX_HISTORY_SAMPLE_SECONDS: int = 300  # 5-minute snapshot interval
+    GEX_HISTORY_SAMPLE_SECONDS: int = 60   # 1-minute live GEX snapshot interval
     GEX_HISTORY_RETENTION_DAYS: int = 90   # matches IV history retention
     # Historical NIFTY candles (Phase 7.7 research)
     CANDLE_RETENTION_DAYS: int = 365

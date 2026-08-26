@@ -14,7 +14,7 @@ no trading logic, no BUY/SELL signals.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -214,3 +214,60 @@ def snapshot_count(
     """GET /gex/snapshots/count — Count stored snapshots."""
     require_session(session_id)
     return {"count": count_gex_snapshots(db, symbol=symbol)}
+
+
+# ---------------------------------------------------------------------------
+# Phase 8B: Manual capture trigger
+# ---------------------------------------------------------------------------
+
+@router.post("/capture")
+async def trigger_capture(
+    symbol: str = Query("NIFTY", description="Underlying symbol"),
+    expiry_date: str = Query(..., description="Expiry date YYYY-MM-DD"),
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """POST /gex/capture — Manually trigger a GEX snapshot capture.
+
+    Fetches the current option chain from the customer's authorized Upstox
+    account, computes GEX via LiveGexService, and persists the snapshot.
+
+    Intended for operational testing and manual snapshot creation.
+    The background capture loop handles automatic periodic captures.
+    """
+    session_id = require_session(session_id)
+
+    from app.brokers.adapters.upstox.mapper import UPSTOX_INSTRUMENT_KEYS as INSTRUMENT_KEYS
+    from app.brokers.domain.enums import BROKER_ID_UPSTOX
+    from app.brokers.domain.errors import BrokerError, BrokerErrorCode
+    from app.brokers.gateway import gateway
+    from app.services.gex_capture import GexCaptureService
+
+    # Validate inputs
+    symbol = symbol.upper()
+    if symbol not in INSTRUMENT_KEYS:
+        raise HTTPException(status_code=404, detail=f"Unknown symbol '{symbol}'")
+    try:
+        date.fromisoformat(expiry_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="expiry_date must be YYYY-MM-DD")
+
+    # Fetch chain from customer's broker
+    token = token_store.get_token(session_id)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
+
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
+    try:
+        chain = await adapter.get_option_chain(symbol, expiry_date)
+    except BrokerError as e:
+        if e.code in BrokerErrorCode.SESSION_CODES:
+            token_store.clear_token()
+            raise HTTPException(status_code=401, detail="Upstox session expired.") from e
+        raise HTTPException(status_code=502, detail=f"Upstox API error: {e.message}") from e
+
+    # Capture and persist
+    capture_service = GexCaptureService()
+    result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol)
+
+    return result

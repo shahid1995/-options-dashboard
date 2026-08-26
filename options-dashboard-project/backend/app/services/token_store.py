@@ -32,6 +32,15 @@ def get_token(session_id: str | None) -> str | None:
     return _state["access_token"]
 
 
+def get_any_token() -> str | None:
+    """Returns the current access token regardless of session.
+
+    Intended for background tasks (Phase 8B GEX capture loop) that operate
+    on behalf of the single active user.  Not safe for multi-user use.
+    """
+    return _state["access_token"]
+
+
 def clear_token() -> None:
     _state["access_token"] = None
     _state["session_id"] = None
