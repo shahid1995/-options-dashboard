@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select, func
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.utils.db_dialect import dialect_insert
 
 from app.models import NiftyCandle
 from app.utils.market_time import to_ist_naive
@@ -88,7 +88,7 @@ def record_candles(db: Session, candles: list[dict]) -> int:
             # Idempotent upsert
             try:
                 db.execute(
-                    sqlite_insert(NiftyCandle)
+                    dialect_insert(db.get_bind(), NiftyCandle)
                     .values(
                         symbol=symbol,
                         interval=interval,

@@ -76,7 +76,7 @@ async def call_upstox(coro):
         return await coro
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token()
+            token_store.clear_token(session_id)
             raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error ({e.status_code}): {e.message}") from e
 
@@ -251,7 +251,7 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                         last_push = time.time()
                     except BrokerError as e:
                         if e.code in BrokerErrorCode.SESSION_CODES:
-                            token_store.clear_token()
+                            token_store.clear_token(session_id)
                             await websocket.close(code=4401)
                             return
 
@@ -273,7 +273,7 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                     chain = await adapter.get_option_chain(symbol, expiry_date)
                 except BrokerError as e:
                     if e.code in BrokerErrorCode.SESSION_CODES:
-                        token_store.clear_token()
+                        token_store.clear_token(session_id)
                         await websocket.close(code=4401)
                     else:
                         await websocket.close(code=4502)

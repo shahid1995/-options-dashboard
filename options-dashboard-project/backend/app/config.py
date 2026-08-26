@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     UPSTOX_API_SECRET: str
     UPSTOX_REDIRECT_URI: str
     FRONTEND_URL: str = "http://localhost:3000"
+    # Phase 9C: CORS — set ALLOW_LOCALHOST_CORS=True only in development
+    ALLOW_LOCALHOST_CORS: bool = False
+    DEBUG: bool = False
     # Paper trading journal database. Defaults to a local SQLite file; point at
     # a PostgreSQL URL (e.g. a Railway Postgres DATABASE_URL) for durable,
     # shared production storage.

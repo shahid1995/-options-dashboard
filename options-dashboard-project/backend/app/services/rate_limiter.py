@@ -1,407 +1,148 @@
-"""Global Upstox Rate Limiter — Phase 7.24.8C.
+"""Lightweight per-session rate limiter (Phase 9B).
 
-A shared, process-wide rate-limit scheduler for all concurrent backfill
-workers.  Concurrency and request rate are *separate* concepts: the
-limiter controls both how many workers run simultaneously and how
-frequently requests may be issued.
+Provides session-scoped rate limiting for authenticated endpoints.
+Designed for the current single-process architecture with a clear
+migration path to Redis for multi-process deployment.
 
-Design principles:
-  - **Single global instance** — all workers share one limiter.
-  - **Conservative start** — begin at concurrency=1, widen slowly.
-  - **429 is not fatal** — global cooldown, exponential backoff, resume.
-  - **Gradual recovery** — successful requests widen the window again.
-  - **Retry-After honoured** — when Upstox supplies it, obey it.
-  - **Metrics** — every decision is observable.
-  - **Thread-safe** — asyncio.Lock serialises state mutations.
+Architecture:
+    session_id → {endpoint → [timestamps]}
+    
+Memory: O(active_sessions × endpoints × window_entries)
+For 100 users × 5 endpoints × 60 entries = 30,000 floats ≈ 240KB
+
+Limits are configurable per endpoint. Default: 60 requests/minute.
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Optional
 
-logger = logging.getLogger(__name__)
+from fastapi import HTTPException, Request
 
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-@dataclass(frozen=True)
-class RateLimiterConfig:
-    """Immutable configuration for the global rate limiter."""
-
-    # Concurrency
-    initial_concurrency: int = 1
-    min_concurrency: int = 1
-    max_concurrency: int = 6
-
-    # Request pacing (seconds between requests across ALL workers)
-    initial_interval: float = 2.0
-    min_interval: float = 0.3
-    max_interval: float = 30.0
-
-    # Recovery — how aggressively we widen the window after success
-    recovery_step: float = 0.05      # subtract this many seconds on success
-    recovery_floor_pct: float = 0.7  # stop recovering at interval_pct of min
-
-    # 429 cooldown
-    cooldown_base: float = 15.0      # first 429: pause this long
-    cooldown_max: float = 300.0      # never pause longer than 5 minutes
-    cooldown_multiplier: float = 2.0 # exponential backoff multiplier
-
-    # Concurrency reduction
-    reduce_concurrency_threshold: int = 3   # reduce after N consecutive 429s
-    reduce_cooldown: float = 10.0           # pause when reducing concurrency
-
-
-# ---------------------------------------------------------------------------
-# Public metrics snapshot
-# ---------------------------------------------------------------------------
 
 @dataclass
-class RateLimiterMetrics:
-    """Observable state of the rate limiter at one instant."""
-
-    current_concurrency: int = 0
-    current_interval_s: float = 0.0
-    cooldown_remaining_s: float = 0.0
-    total_requests: int = 0
-    successful_requests: int = 0
-    rate_limit_429s: int = 0
-    consecutive_429s: int = 0
-    retries_from_client: int = 0
-    total_cooldown_time_s: float = 0.0
-    instruments_completed: int = 0
-    instruments_remaining: int = 0
-
-    def to_dict(self) -> dict:
-        return {
-            "concurrency": self.current_concurrency,
-            "interval_s": round(self.current_interval_s, 3),
-            "cooldown_remaining_s": round(max(0, self.cooldown_remaining_s), 1),
-            "total_requests": self.total_requests,
-            "successful_requests": self.successful_requests,
-            "rate_limit_429s": self.rate_limit_429s,
-            "consecutive_429s": self.consecutive_429s,
-            "retries_from_client": self.retries_from_client,
-            "total_cooldown_time_s": round(self.total_cooldown_time_s, 1),
-            "instruments_completed": self.instruments_completed,
-            "instruments_remaining": self.instruments_remaining,
-        }
+class RateLimitRule:
+    """Configuration for a rate-limited endpoint."""
+    max_requests: int = 60
+    window_seconds: int = 60
 
 
-# ---------------------------------------------------------------------------
-# Global rate limiter
-# ---------------------------------------------------------------------------
+# Default rules for GEX/market-data endpoints
+DEFAULT_RULES: dict[str, RateLimitRule] = {
+    "/gex/live": RateLimitRule(max_requests=30, window_seconds=60),
+    "/gex/capture": RateLimitRule(max_requests=10, window_seconds=60),
+    "/gex/snapshots": RateLimitRule(max_requests=60, window_seconds=60),
+    "/chains": RateLimitRule(max_requests=30, window_seconds=60),
+}
 
-class GlobalRateLimiter:
-    """Process-wide rate limiter for concurrent backfill workers.
 
-    Lifecycle::
+class SessionRateLimiter:
+    """Per-session rate limiter.
 
-        limiter = GlobalRateLimiter(config)
+    Each session gets independent limits. One user's rate limit
+    never affects another user.
 
-        # Before starting work
-        await limiter.set_total_instruments(3000)
+    Usage in a FastAPI dependency::
 
-        # Each worker loop:
-        while work remains:
-            await limiter.acquire()          # block until it's our turn
-            try:
-                result = await api_call()    # do the work
-                limiter.on_success()
-            except UpstoxRateLimitError as e:
-                limiter.on_429(retry_after=e.retry_after)
-                # instrument stays resumable via checkpoint
-            except Exception:
-                limiter.on_error()           # count but don't change pacing
+        limiter = SessionRateLimiter()
 
-    The semaphore gates concurrency; the interval gates request rate.
-    Both must be satisfied before ``acquire()`` returns.
+        @router.get("/gex/live")
+        async def get_live_gex(request: Request, session_id: str = Depends(get_session_id)):
+            limiter.check(session_id, "/gex/live")
+            ...
     """
 
-    def __init__(self, config: RateLimiterConfig | None = None):
-        self._cfg = config or RateLimiterConfig()
+    def __init__(self, rules: dict[str, RateLimitRule] | None = None):
+        self._rules = rules or DEFAULT_RULES
+        # session_id → endpoint → list of timestamps
+        self._hits: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
 
-        # --- concurrency ---
-        self._concurrency = self._cfg.initial_concurrency
-        self._semaphore = asyncio.Semaphore(self._concurrency)
+    def check(self, session_id: str | None, endpoint: str) -> None:
+        """Check rate limit. Raises HTTPException 429 if exceeded.
 
-        # --- request pacing ---
-        self._interval = self._cfg.initial_interval
-        self._last_request_time = 0.0
+        Args:
+            session_id: The authenticated session ID.
+            endpoint: The endpoint path (used for rule lookup).
 
-        # --- cooldown state ---
-        self._cooldown_until = 0.0
-        self._consecutive_429s = 0
-        self._cooldown_total = 0.0
+        Raises:
+            HTTPException: 429 Too Many Requests if rate limit exceeded.
+        """
+        if not session_id:
+            return  # Unauthenticated requests handled by auth middleware
 
-        # --- counters ---
-        self._total_requests = 0
-        self._successful_requests = 0
-        self._rate_limit_count = 0
-        self._retries_from_client = 0
+        rule = self._get_rule(endpoint)
+        if rule is None:
+            return  # No rate limit configured for this endpoint
 
-        # --- instrument tracking ---
-        self._instruments_completed = 0
-        self._instruments_remaining = 0
+        now = time.time()
+        window_start = now - rule.window_seconds
 
-        # --- serialization ---
-        self._lock = asyncio.Lock()
+        # Get hits for this session+endpoint
+        hits = self._hits[session_id][endpoint]
 
-    # ------------------------------------------------------------------
-    # Configuration helpers
-    # ------------------------------------------------------------------
+        # Remove expired entries
+        self._hits[session_id][endpoint] = [t for t in hits if t > window_start]
 
-    @property
-    def concurrency(self) -> int:
-        return self._concurrency
-
-    @property
-    def interval(self) -> float:
-        return self._interval
-
-    @property
-    def cooldown_remaining(self) -> float:
-        return max(0.0, self._cooldown_until - time.monotonic())
-
-    # ------------------------------------------------------------------
-    # Instrument bookkeeping
-    # ------------------------------------------------------------------
-
-    async def set_total_instruments(self, total: int) -> None:
-        async with self._lock:
-            self._instruments_remaining = total - self._instruments_completed
-
-    async def mark_instrument_done(self) -> None:
-        async with self._lock:
-            self._instruments_completed += 1
-            self._instruments_remaining = max(
-                0, self._instruments_remaining - 1,
+        # Check limit
+        if len(self._hits[session_id][endpoint]) >= rule.max_requests:
+            retry_after = int(rule.window_seconds - (now - self._hits[session_id][endpoint][0]))
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "rate_limit_exceeded",
+                    "endpoint": endpoint,
+                    "limit": rule.max_requests,
+                    "window_seconds": rule.window_seconds,
+                    "retry_after_seconds": max(1, retry_after),
+                },
+                headers={"Retry-After": str(max(1, retry_after))},
             )
 
-    # ------------------------------------------------------------------
-    # Core: acquire permission to make a request
-    # ------------------------------------------------------------------
+        # Record this hit
+        self._hits[session_id][endpoint].append(now)
 
-    async def acquire(self) -> None:
-        """Block until a new request is permitted.
+    def cleanup(self, max_age_seconds: int = 600) -> int:
+        """Remove stale entries for sessions inactive beyond max_age.
 
-        Satisfies two constraints:
-          1. The semaphore ensures at most ``concurrency`` workers are
-             in-flight simultaneously.
-          2. The pacing timer ensures at least ``interval`` seconds
-             elapse between successive request *starts*.
+        Returns the number of session entries cleaned up.
         """
-        # 1. Wait for a semaphore slot (concurrency gate)
-        await self._semaphore.acquire()
+        now = time.time()
+        cleaned = 0
+        empty_sessions = []
 
-        # 2. Honour global cooldown (429 recovery)
-        now = time.monotonic()
-        if self._cooldown_until > now:
-            wait = self._cooldown_until - now
-            logger.info(
-                "Rate limiter: cooling down %.1fs (consecutive 429s=%d)",
-                wait, self._consecutive_429s,
-            )
-            await asyncio.sleep(wait)
+        for session_id, endpoints in self._hits.items():
+            session_active = False
+            for endpoint, hits in list(endpoints.items()):
+                # Remove old hits
+                fresh = [t for t in hits if t > now - max_age_seconds]
+                if fresh:
+                    endpoints[endpoint] = fresh
+                    session_active = True
+                else:
+                    del endpoints[endpoint]
+            if not session_active:
+                empty_sessions.append(session_id)
+                cleaned += 1
 
-        # 3. Pace requests (interval gate)
-        async with self._lock:
-            elapsed = time.monotonic() - self._last_request_time
-            if elapsed < self._interval:
-                await asyncio.sleep(self._interval - elapsed)
-            self._last_request_time = time.monotonic()
-            self._total_requests += 1
+        for sid in empty_sessions:
+            del self._hits[sid]
 
-    def release(self) -> None:
-        """Release a semaphore slot after a request completes."""
-        self._semaphore.release()
+        return cleaned
 
-    # ------------------------------------------------------------------
-    # Event handlers
-    # ------------------------------------------------------------------
+    def _get_rule(self, endpoint: str) -> RateLimitRule | None:
+        """Find the matching rate limit rule for an endpoint."""
+        # Exact match first
+        if endpoint in self._rules:
+            return self._rules[endpoint]
+        # Prefix match (e.g. "/chains/NIFTY" matches "/chains")
+        for prefix, rule in self._rules.items():
+            if endpoint.startswith(prefix):
+                return rule
+        return None
 
-    async def on_success(self) -> None:
-        """Called after a successful API response.
 
-        - Clears 429 streak.
-        - Gradually decreases interval (increases throughput).
-        """
-        async with self._lock:
-            self._successful_requests += 1
-            self._consecutive_429s = 0
-
-            # Gradual recovery: shrink interval toward minimum
-            floor = self._cfg.min_interval * self._cfg.recovery_floor_pct
-            if self._interval > floor:
-                old = self._interval
-                self._interval = max(floor, self._interval - self._cfg.recovery_step)
-                if self._interval != old:
-                    logger.debug(
-                        "Rate limiter: interval %.2fs -> %.2fs (recovery)",
-                        old, self._interval,
-                    )
-
-    async def on_429(self, retry_after: float | None = None) -> None:
-        """Called when a 429 is NOT resolved by the client's own retries.
-
-        - Pauses all workers globally.
-        - Increases interval (slows request rate).
-        - May reduce concurrency if 429s are persistent.
-        """
-        async with self._lock:
-            self._rate_limit_count += 1
-            self._consecutive_429s += 1
-
-            # Decide cooldown duration
-            if retry_after is not None and retry_after > 0:
-                cooldown = min(retry_after, self._cfg.cooldown_max)
-            else:
-                cooldown = min(
-                    self._cfg.cooldown_base * (
-                        self._cfg.cooldown_multiplier ** (self._consecutive_429s - 1)
-                    ),
-                    self._cfg.cooldown_max,
-                )
-
-            now = time.monotonic()
-            self._cooldown_until = max(self._cooldown_until, now) + cooldown
-            self._cooldown_total += cooldown
-
-            logger.warning(
-                "Rate limiter: 429 #%d — cooldown %.1fs, interval %.2fs",
-                self._consecutive_429s, cooldown, self._interval,
-            )
-
-            # Widen interval (slow down)
-            self._interval = min(
-                self._cfg.max_interval,
-                self._interval * 1.5,
-            )
-
-        # Possibly reduce concurrency (outside the lock to avoid deadlocks)
-        await self._maybe_reduce_concurrency()
-
-    async def on_client_retry(self) -> None:
-        """Called when the UpstoxClient retries internally (counted but no pacing change)."""
-        async with self._lock:
-            self._retries_from_client += 1
-
-    async def on_error(self) -> None:
-        """Called on non-429 errors.  Does not change pacing."""
-        pass  # No-op; available for future metrics
-
-    # ------------------------------------------------------------------
-    # Adaptive concurrency
-    # ------------------------------------------------------------------
-
-    async def _maybe_reduce_concurrency(self) -> None:
-        """Reduce concurrency if 429s are persistent.
-
-        Only reduces; never increases.  Increasing happens only in
-        ``_maybe_increase_concurrency`` after a sustained cool-down.
-        """
-        async with self._lock:
-            if self._consecutive_429s < self._cfg.reduce_concurrency_threshold:
-                return
-            if self._concurrency <= self._cfg.min_concurrency:
-                return
-
-            old = self._concurrency
-            self._concurrency -= 1
-
-        # Rebuild semaphore with new concurrency.
-        # We create a NEW semaphore.  Workers that already hold a slot
-        # will finish; new acquires use the tighter limit.
-        self._semaphore = asyncio.Semaphore(self._concurrency)
-        logger.warning(
-            "Rate limiter: concurrency %d -> %d (consecutive 429s=%d)",
-            old, self._concurrency, self._consecutive_429s,
-        )
-
-        # Extra cooldown when reducing concurrency
-        async with self._lock:
-            self._cooldown_until = time.monotonic() + self._cfg.reduce_cooldown
-            self._cooldown_total += self._cfg.reduce_cooldown
-
-    async def _maybe_increase_concurrency(self) -> None:
-        """Increase concurrency after a sustained period of successful requests.
-
-        Called internally after the cooldown clears and requests succeed.
-        Only increases if we are below the configured maximum.
-        """
-        async with self._lock:
-            if self._consecutive_429s > 0:
-                return  # Don't increase if we've recently seen 429s
-            if self._concurrency >= self._cfg.max_concurrency:
-                return
-
-            old = self._concurrency
-            self._concurrency += 1
-
-        self._semaphore = asyncio.Semaphore(self._concurrency)
-        logger.info(
-            "Rate limiter: concurrency %d -> %d (recovery)",
-            old, self._concurrency,
-        )
-
-    # ------------------------------------------------------------------
-    # Metrics snapshot
-    # ------------------------------------------------------------------
-
-    def snapshot(self) -> RateLimiterMetrics:
-        """Return an observable snapshot of the limiter state."""
-        return RateLimiterMetrics(
-            current_concurrency=self._concurrency,
-            current_interval_s=self._interval,
-            cooldown_remaining_s=self.cooldown_remaining,
-            total_requests=self._total_requests,
-            successful_requests=self._successful_requests,
-            rate_limit_429s=self._rate_limit_count,
-            consecutive_429s=self._consecutive_429s,
-            retries_from_client=self._retries_from_client,
-            total_cooldown_time_s=self._cooldown_total,
-            instruments_completed=self._instruments_completed,
-            instruments_remaining=self._instruments_remaining,
-        )
-
-    def log_status(self, level: int = logging.INFO) -> None:
-        """Emit a concise status line at the given log level."""
-        m = self.snapshot()
-        logger.log(
-            level,
-            "Rate limiter: workers=%d interval=%.2fs cooldown=%.0fs "
-            "429s=%d (streak=%d) completed=%d remaining=%d",
-            m.current_concurrency,
-            m.current_interval_s,
-            m.cooldown_remaining_s,
-            m.rate_limit_429s,
-            m.consecutive_429s,
-            m.instruments_completed,
-            m.instruments_remaining,
-        )
-
-    # ------------------------------------------------------------------
-    # Reset (for testing)
-    # ------------------------------------------------------------------
-
-    async def reset(self) -> None:
-        """Reset all internal state.  For test isolation only."""
-        async with self._lock:
-            self._concurrency = self._cfg.initial_concurrency
-            self._interval = self._cfg.initial_interval
-            self._cooldown_until = 0.0
-            self._consecutive_429s = 0
-            self._cooldown_total = 0.0
-            self._total_requests = 0
-            self._successful_requests = 0
-            self._rate_limit_count = 0
-            self._retries_from_client = 0
-            self._last_request_time = 0.0
-            self._instruments_completed = 0
-            self._instruments_remaining = 0
-        self._semaphore = asyncio.Semaphore(self._concurrency)
+# Global instance — scoped to the process
+rate_limiter = SessionRateLimiter()

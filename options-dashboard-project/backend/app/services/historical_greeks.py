@@ -27,7 +27,7 @@ from typing import Optional
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.utils.db_dialect import dialect_insert
 
 from app.models import OptionCandle, ContractSpec, NiftyCandle, OptionGreeks
 
@@ -664,7 +664,7 @@ class HistoricalGreeksEngine:
         for r in results:
             try:
                 self.db.execute(
-                    sqlite_insert(OptionGreeks)
+                    dialect_insert(db.get_bind(), OptionGreeks)
                     .values(
                         instrument_key=r.instrument_key,
                         interval=r.interval,

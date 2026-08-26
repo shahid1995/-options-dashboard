@@ -37,11 +37,25 @@ def _engine():
     else:
         # Absolute file path wrapped in sqlite:/// URI
         url = f"sqlite:///{_DEFAULT_DB_PATH}"
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    eng = create_engine(url, connect_args=connect_args)
+    if url.startswith("sqlite"):
+        connect_args = {"check_same_thread": False}
+        eng = create_engine(url, connect_args=connect_args)
+        # Phase 7.23B: Switch SQLite to WAL journal mode for crash safety.
+        @event.listens_for(eng, "connect")
+        def _set_wal(dbapi_conn, _rec):
+            dbapi_conn.execute("PRAGMA journal_mode=WAL")
+            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
+    else:
+        # Phase 9E: Production PostgreSQL configuration
+        eng = create_engine(
+            url,
+            pool_size=5,
+            max_overflow=10,
+            pool_timeout=30,
+            pool_recycle=1800,
+            pool_pre_ping=True,
+        )
 
-    # Phase 7.23B: Switch SQLite to WAL journal mode for crash safety.
-    # DELETE mode loses data on hard process kills; WAL mode survives.
     if url.startswith("sqlite"):
         @event.listens_for(eng, "connect")
         def _set_wal(dbapi_conn, _rec):

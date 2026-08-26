@@ -211,12 +211,21 @@ async def lifespan(app: FastAPI):
             _capture_task.cancel()
         logger.info("Background GEX capture task stopped")
 
+    # Cleanup rate limiter stale entries
+    from app.services.rate_limiter import rate_limiter
+    rate_limiter.cleanup()
 
-app = FastAPI(title="Options Dashboard API", lifespan=lifespan)
+
+app = FastAPI(title="Options Dashboard API", lifespan=lifespan, docs_url="/docs" if getattr(settings, "DEBUG", False) else None)
+
+# CORS: production uses explicitly configured origins; development allows localhost
+_cors_origins = [settings.FRONTEND_URL]
+if getattr(settings, "ALLOW_LOCALHOST_CORS", False):
+    _cors_origins.append("http://localhost:3000")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "X-Session-Id"],
@@ -236,4 +245,41 @@ app.include_router(live_gex.router, prefix="/gex", tags=["gex-live"])
 
 @app.get("/health")
 def health():
+    """Liveness check — is the process alive?"""
     return {"status": "ok"}
+
+
+@app.get("/readiness")
+def readiness():
+    """Readiness check — can the app serve production traffic?"""
+    import time
+    from app.db import engine
+    from sqlalchemy import text
+
+    checks = {}
+    all_ok = True
+
+    # Database check
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {type(e).__name__}"
+        all_ok = False
+
+    # Token store check
+    try:
+        from app.services.token_store import get_session_count
+        checks["token_store"] = "ok"
+        checks["active_sessions"] = get_session_count()
+    except Exception as e:
+        checks["token_store"] = f"error: {type(e).__name__}"
+        all_ok = False
+
+    status_code = 200 if all_ok else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+        status_code=status_code,
+    )

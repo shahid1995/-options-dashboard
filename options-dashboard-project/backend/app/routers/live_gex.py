@@ -62,17 +62,18 @@ def _validate_expiry_date(expiry_date: str) -> str:
     return expiry_date
 
 
-async def _fetch_chain(symbol: str, expiry_date: str, token: str) -> dict:
+async def _fetch_chain(symbol: str, expiry_date: str, token: str, session_id: str | None = None) -> dict:
     """Fetch option chain from the customer's authorized broker.
 
     Uses the existing Upstox adapter — no second broker integration.
+    Phase 9A: session_id is passed for scoped token invalidation.
     """
     adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
     try:
         return await adapter.get_option_chain(symbol, expiry_date)
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token()
+            token_store.clear_token(session_id)
             raise HTTPException(
                 status_code=401,
                 detail="Upstox session expired. Please log in again.",
@@ -142,8 +143,12 @@ async def get_live_gex(
     expiry_date = _validate_expiry_date(expiry_date)
     token = _require_token(session_id)
 
+    # Phase 9B: rate limit check
+    from app.services.rate_limiter import rate_limiter
+    rate_limiter.check(session_id, "/gex/live")
+
     # Fetch chain from customer's broker
-    chain = await _fetch_chain(symbol, expiry_date, token)
+    chain = await _fetch_chain(symbol, expiry_date, token, session_id=session_id)
 
     # Calculate GEX server-side
     result = _live_gex_service.calculate(chain)

@@ -53,7 +53,7 @@ from typing import Any
 # This means the backend server MUST be running with an authenticated session.
 # ---------------------------------------------------------------------------
 
-from app.services.token_store import get_token, _state  # noqa: F401
+from app.services.token_store import get_token, get_all_session_ids  # noqa: F401
 
 
 def _get_access_token() -> str:
@@ -64,9 +64,12 @@ def _get_access_token() -> str:
 
     Raises SystemExit if no token is available.
     """
-    # The token store uses a session_id that was set by the auth flow.
-    # When running from CLI, we access the in-memory state directly.
-    token = _state.get("access_token")
+    # Phase 8F: token store is session-keyed. Find the most recent active session.
+    sessions = get_all_session_ids()
+    if not sessions:
+        token = None
+    else:
+        token = get_token(sessions[-1])
     if not token:
         print("=" * 70)
         print("ERROR: No active Upstox session found.")

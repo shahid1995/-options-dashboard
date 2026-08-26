@@ -82,7 +82,7 @@ def status(session_id: str | None = Depends(get_session_id)):
 def logout(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
-    token_store.clear_token()
+    token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
     return response

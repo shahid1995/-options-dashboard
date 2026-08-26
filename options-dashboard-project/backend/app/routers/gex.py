@@ -266,7 +266,7 @@ async def trigger_capture(
         chain = await adapter.get_option_chain(symbol, expiry_date)
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token()
+            token_store.clear_token(session_id)
             raise HTTPException(status_code=401, detail="Upstox session expired.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error: {e.message}") from e
 

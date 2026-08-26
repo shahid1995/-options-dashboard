@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from app.utils.db_dialect import dialect_insert
 
 from app.models import OptionCandle
 
@@ -195,7 +195,7 @@ def record_option_candles(db: Session, candles: list[dict]) -> int:
             # Idempotent upsert
             try:
                 db.execute(
-                    sqlite_insert(OptionCandle)
+                    dialect_insert(db.get_bind(), OptionCandle)
                     .values(
                         instrument_key=instrument_key,
                         interval=interval,
