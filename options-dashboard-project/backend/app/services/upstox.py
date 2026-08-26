@@ -196,3 +196,175 @@ async def get_margin_details(access_token: str, instruments: list[dict]) -> dict
         },
         json={"instruments": instruments},
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.8A — Historical Candle Data (V3)
+# ---------------------------------------------------------------------------
+
+
+async def get_historical_candles(
+    access_token: str,
+    instrument_key: str,
+    to_date: str,
+    from_date: str | None = None,
+    unit: str = "minutes",
+    interval: int = 3,
+) -> dict:
+    """Fetch historical candle data from Upstox V3.
+
+    ``GET /v3/historical-candle/{instrument_key}/{unit}/{interval}/{to_date}[/{from_date}]``
+
+    Returns the raw response dict with ``data.candles`` array.
+    Each candle: ``[timestamp, open, high, low, close, volume, open_interest]``
+    Timestamps are IST (UTC+5:30).
+
+    For 3-minute candles the maximum retrieval window is 1 month.
+    Raises :class:`UpstoxError` on failure.
+    """
+    path = f"/historical-candle/{instrument_key}/{unit}/{interval}/{to_date}"
+    if from_date:
+        path += f"/{from_date}"
+
+    return await _request(
+        "GET",
+        path,
+        base_url=V3_BASE_URL,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+async def get_intraday_candles(
+    access_token: str,
+    instrument_key: str,
+    unit: str = "minutes",
+    interval: int = 3,
+) -> dict:
+    """Fetch current trading day's intraday candle data from Upstox V3.
+
+    ``GET /v3/historical-candle/intraday/{instrument_key}/{unit}/{interval}``
+
+    Returns the raw response dict with ``data.candles`` array.
+    Raises :class:`UpstoxError` on failure.
+    """
+    path = f"/historical-candle/intraday/{instrument_key}/{unit}/{interval}"
+
+    return await _request(
+        "GET",
+        path,
+        base_url=V3_BASE_URL,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.8A — Expired Instruments (V2)
+# ---------------------------------------------------------------------------
+
+
+async def get_expired_expiries(
+    access_token: str,
+    instrument_key: str,
+) -> dict:
+    """Fetch all available expiry dates for expired instruments.
+
+    ``GET /v2/expired-instruments/expiries?instrument_key={instrument_key}``
+
+    Returns the raw response dict with ``data``: list of YYYY-MM-DD strings.
+    Covers up to ~6 months of historical expiries.
+    Requires Upstox Plus plan subscription.
+    Raises :class:`UpstoxError` on failure.
+    """
+    return await _request(
+        "GET",
+        "/expired-instruments/expiries",
+        params={"instrument_key": instrument_key},
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+async def get_expired_option_contracts(
+    access_token: str,
+    instrument_key: str,
+    expiry_date: str,
+) -> dict:
+    """Fetch expired option contract metadata for a given expiry date.
+
+    ``GET /v2/expired-instruments/option/contract?instrument_key={instrument_key}&expiry_date={expiry_date}``
+
+    Returns the raw response dict with ``data``: list of contract objects.
+    Each contract includes authoritative per-instrument metadata:
+    ``instrument_key``, ``trading_symbol``, ``lot_size``, ``minimum_lot``,
+    ``freeze_quantity``, ``tick_size``, ``strike_price``, ``instrument_type``,
+    ``expiry``, ``underlying_key``, ``underlying_type``,
+    ``underlying_symbol``, ``segment``, ``exchange``, ``weekly``.
+
+    Historical ``lot_size`` is the authoritative value for that specific
+    instrument — it must be stored exactly as returned and never inferred
+    from the current lot size or from an effective-date table.
+
+    Requires Upstox Plus plan subscription (error UDAPI1149 if not subscribed).
+    Raises :class:`UpstoxError` on failure.
+    """
+    return await _request(
+        "GET",
+        "/expired-instruments/option/contract",
+        params={"instrument_key": instrument_key, "expiry_date": expiry_date},
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.11 -- Expired Historical Candle Data (V2)
+# ---------------------------------------------------------------------------
+
+
+async def get_expired_historical_candles(
+    access_token: str,
+    expired_instrument_key: str,
+    interval: str,
+    to_date: str,
+    from_date: str,
+) -> dict:
+    """Fetch historical candle data for an expired option/future contract.
+
+    ``GET /v2/expired-instruments/historical-candle/{expired_key}/{interval}/{to_date}/{from_date}``
+
+    Returns the raw response dict with ``data.candles`` array.
+    Each candle: ``[timestamp, open, high, low, close, volume, open_interest]``
+    Timestamps are IST (UTC+5:30).
+
+    ``expired_instrument_key`` is the instrument_key from the expired contracts
+    API (e.g. ``NSE_FO|47983|17-04-2025``).
+
+    ``interval`` is one of: 1minute, 3minute, 5minute, 15minute, 30minute, day.
+
+    Requires Upstox Plus plan subscription.
+    Raises :class:`UpstoxError` on failure.
+    """
+    path = (
+        f"/expired-instruments/historical-candle/{expired_instrument_key}"
+        f"/{interval}/{to_date}/{from_date}"
+    )
+
+    return await _request(
+        "GET",
+        path,
+        base_url=BASE_URL,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
