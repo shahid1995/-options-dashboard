@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Historical NIFTY candles (Phase 7.7 research)
     CANDLE_RETENTION_DAYS: int = 365
     CANDLE_INTERVAL: str = "3min"
+    CANDLE_BACKFILL_ENABLED: bool = False
 
     class Config:
         env_file = ".env"
