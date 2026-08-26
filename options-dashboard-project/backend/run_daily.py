@@ -106,20 +106,45 @@ def _print_status(db):
 
 
 def _print_result(result):
-    print("-" * 60)
-    print(f"  Status:              {result.status}")
-    print(f"  Target date:         {result.metadata.get('target_date', '?')}")
-    print(f"  NIFTY candles:       {result.nifty_candles_inserted}")
+    print("=" * 60)
+    print("STRIKENOVA DAILY DATA REPORT")
+    print("=" * 60)
+    print(f"  Date:               {result.metadata.get('target_date', '?')}")
+    print(f"  Status:             {result.status}")
+    print()
+    print(f"  NIFTY candles:      {result.nifty_candles_inserted} inserted")
     print(f"  Contracts refreshed: {result.contracts_refreshed}")
-    print(f"  Option instruments:  {result.option_instruments_processed}")
-    print(f"  Option candles:      {result.option_candles_inserted}")
-    print(f"  API calls:           {result.api_calls}")
-    print(f"  Elapsed:             {result.elapsed_seconds}s")
+    print(f"  Option instruments: {result.option_instruments_processed}")
+    print(f"  Option candles:     {result.option_candles_inserted} inserted")
+    print()
+    print(f"  Greeks:")
+    print(f"    Instruments:     {result.greek_instruments_processed}")
+    print(f"    Calculated:      {result.greek_records_calculated}")
+    print(f"    Skipped:         {result.greek_records_skipped}")
+    print()
+    print(f"  Historical GEX:")
+    print(f"    Instruments:     {result.gex_instruments_processed}")
+    print(f"    Calculated:      {result.gex_records_calculated}")
+    print(f"    Skipped:         {result.gex_records_skipped}")
+    print()
+    # Validation report
+    validation = result.metadata.get("validation", {})
+    if validation:
+        print(f"  Validation:")
+        print(f"    Total candles:   {validation.get('total_candles', '?')}")
+        print(f"    Total Greeks:    {validation.get('total_greeks', '?')}")
+        print(f"    Total GEX:       {validation.get('total_gex', '?')}")
+        print(f"    Instruments:     {validation.get('instruments', '?')}")
+        print(f"    Expiries:        {validation.get('expiries', '?')}")
+        print(f"    GEX coverage:    {validation.get('gex_coverage_pct', '?')}%")
+    print()
+    print(f"  API calls:          {result.api_calls}")
+    print(f"  Duration:           {result.elapsed_seconds:.1f}s")
     if result.errors:
         print(f"  Errors ({len(result.errors)}):")
         for e in result.errors[:5]:
             print(f"    - {e[:120]}")
-    print("-" * 60)
+    print("=" * 60)
 
 
 async def _run(args):
@@ -143,6 +168,8 @@ async def _run(args):
         skip_nifty=args.skip_nifty,
         skip_contracts=args.skip_contracts,
         skip_options=args.skip_options,
+        skip_greeks=args.skip_greeks,
+        skip_gex=args.skip_gex,
     )
 
     if args.dry_run:
@@ -157,6 +184,8 @@ async def _run(args):
         print(f"  Skip nifty:    {args.skip_nifty}")
         print(f"  Skip contracts:{args.skip_contracts}")
         print(f"  Skip options:  {args.skip_options}")
+        print(f"  Skip greeks:   {args.skip_greeks}")
+        print(f"  Skip gex:      {args.skip_gex}")
         db.close()
         return
 
@@ -202,6 +231,8 @@ CRITICAL: This script must NEVER be called automatically by the server.
     parser.add_argument("--skip-nifty", action="store_true", help="Skip NIFTY candle ingestion")
     parser.add_argument("--skip-contracts", action="store_true", help="Skip contract metadata refresh")
     parser.add_argument("--skip-options", action="store_true", help="Skip option candle ingestion")
+    parser.add_argument("--skip-greeks", action="store_true", help="Skip Greek calculation (Stage 4)")
+    parser.add_argument("--skip-gex", action="store_true", help="Skip GEX calculation (Stage 5)")
     parser.add_argument("--session-id", type=str, help="Session ID for in-memory token")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 

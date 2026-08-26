@@ -664,7 +664,7 @@ class HistoricalGreeksEngine:
         for r in results:
             try:
                 self.db.execute(
-                    dialect_insert(db.get_bind(), OptionGreeks)
+                    dialect_insert(self.db.get_bind(), OptionGreeks)
                     .values(
                         instrument_key=r.instrument_key,
                         interval=r.interval,

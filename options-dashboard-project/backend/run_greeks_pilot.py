@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import shutil
-import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -32,11 +31,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database helpers (Phase 10B: SQLAlchemy for PostgreSQL compatibility)
 # ---------------------------------------------------------------------------
 
 def get_db_path() -> str:
-    """Absolute path of the production database."""
+    """Absolute path of the production database (SQLite fallback)."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_journal.db")
 
 
@@ -52,38 +51,46 @@ def get_session():
     return SessionLocal()
 
 
-def raw_conn() -> sqlite3.Connection:
-    """Raw sqlite3 connection for lightweight queries."""
-    return sqlite3.connect(get_db_path())
+def raw_conn():
+    """Database connection via SQLAlchemy (works for both SQLite and PostgreSQL).
+
+    Phase 10B: Replaces raw sqlite3 connection with SQLAlchemy.
+    Returns a SQLAlchemy connection for lightweight queries.
+    """
+    from sqlalchemy import text
+    engine = get_engine()
+    return engine.connect()
 
 
-def _ensure_checkpoint_table(conn: sqlite3.Connection) -> None:
+def _ensure_checkpoint_table(conn=None) -> None:
     """Create the reconstruction checkpoint table if it does not exist.
 
-    Adds calc_version column for future-proofing if upgrading from
-    an older schema.  Existing rows keep their current values.
+    Phase 10B: Uses SQLAlchemy DDL for SQLite/PostgreSQL compatibility.
     """
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS greeks_checkpoint (
-            instrument_key TEXT PRIMARY KEY,
-            status         TEXT NOT NULL DEFAULT 'PENDING',
-            candle_count   INTEGER DEFAULT 0,
-            success_count  INTEGER DEFAULT 0,
-            failure_count  INTEGER DEFAULT 0,
-            rows_persisted INTEGER DEFAULT 0,
-            error_message  TEXT,
-            run_id         TEXT,
-            started_at     TEXT,
-            completed_at   TEXT,
-            calc_version   TEXT DEFAULT '1.0.0'
-        )
-    """)
-    # Ensure calc_version column exists for older schemas
-    try:
-        conn.execute("SELECT calc_version FROM greeks_checkpoint LIMIT 1")
-    except Exception:
-        conn.execute("ALTER TABLE greeks_checkpoint ADD COLUMN calc_version TEXT DEFAULT '1.0.0'")
-    conn.commit()
+    from sqlalchemy import text
+    engine = get_engine()
+    with engine.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS greeks_checkpoint (
+                instrument_key TEXT PRIMARY KEY,
+                status         TEXT NOT NULL DEFAULT 'PENDING',
+                candle_count   INTEGER DEFAULT 0,
+                success_count  INTEGER DEFAULT 0,
+                failure_count  INTEGER DEFAULT 0,
+                rows_persisted INTEGER DEFAULT 0,
+                error_message  TEXT,
+                run_id         TEXT,
+                started_at     TEXT,
+                completed_at   TEXT,
+                calc_version   TEXT DEFAULT '1.0.0'
+            )
+        """))
+        # Ensure calc_version column exists for older schemas
+        try:
+            connection.execute(text("SELECT calc_version FROM greeks_checkpoint LIMIT 1"))
+        except Exception:
+            if engine.dialect.name == "sqlite":
+                connection.execute(text("ALTER TABLE greeks_checkpoint ADD COLUMN calc_version TEXT DEFAULT '1.0.0'"))
 
 
 # ---------------------------------------------------------------------------

@@ -94,6 +94,13 @@ class DailyIngestionResult:
     contracts_refreshed: int = 0
     option_candles_inserted: int = 0
     option_instruments_processed: int = 0
+    # Phase 10A: Greek and GEX metrics
+    greek_records_calculated: int = 0
+    greek_records_skipped: int = 0
+    greek_instruments_processed: int = 0
+    gex_records_calculated: int = 0
+    gex_records_skipped: int = 0
+    gex_instruments_processed: int = 0
     errors: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -373,6 +380,137 @@ async def _ingest_option_candles(
 
 
 # ---------------------------------------------------------------------------
+# Phase 10A — Stage 4: Historical Greeks
+# ---------------------------------------------------------------------------
+
+
+def _calculate_greeks(
+    db: Session,
+    run_id: str,
+) -> tuple[int, int, int, list[str]]:
+    """Calculate Greeks for option candles that are missing Greek records.
+
+    Returns (instruments_processed, records_calculated, records_skipped, errors).
+    """
+    errors: list[str] = []
+    try:
+        from app.services.historical_greeks import HistoricalGreeksService
+        service = HistoricalGreeksService(db)
+        result = service.run_batch()
+
+        instruments = result.get("instruments_processed", 0)
+        calculated = result.get("greeks_calculated", 0)
+        skipped = result.get("greeks_skipped", 0)
+        failed = result.get("failed_instruments", 0)
+
+        if failed > 0:
+            errors.append(f"Greeks: {failed} instruments failed")
+
+        logger.info(
+            "Greeks: %d instruments, %d calculated, %d skipped, %d failed",
+            instruments, calculated, skipped, failed,
+        )
+        return instruments, calculated, skipped, errors
+
+    except Exception as e:
+        errors.append(f"Greek calculation error: {e}")
+        logger.error("Greek calculation failed: %s", e, exc_info=True)
+        return 0, 0, 0, errors
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A — Stage 5: Historical GEX
+# ---------------------------------------------------------------------------
+
+
+def _calculate_gex(
+    db: Session,
+    run_id: str,
+) -> tuple[int, int, int, list[str]]:
+    """Calculate GEX for Greek records that are missing GEX.
+
+    Returns (instruments_processed, records_calculated, records_skipped, errors).
+    """
+    errors: list[str] = []
+    try:
+        from app.services.historical_gex import HistoricalGexService
+        service = HistoricalGexService(db)
+        result = service.run_batch()
+
+        instruments = result.get("instruments_processed", 0)
+        calculated = result.get("gex_calculated", 0)
+        skipped = result.get("gex_skipped", 0)
+        failed = result.get("failed_instruments", 0)
+
+        if failed > 0:
+            errors.append(f"GEX: {failed} instruments failed")
+
+        logger.info(
+            "GEX: %d instruments, %d calculated, %d skipped, %d failed",
+            instruments, calculated, skipped, failed,
+        )
+        return instruments, calculated, skipped, errors
+
+    except Exception as e:
+        errors.append(f"GEX calculation error: {e}")
+        logger.error("GEX calculation failed: %s", e, exc_info=True)
+        return 0, 0, 0, errors
+
+
+# ---------------------------------------------------------------------------
+# Phase 10A — Stage 6: Validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_pipeline(db: Session, target_date: date) -> dict:
+    """Validate pipeline results and produce a coverage report."""
+    from sqlalchemy import func
+
+    day_start = datetime.combine(target_date, datetime.min.time())
+    day_end = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+
+    # Count candles for target date
+    candles_today = db.scalar(
+        select(func.count(OptionCandle.id)).where(
+            OptionCandle.open_time >= day_start,
+            OptionCandle.open_time < day_end,
+        )
+    ) or 0
+
+    # Count total candles
+    total_candles = db.scalar(select(func.count(OptionCandle.id))) or 0
+
+    # Count Greeks
+    total_greeks = db.scalar(select(func.count(OptionGreeks.id))) or 0
+
+    # Count GEX
+    total_gex = db.scalar(select(func.count(HistoricalGexSnapshot.id))) or 0
+
+    # Count instruments
+    instruments = db.scalar(
+        select(func.count(func.distinct(OptionCandle.instrument_key)))
+    ) or 0
+
+    # Count expiries
+    expiries = db.scalar(
+        select(func.count(func.distinct(ContractSpec.expiry)))
+    ) or 0
+
+    gex_coverage = (total_gex / total_greeks * 100) if total_greeks > 0 else 0
+
+    return {
+        "target_date": target_date.isoformat(),
+        "candles_today": candles_today,
+        "total_candles": total_candles,
+        "total_greeks": total_greeks,
+        "total_gex": total_gex,
+        "instruments": instruments,
+        "expiries": expiries,
+        "gex_coverage_pct": round(gex_coverage, 1),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
 
@@ -400,6 +538,8 @@ class DailyIngestionPipeline:
         skip_nifty: bool = False,
         skip_contracts: bool = False,
         skip_options: bool = False,
+        skip_greeks: bool = False,
+        skip_gex: bool = False,
     ):
         self.db = db
         self.client = client
@@ -407,6 +547,8 @@ class DailyIngestionPipeline:
         self.skip_nifty = skip_nifty
         self.skip_contracts = skip_contracts
         self.skip_options = skip_options
+        self.skip_greeks = skip_greeks
+        self.skip_gex = skip_gex
         self.run_id = f"daily_{uuid.uuid4().hex[:12]}"
 
     async def run(self) -> DailyIngestionResult:
@@ -478,6 +620,35 @@ class DailyIngestionPipeline:
                 result.option_candles_inserted = opts_inserted
                 result.errors.extend(opts_errors)
                 self.db.commit()
+
+            # Phase 10A — Stage 4: Historical Greeks
+            if not self.skip_greeks:
+                logger.info("=== Stage 4: Historical Greeks ===")
+                greek_instruments, greek_calc, greek_skip, greek_errors = _calculate_greeks(
+                    self.db, self.run_id,
+                )
+                result.greek_instruments_processed = greek_instruments
+                result.greek_records_calculated = greek_calc
+                result.greek_records_skipped = greek_skip
+                result.errors.extend(greek_errors)
+                self.db.commit()
+
+            # Phase 10A — Stage 5: Historical GEX
+            if not self.skip_gex:
+                logger.info("=== Stage 5: Historical GEX ===")
+                gex_instruments, gex_calc, gex_skip, gex_errors = _calculate_gex(
+                    self.db, self.run_id,
+                )
+                result.gex_instruments_processed = gex_instruments
+                result.gex_records_calculated = gex_calc
+                result.gex_records_skipped = gex_skip
+                result.errors.extend(gex_errors)
+                self.db.commit()
+
+            # Phase 10A — Stage 6: Validation
+            logger.info("=== Stage 6: Validation ===")
+            validation = _validate_pipeline(self.db, target)
+            result.metadata["validation"] = validation
 
             result.status = "SUCCESS" if not result.errors else "PARTIAL"
 
