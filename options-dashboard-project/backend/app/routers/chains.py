@@ -65,7 +65,7 @@ def validate_expiry_date(expiry_date: str) -> str:
     return expiry_date
 
 
-async def call_upstox(coro):
+async def call_upstox(coro, *, session_id: str | None = None):
     """Awaits a broker-gateway call, translating session failures into a 401
     that also clears the stored token (broker tokens expire daily at 3:30 AM).
 
@@ -76,7 +76,8 @@ async def call_upstox(coro):
         return await coro
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token(session_id)
+            if session_id:
+                token_store.clear_token(session_id)
             raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error ({e.status_code}): {e.message}") from e
 
@@ -86,7 +87,7 @@ async def list_expiries(symbol: str, session_id: str | None = Depends(get_sessio
     symbol = resolve_symbol(symbol)
     token = require_token(session_id)
     adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
-    return await call_upstox(adapter.get_option_contracts(symbol))
+    return await call_upstox(adapter.get_option_contracts(symbol), session_id=session_id)
 
 
 @router.get("/{symbol}")
@@ -99,7 +100,7 @@ async def get_chain(
     expiry_date = validate_expiry_date(expiry_date)
     token = require_token(session_id)
     adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
-    return await call_upstox(adapter.get_option_chain(symbol, expiry_date))
+    return await call_upstox(adapter.get_option_chain(symbol, expiry_date), session_id=session_id)
 
 
 @router.websocket("/ws/{symbol}")

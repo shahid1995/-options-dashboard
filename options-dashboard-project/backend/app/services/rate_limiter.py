@@ -146,3 +146,76 @@ class SessionRateLimiter:
 
 # Global instance — scoped to the process
 rate_limiter = SessionRateLimiter()
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (Phase 7.24 backfill_orchestrator)
+# ---------------------------------------------------------------------------
+import asyncio as _asyncio
+
+
+class _BackfillRateConfig:
+    """Minimal config shim for backward-compat with backfill_orchestrator."""
+    def __init__(self, **kwargs: object):
+        self.max_concurrency: int = int(kwargs.get("max_concurrency", 5))
+
+
+RateLimiterConfig = _BackfillRateConfig  # type: ignore[misc]
+
+
+class GlobalRateLimiter:
+    """Async concurrency limiter used by the backfill orchestrator.
+
+    This is NOT the same as ``SessionRateLimiter`` which throttles
+    per-user HTTP requests.  ``GlobalRateLimiter`` controls the
+    maximum number of concurrent Upstox API fetches during bulk
+    historical backfills.
+    """
+
+    def __init__(self, max_concurrency: int = 5, **_kwargs: object):
+        self._concurrency = max_concurrency
+        self._semaphore: _asyncio.Semaphore = _asyncio.Semaphore(max_concurrency)
+        self._total_instruments: int = 0
+
+    # -- properties used by backfill_orchestrator --------------------------------
+
+    @property
+    def concurrency(self) -> int:
+        return self._concurrency
+
+    async def set_total_instruments(self, count: int) -> None:
+        self._total_instruments = count
+
+    # -- acquire / release used by worker tasks -----------------------------------
+
+    async def acquire(self) -> None:
+        await self._semaphore.acquire()
+
+    def release(self) -> None:
+        try:
+            self._semaphore.release()
+        except ValueError:
+            pass  # release when nothing acquired
+
+
+
+class RateLimiterMetrics:
+    """Stub metrics container for backward compat with Phase 7.24 tests."""
+
+    def __init__(self) -> None:
+        self.api_calls: int = 0
+        self.rate_limit_hits: int = 0
+        self.concurrency: int = 5
+        self.total_instruments: int = 0
+        self.instruments_completed: int = 0
+        self.instruments_failed: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "api_calls": self.api_calls,
+            "rate_limit_hits": self.rate_limit_hits,
+            "concurrency": self.concurrency,
+            "total_instruments": self.total_instruments,
+            "instruments_completed": self.instruments_completed,
+            "instruments_failed": self.instruments_failed,
+        }

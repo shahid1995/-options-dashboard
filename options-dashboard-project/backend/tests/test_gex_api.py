@@ -80,6 +80,7 @@ def setup_db():
 
 
 def _auth():
+    """Create a new session and return auth headers."""
     sid = token_store.set_token("fake-token")
     return {"X-Session-Id": sid}
 
@@ -102,8 +103,9 @@ class TestCreateSnapshot:
         assert resp.json()["id"] > 0
 
     def test_create_stores_all_fields(self):
-        resp = client.post("/gex/snapshots", json=_make_snapshot(), headers=_auth())
-        latest = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=_auth()).json()
+        hdrs = _auth()
+        resp = client.post("/gex/snapshots", json=_make_snapshot(), headers=hdrs)
+        latest = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=hdrs).json()
         assert latest is not None
         assert latest["symbol"] == "NIFTY"
         assert latest["spot"] == 25500.0
@@ -135,9 +137,10 @@ class TestCreateSnapshot:
                 "sweepStatus": "available",
             }
         })
-        resp = client.post("/gex/snapshots", json=snap, headers=_auth())
+        hdrs = _auth()
+        resp = client.post("/gex/snapshots", json=snap, headers=hdrs)
         assert resp.status_code == 200
-        latest = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=_auth()).json()
+        latest = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=hdrs).json()
         assert latest["sweepData"] is not None
         assert latest["sweepData"]["gammaFlipSpot"] == 25400.0
 
@@ -186,43 +189,47 @@ class TestListSnapshots:
         assert resp.json()["count"] == 0
 
     def test_list_oldest_first(self):
+        hdrs = _auth()
         for i in range(3):
             snap = _make_snapshot({
                 "capturedAt": f"2026-08-22T09:0{i}:00Z",
                 "netGex": 1000 * (i + 1),
             })
-            client.post("/gex/snapshots", json=snap, headers=_auth())
+            client.post("/gex/snapshots", json=snap, headers=hdrs)
 
-        resp = client.get("/gex/snapshots?symbol=NIFTY", headers=_auth())
+        resp = client.get("/gex/snapshots?symbol=NIFTY", headers=hdrs)
         snaps = resp.json()["snapshots"]
         assert len(snaps) == 3
         assert snaps[0]["capturedAt"] < snaps[1]["capturedAt"]
 
     def test_list_with_limit(self):
+        hdrs = _auth()
         for i in range(5):
             snap = _make_snapshot({"capturedAt": f"2026-08-22T09:0{i}:00Z"})
-            client.post("/gex/snapshots", json=snap, headers=_auth())
+            client.post("/gex/snapshots", json=snap, headers=hdrs)
 
-        resp = client.get("/gex/snapshots?symbol=NIFTY&limit=2", headers=_auth())
+        resp = client.get("/gex/snapshots?symbol=NIFTY&limit=2", headers=hdrs)
         assert resp.json()["count"] == 2
 
     def test_list_with_expiry_filter(self):
+        hdrs = _auth()
         s1 = _make_snapshot({"expiry": "2026-08-28", "capturedAt": "2026-08-22T09:00:00Z"})
         s2 = _make_snapshot({"expiry": "2026-09-04", "capturedAt": "2026-08-22T09:00:00Z"})
-        client.post("/gex/snapshots", json=s1, headers=_auth())
-        client.post("/gex/snapshots", json=s2, headers=_auth())
+        client.post("/gex/snapshots", json=s1, headers=hdrs)
+        client.post("/gex/snapshots", json=s2, headers=hdrs)
 
-        resp = client.get("/gex/snapshots?symbol=NIFTY&expiry=2026-08-28", headers=_auth())
+        resp = client.get("/gex/snapshots?symbol=NIFTY&expiry=2026-08-28", headers=hdrs)
         assert resp.json()["count"] == 1
         assert resp.json()["snapshots"][0]["expiry"] == "2026-08-28"
 
     def test_list_with_since_filter(self):
+        hdrs = _auth()
         s1 = _make_snapshot({"capturedAt": "2026-08-22T08:00:00Z"})
         s2 = _make_snapshot({"capturedAt": "2026-08-22T10:00:00Z"})
-        client.post("/gex/snapshots", json=s1, headers=_auth())
-        client.post("/gex/snapshots", json=s2, headers=_auth())
+        client.post("/gex/snapshots", json=s1, headers=hdrs)
+        client.post("/gex/snapshots", json=s2, headers=hdrs)
 
-        resp = client.get("/gex/snapshots?symbol=NIFTY&since=2026-08-22T09:00:00Z", headers=_auth())
+        resp = client.get("/gex/snapshots?symbol=NIFTY&since=2026-08-22T09:00:00Z", headers=hdrs)
         assert resp.json()["count"] == 1
 
     def test_list_without_auth(self):
@@ -245,12 +252,13 @@ class TestLatestSnapshot:
         assert resp.json() is None
 
     def test_latest_returns_most_recent(self):
+        hdrs = _auth()
         s1 = _make_snapshot({"capturedAt": "2026-08-22T09:00:00Z", "netGex": 1000})
         s2 = _make_snapshot({"capturedAt": "2026-08-22T09:05:00Z", "netGex": 2000})
-        client.post("/gex/snapshots", json=s1, headers=_auth())
-        client.post("/gex/snapshots", json=s2, headers=_auth())
+        client.post("/gex/snapshots", json=s1, headers=hdrs)
+        client.post("/gex/snapshots", json=s2, headers=hdrs)
 
-        resp = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=_auth())
+        resp = client.get("/gex/snapshots/latest?symbol=NIFTY", headers=hdrs)
         assert resp.json()["netGex"] == 2000
 
     def test_latest_without_auth(self):
@@ -268,10 +276,11 @@ class TestSnapshotCount:
         assert resp.json()["count"] == 0
 
     def test_count_after_inserts(self):
+        hdrs = _auth()
         for i in range(3):
             snap = _make_snapshot({"capturedAt": f"2026-08-22T09:0{i}:00Z"})
-            client.post("/gex/snapshots", json=snap, headers=_auth())
-        resp = client.get("/gex/snapshots/count?symbol=NIFTY", headers=_auth())
+            client.post("/gex/snapshots", json=snap, headers=hdrs)
+        resp = client.get("/gex/snapshots/count?symbol=NIFTY", headers=hdrs)
         assert resp.json()["count"] == 3
 
 

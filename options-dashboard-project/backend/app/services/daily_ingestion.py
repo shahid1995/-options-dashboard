@@ -394,17 +394,18 @@ def _calculate_greeks(
     """
     errors: list[str] = []
     try:
-        from app.services.historical_greeks import HistoricalGreeksService
-        service = HistoricalGreeksService(db)
-        result = service.run_batch()
+        from app.services.historical_greeks import HistoricalGreeksEngine
+        engine = HistoricalGreeksEngine(db)
+        result = engine.run_batch()
 
         instruments = result.get("instruments_processed", 0)
-        calculated = result.get("greeks_calculated", 0)
-        skipped = result.get("greeks_skipped", 0)
-        failed = result.get("failed_instruments", 0)
+        calculated = result.get("total_persisted", 0)
+        total = result.get("total_candles", 0)
+        failed = result.get("total_failed", 0)
+        skipped = max(0, total - calculated - failed)
 
         if failed > 0:
-            errors.append(f"Greeks: {failed} instruments failed")
+            errors.append(f"Greeks: {failed} candles failed")
 
         logger.info(
             "Greeks: %d instruments, %d calculated, %d skipped, %d failed",
