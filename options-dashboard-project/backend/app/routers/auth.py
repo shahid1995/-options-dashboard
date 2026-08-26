@@ -47,6 +47,15 @@ async def callback(
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
     session_id = token_store.set_token(access_token)
 
+    # Phase 7.24.8: Also persist the token for CLI tools.
+    try:
+        from app.services.upstox_token_manager import UpstoxTokenManager
+        from datetime import datetime, timedelta, timezone
+        _mgr = UpstoxTokenManager()
+        _mgr.save(access_token, expires_at=datetime.now(timezone.utc) + timedelta(hours=24))
+    except Exception:
+        logger.debug("Could not persist token to cache (non-critical)")
+
     # Send the user back to the dashboard, now logged in. The session ID is
     # passed in the URL fragment (never sent to servers) because the frontend
     # and backend are on different sites, so browsers that block third-party
@@ -73,7 +82,7 @@ def status(session_id: str | None = Depends(get_session_id)):
 def logout(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
-    token_store.clear_token()
+    token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
     return response

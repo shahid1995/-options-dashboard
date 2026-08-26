@@ -3,6 +3,11 @@
 .env.local
 .env.*.local
 
+# Token cache — must never be committed
+.token_cache/
+*.token_cache
+upstox_token.json
+
 # Python
 __pycache__/
 *.pyc
@@ -13,3 +18,13 @@ venv/
 node_modules/
 .next/
 out/
+
+# SQLite databases — never commit production/test DB files
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.db-corrupted
+
+# Freebuff workspace
+.freebuff/

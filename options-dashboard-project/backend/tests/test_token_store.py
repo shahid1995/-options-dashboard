@@ -20,11 +20,15 @@ def test_get_token_rejects_missing_session():
     assert token_store.get_token(None) is None
 
 
-def test_set_token_overwrites_previous_value_and_rotates_session():
+def test_set_token_creates_independent_sessions():
+    """Phase 8F: each set_token() call creates an independent session.
+    Two calls produce two independent sessions — neither overwrites.
+    """
     first_session = token_store.set_token("first")
     second_session = token_store.set_token("second")
+    assert first_session != second_session
+    assert token_store.get_token(first_session) == "first"
     assert token_store.get_token(second_session) == "second"
-    assert token_store.get_token(first_session) is None
 
 
 def test_clear_token_removes_value():

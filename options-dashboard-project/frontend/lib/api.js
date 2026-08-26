@@ -197,3 +197,29 @@ export const executeTemplatePreview = (templateId) =>
 export const executeTemplate = (templateId, payload) =>
   api.post(`/paper/templates/${templateId}/execute`, payload).then((r) => r.data);
 
+// ---- Phase 8D: GEX Intelligence APIs ----
+
+export const getGexHistory = (params = {}) =>
+  api.get("/gex/history", { params }).then((r) => r.data);
+
+export const getGexRegime = (params = {}) =>
+  api.get("/gex/regime", { params }).then((r) => r.data);
+
+export const getGexFlip = (params = {}) =>
+  api.get("/gex/flip", { params }).then((r) => r.data);
+
+export const getGexWalls = (params = {}) =>
+  api.get("/gex/walls", { params }).then((r) => r.data);
+
+export const getGexAnalytics = (params = {}) =>
+  api.get("/gex/analytics", { params }).then((r) => r.data);
+
+export const getGexStats = (params = {}) =>
+  api.get("/gex/stats", { params }).then((r) => r.data);
+
+export const getGexDataQuality = () =>
+  api.get("/gex/data-quality").then((r) => r.data);
+
+export const getGexLive = (symbol, expiryDate) =>
+  api.get("/gex/live", { params: { symbol, expiry_date: expiryDate } }).then((r) => r.data);
+
