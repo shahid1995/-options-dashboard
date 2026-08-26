@@ -119,7 +119,7 @@ def create_snapshot(
     # Inject schema version for the persistence layer
     snapshot_dict.setdefault("schemaVersion", "GEXSnapshot_v1")
 
-    # Idempotency: check for recent duplicate
+    # Idempotency: check for recent duplicate — scoped to this session
     captured_at = snapshot_dict.get("capturedAt")
     if captured_at:
         try:
@@ -134,6 +134,7 @@ def create_snapshot(
                 expiry=snapshot_dict.get("expiry"),
                 limit=1,
                 since=since_cutoff,
+                owner_id=session_id,
             )
             if recent:
                 last = recent[-1]
@@ -149,12 +150,12 @@ def create_snapshot(
                     except (ValueError, TypeError):
                         pass
 
-    result = record_gex_snapshot(db, snapshot_dict)
+    result = record_gex_snapshot(db, snapshot_dict, owner_id=session_id)
     if result == 0:
         raise HTTPException(status_code=400, detail="Invalid snapshot data")
 
-    # Get the ID of the just-inserted snapshot
-    latest = get_latest_snapshot(db, snapshot_dict["symbol"], snapshot_dict.get("expiry"))
+    # Get the ID of the just-inserted snapshot — scoped to this session
+    latest = get_latest_snapshot(db, snapshot_dict["symbol"], snapshot_dict.get("expiry"), owner_id=session_id)
     snap_id = latest.get("id") if latest else None
 
     return {"ok": True, "id": snap_id, "duplicate": False}
@@ -179,7 +180,8 @@ def list_snapshots(
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid 'since' timestamp")
 
-    snapshots = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=limit, since=since_dt)
+    # Phase 8F: scope snapshots to the authenticated session
+    snapshots = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=limit, since=since_dt, owner_id=session_id)
 
     return GexSnapshotListOut(
         snapshots=[GexSnapshotOut(**s) for s in snapshots],
@@ -198,7 +200,8 @@ def latest_snapshot(
     """GET /gex/snapshots/latest — Get the most recent GEX snapshot."""
     require_session(session_id)
 
-    snapshot = get_latest_snapshot(db, symbol=symbol, expiry=expiry)
+    # Phase 8F: scope to the authenticated session
+    snapshot = get_latest_snapshot(db, symbol=symbol, expiry=expiry, owner_id=session_id)
     if snapshot is None:
         return None
 
@@ -213,7 +216,8 @@ def snapshot_count(
 ):
     """GET /gex/snapshots/count — Count stored snapshots."""
     require_session(session_id)
-    return {"count": count_gex_snapshots(db, symbol=symbol)}
+    # Phase 8F: count only this session's snapshots
+    return {"count": count_gex_snapshots(db, symbol=symbol, owner_id=session_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +270,8 @@ async def trigger_capture(
             raise HTTPException(status_code=401, detail="Upstox session expired.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error: {e.message}") from e
 
-    # Capture and persist
+    # Capture and persist — scoped to this session
     capture_service = GexCaptureService()
-    result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol)
+    result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=session_id)
 
     return result

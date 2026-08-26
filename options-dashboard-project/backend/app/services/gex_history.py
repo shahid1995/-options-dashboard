@@ -30,10 +30,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def record_gex_snapshot(db: Session, snapshot: dict) -> int:
+def record_gex_snapshot(db: Session, snapshot: dict, owner_id: str | None = None) -> int:
     """Persist one GEX snapshot; return 1 if stored, 0 if invalid.
 
     Uses explicit commit with rollback-on-failure for transaction safety.
+
+    Phase 8F: ``owner_id`` is the authenticated session ID that owns this
+    snapshot.  When provided, it is stored on the row so queries can be
+    scoped to the owning session.
 
     Expected shape::
 
@@ -87,6 +91,7 @@ def record_gex_snapshot(db: Session, snapshot: dict) -> int:
     try:
         db.add(
             GexSnapshot(
+                owner_id=owner_id,
                 symbol=symbol,
                 expiry=str(expiry),
                 spot=float(spot),
@@ -119,8 +124,12 @@ def get_gex_snapshots(
     expiry: str | None = None,
     limit: int = 200,
     since: datetime | None = None,
+    owner_id: str | None = None,
 ) -> list[dict]:
     """Query stored GEX snapshots, oldest-first, optionally filtered.
+
+    Phase 8F: when ``owner_id`` is provided, only returns snapshots
+    belonging to that authenticated session.
 
     ``since`` filters to snapshots captured after the given datetime.
     Results are returned oldest-first so consumers can compute sequential ΔGEX.
@@ -130,6 +139,8 @@ def get_gex_snapshots(
         stmt = stmt.where(GexSnapshot.expiry == expiry)
     if since:
         stmt = stmt.where(GexSnapshot.captured_at >= since)
+    if owner_id:
+        stmt = stmt.where(GexSnapshot.owner_id == owner_id)
     stmt = stmt.order_by(GexSnapshot.captured_at.asc()).limit(max(1, limit))
     return [_row_to_dict(row) for row in db.scalars(stmt)]
 
@@ -138,11 +149,18 @@ def get_latest_snapshot(
     db: Session,
     symbol: str,
     expiry: str | None = None,
+    owner_id: str | None = None,
 ) -> dict | None:
-    """Get the most recent GEX snapshot for a symbol/expiry."""
+    """Get the most recent GEX snapshot for a symbol/expiry.
+
+    Phase 8F: when ``owner_id`` is provided, only returns snapshots
+    belonging to that authenticated session.
+    """
     stmt = select(GexSnapshot).where(GexSnapshot.symbol == symbol.upper())
     if expiry:
         stmt = stmt.where(GexSnapshot.expiry == expiry)
+    if owner_id:
+        stmt = stmt.where(GexSnapshot.owner_id == owner_id)
     stmt = stmt.order_by(GexSnapshot.captured_at.desc()).limit(1)
     row = db.scalars(stmt).first()
     return _row_to_dict(row) if row else None
@@ -163,11 +181,13 @@ def prune_gex_snapshots(db: Session, retention_days: int = 90) -> int:
         raise
 
 
-def count_gex_snapshots(db: Session, symbol: str | None = None) -> int:
-    """Count stored snapshots, optionally filtered by symbol."""
+def count_gex_snapshots(db: Session, symbol: str | None = None, owner_id: str | None = None) -> int:
+    """Count stored snapshots, optionally filtered by symbol and owner."""
     stmt = select(func.count(GexSnapshot.id))
     if symbol:
         stmt = stmt.where(GexSnapshot.symbol == symbol.upper())
+    if owner_id:
+        stmt = stmt.where(GexSnapshot.owner_id == owner_id)
     return db.scalar(stmt) or 0
 
 
@@ -191,6 +211,7 @@ def _is_finite(v) -> bool:
 def _row_to_dict(row: GexSnapshot) -> dict:
     return {
         "id": row.id,
+        "owner_id": row.owner_id,
         "symbol": row.symbol,
         "expiry": row.expiry,
         "spot": row.spot,

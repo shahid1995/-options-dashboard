@@ -136,16 +136,19 @@ def _is_duplicate(
     expiry: str | None,
     captured_at: datetime,
     tolerance_seconds: int = 60,
+    owner_id: str | None = None,
 ) -> Optional[int]:
     """Check whether a snapshot with similar identity already exists.
 
+    Phase 8F: deduplication is scoped to the same owner_id.
+
     Returns the existing snapshot ID if duplicate, None otherwise.
 
-    Deduplication criteria: same symbol + expiry + captured_at within
+    Deduplication criteria: same symbol + expiry + owner + captured_at within
     tolerance_seconds.
     """
     cutoff = captured_at - timedelta(seconds=tolerance_seconds)
-    recent = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=1, since=cutoff)
+    recent = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=1, since=cutoff, owner_id=owner_id)
     if recent:
         last = recent[-1]
         last_cat = last.get("capturedAt")
@@ -195,14 +198,19 @@ class GexCaptureService:
         *,
         expiry: str | None = None,
         symbol: str | None = None,
+        owner_id: str | None = None,
     ) -> dict:
         """Capture one GEX snapshot from the provided chain data.
+
+        Phase 8F: ``owner_id`` is the authenticated session that owns this
+        snapshot.  When provided, it is stored on the snapshot row.
 
         Args:
             db: Database session.
             chain: Canonical option chain from Upstox adapter.
             expiry: Expiry date override (if not in chain).
             symbol: Symbol override (if not in chain).
+            owner_id: Authenticated session ID that owns this snapshot.
 
         Returns:
             dict with keys: status, snapshot_id, symbol, expiry, net_gex, etc.
@@ -272,8 +280,8 @@ class GexCaptureService:
         except (ValueError, TypeError):
             captured_at = now
 
-        # Deduplication check
-        existing_id = _is_duplicate(db, effective_symbol, effective_expiry, captured_at)
+        # Deduplication check — scoped to owner
+        existing_id = _is_duplicate(db, effective_symbol, effective_expiry, captured_at, owner_id=owner_id)
         if existing_id is not None:
             logger.debug(
                 "GEX capture deduplicated",
@@ -289,7 +297,7 @@ class GexCaptureService:
 
         # Persist with explicit error isolation
         try:
-            stored = record_gex_snapshot(db, snapshot_dict)
+            stored = record_gex_snapshot(db, snapshot_dict, owner_id=owner_id)
             if stored == 0:
                 self._consecutive_failures += 1
                 logger.warning(
@@ -303,8 +311,8 @@ class GexCaptureService:
                 )
                 return {"status": "error", "reason": "persistence_rejected", "symbol": effective_symbol}
 
-            # Get the ID of the stored snapshot
-            latest = get_gex_snapshots(db, symbol=effective_symbol, expiry=effective_expiry, limit=1)
+            # Get the ID of the stored snapshot — scoped to owner
+            latest = get_gex_snapshots(db, symbol=effective_symbol, expiry=effective_expiry, limit=1, owner_id=owner_id)
             snap_id = latest[-1].get("id") if latest else None
 
             # Reset circuit breaker on success

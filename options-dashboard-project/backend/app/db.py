@@ -128,6 +128,8 @@ def init_db():
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
     # Phase 7.6: sweep enrichment column on gex_snapshots
     ensure_column(engine, "gex_snapshots", "sweep_data", "TEXT NULL")
+    # Phase 8F: owner_id for multi-user snapshot isolation
+    ensure_column(engine, "gex_snapshots", "owner_id", "VARCHAR(128) NULL")
     # Phase 6.5.0.1: conservative one-time backfill of strategy-leg
     # attribution for pre-existing, provably unambiguous executions.
     # Idempotent — rows already present are never duplicated.

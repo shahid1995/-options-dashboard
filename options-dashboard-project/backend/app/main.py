@@ -43,7 +43,7 @@ async def _gex_capture_loop():
     - Backoff resets after a successful capture
     """
     import time as _time
-    from app.services.token_store import get_any_token
+    from app.services.token_store import get_token, get_all_session_ids
     from app.services.gex_capture import GexCaptureService, run_retention_cleanup
     from app.services.live_gex import LiveGexService
 
@@ -69,9 +69,9 @@ async def _gex_capture_loop():
     while not _stop_event.is_set():
         cycle_start = _time.time()
         try:
-            # Get the current broker token (single-user: first active session)
-            token = get_any_token()
-            if token is None:
+            # Get the current broker token — find an active session
+            active_sessions = get_all_session_ids()
+            if not active_sessions:
                 logger.debug("GEX capture skipped: no active broker session")
                 await _interruptible_sleep(interval)
                 continue
@@ -80,6 +80,13 @@ async def _gex_capture_loop():
             from app.brokers.adapters.upstox.mapper import UPSTOX_INSTRUMENT_KEYS as INSTRUMENT_KEYS
             from app.brokers.domain.enums import BROKER_ID_UPSTOX
             from app.brokers.gateway import gateway
+
+            # Use the most recently authenticated session
+            current_session_id = active_sessions[-1] if active_sessions else None
+            token = get_token(current_session_id)
+            if not token:
+                await _interruptible_sleep(interval)
+                continue
 
             symbol = "NIFTY"
             if symbol not in INSTRUMENT_KEYS:
@@ -121,7 +128,7 @@ async def _gex_capture_loop():
             # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
-                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol)
+                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=current_session_id)
                 status = result.get("status")
 
                 if status == "captured":
