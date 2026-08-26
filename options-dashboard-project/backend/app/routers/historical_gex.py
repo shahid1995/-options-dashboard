@@ -408,3 +408,104 @@ def get_stats(
         byRegime={k: stats_to_out(v) for k, v in by_regime.items()},
         byGexChange={k: stats_to_out(v) for k, v in by_gex_change.items()},
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.8E Research Endpoints
+# ---------------------------------------------------------------------------
+
+class SignalOut(BaseModel):
+    name: str
+    entry: str
+    direction: str
+    regime: str
+    sampleSize: int
+    winRate: float
+    meanReturn: float
+    medianReturn: float
+    expectedValue: float
+    confidence: str
+
+
+class RobustnessOut(BaseModel):
+    robust: bool
+    significance: str
+    sampleSize: int
+    fullSample: dict
+
+
+class MultipleTestingOut(BaseModel):
+    hypothesesTested: int
+    apparentlySuccessful: int
+    bonferroniAlpha: float
+    signals: list
+
+
+class ResearchResponse(BaseModel):
+    datasetSummary: dict
+    signals: list[SignalOut]
+    robustness: dict
+    multipleTesting: MultipleTestingOut
+    flipAnalysis: dict
+    wallAnalysis: dict
+    gexChangeAnalysis: dict
+    momentumAnalysis: dict
+    regimeAnalysis: dict
+    expiryAnalysis: dict
+    walkForward: dict
+    elapsedSeconds: float
+
+
+@router.get("/research", response_model=ResearchResponse)
+def get_research(
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    maxTimestamps: int = Query(500, ge=1, le=12262),
+    db: Session = Depends(get_db),
+):
+    """Run the Phase 7.8E Historical GEX research pipeline."""
+    import time
+    from app.services.historical_gex_research import GexResearchEngine
+
+    engine = GexResearchEngine(db)
+    t0 = time.time()
+    result = engine.run_complete_research(
+        start=_parse_dt(start),
+        end=_parse_dt(end),
+        max_timestamps=maxTimestamps,
+    )
+    elapsed = time.time() - t0
+
+    return ResearchResponse(
+        datasetSummary=result.get("dataset_summary", {}),
+        signals=[
+            SignalOut(
+                name=s["name"],
+                entry=s["entry"],
+                direction=s["direction"],
+                regime=s["regime"],
+                sampleSize=s["sample_size"],
+                winRate=s["win_rate"],
+                meanReturn=s["mean_return"],
+                medianReturn=s["median_return"],
+                expectedValue=s["expected_value"],
+                confidence=s["confidence"],
+            )
+            for s in result.get("signals", [])
+        ],
+        robustness=result.get("robustness", {}),
+        multipleTesting=MultipleTestingOut(**result.get("multiple_testing", {
+            "total_hypotheses_tested": 0,
+            "apparently_successful": 0,
+            "bonferroni_alpha": 0.05,
+            "signals": [],
+        })),
+        flipAnalysis=result.get("flip_analysis", {}),
+        wallAnalysis=result.get("wall_analysis", {}),
+        gexChangeAnalysis=result.get("gex_change_analysis", {}),
+        momentumAnalysis=result.get("momentum_analysis", {}),
+        regimeAnalysis=result.get("regime_analysis", {}),
+        expiryAnalysis=result.get("expiry_analysis", {}),
+        walkForward=result.get("walk_forward", {}),
+        elapsedSeconds=round(elapsed, 2),
+    )
