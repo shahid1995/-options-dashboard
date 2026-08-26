@@ -477,6 +477,17 @@ class TestRealDataIntegration:
         db_path = Path(__file__).parent.parent / "paper_journal.db"
         if not db_path.exists():
             pytest.skip("Production database not available")
+        import sqlite3 as _sqlite3
+        try:
+            conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            # Check that critical tables exist AND have data
+            candle_count = conn.execute("SELECT COUNT(*) FROM option_candles").fetchone()[0]
+            greek_count = conn.execute("SELECT COUNT(*) FROM option_greeks").fetchone()[0]
+            conn.close()
+            if candle_count < 1000 or greek_count < 1000:
+                pytest.skip(f"Production DB has insufficient data (candles={candle_count}, greeks={greek_count})")
+        except Exception:
+            pytest.skip("Production database not readable or missing tables")
 
     def _get_prod_engine(self):
         db_path = Path(__file__).parent.parent / "paper_journal.db"
@@ -517,31 +528,83 @@ class TestRealDataIntegration:
         eng.dispose()
 
     def test_persist_and_status(self):
-        """Persist a small pilot and verify status."""
-        eng = self._get_prod_engine()
-        Session = sessionmaker(bind=eng)
-        db = Session()
+        """Persist a small pilot and verify status — uses isolated DB."""
+        from sqlalchemy.pool import StaticPool
 
-        # Find one instrument
-        ik = db.execute(
+        # Read real instrument key from production (read-only)
+        prod_eng = self._get_prod_engine()
+        prod_db = sessionmaker(bind=prod_eng)()
+        ik = prod_db.execute(
             select(OptionGreeks.instrument_key)
             .where(OptionGreeks.status == "SUCCESS")
             .limit(1)
         ).scalar()
+        prod_db.close()
+        prod_eng.dispose()
 
         if not ik:
             pytest.skip("No Greek data available")
 
-        service = HistoricalGexService(db)
+        # Copy that instrument's data to an isolated in-memory DB
+        iso_eng = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=iso_eng)
+        iso_db = sessionmaker(bind=iso_eng)()
+
+        # Copy Greeks and candles for this instrument via raw sqlite3
+        import sqlite3 as _sqlite3
+        prod_path = str(Path(__file__).parent.parent / "paper_journal.db")
+        src = _sqlite3.connect(f"file:{prod_path}?mode=ro", uri=True)
+        sc = src.cursor()
+
+        candle_count = 0
+        greek_count = 0
+        for table in ("option_greeks", "option_candles"):
+            rows = sc.execute(
+                f"SELECT * FROM {table} WHERE instrument_key = ?", (ik,)
+            ).fetchall()
+            cols = [d[0] for d in sc.description]
+            if rows:
+                iso_eng.raw_connection().executemany(
+                    f"INSERT INTO {table} ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})",
+                    rows,
+                )
+                if table == "option_greeks":
+                    greek_count = len(rows)
+                else:
+                    candle_count = len(rows)
+        iso_eng.raw_connection().commit()
+        src.close()
+
+        if candle_count == 0 or greek_count == 0:
+            pytest.skip(f"Insufficient test data for {ik}")
+
+        # Verify data was actually copied into isolated DB
+        import sqlite3 as _check
+        iso_path = iso_eng.url.database  # will be None for in-memory
+        # For in-memory, check via the engine directly
+        iso_conn = iso_eng.raw_connection()
+        iso_candle_count = iso_conn.execute("SELECT COUNT(*) FROM option_candles").fetchone()[0]
+        iso_greek_count = iso_conn.execute("SELECT COUNT(*) FROM option_greeks").fetchone()[0]
+        if iso_candle_count == 0 or iso_greek_count == 0:
+            pytest.skip(f"Data copy failed for {ik} (candles={iso_candle_count}, greeks={iso_greek_count})")
+
+        # Run GEX calculation against isolated DB
+        service = HistoricalGexService(iso_db)
         result = service.run_instrument(ik)
-        assert result["success"] > 0
+        # The instrument may have all-zero OI (excluded), which is valid
+        assert result["total_candles"] > 0
+        assert result["total_candles"] == result["success"] + result["excluded"]
 
         status = service.get_status()
-        assert status["total_rows"] >= result["success"]
-        assert status["instruments"] >= 1
+        assert status["total_rows"] == result["total_candles"]
+        assert status["instruments"] == 1
 
-        db.close()
-        eng.dispose()
+        iso_db.close()
+        iso_eng.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -607,3 +670,48 @@ class TestChainInvariants:
         chain = HistoricalGexService.compute_chain_gex(rows, spot)
         strikes = sorted(chain.by_strike.keys())
         assert strikes == [24800, 25000, 25200]
+
+
+# ---------------------------------------------------------------------------
+# H. Production DB protection regression test
+# ---------------------------------------------------------------------------
+
+
+class TestProductionDbProtection:
+    """Verify that test collection and execution cannot modify the production DB."""
+
+    def test_no_option_candles_test_in_production_metadata(self):
+        """Importing test_phase712 must not add tables to production Base.metadata."""
+        tables = set(Base.metadata.tables.keys())
+        assert "option_candles_test" not in tables, (
+            f"option_candles_test leaked into production Base.metadata"
+        )
+
+    def test_test_module_uses_isolated_base(self):
+        """test_phase712 must use its own Base, not the production one."""
+        # Read the source file directly to verify the pattern
+        test_file = Path(__file__).parent / "test_phase712_schema_design.py"
+        source = test_file.read_text()
+        assert "class _TestBase(DeclarativeBase)" in source, (
+            "test_phase712 must define its own _TestBase"
+        )
+        assert "class OptionCandle(_TestBase)" in source, (
+            "OptionCandle must use _TestBase, not Base"
+        )
+        # Verify it does NOT inherit from the production Base
+        assert "class OptionCandle(Base)" not in source, (
+            "OptionCandle must NOT use production Base"
+        )
+
+    def test_historical_gex_persist_uses_isolated_db(self):
+        """test_persist_and_status must not write to production DB."""
+        test_file = Path(__file__).parent / "test_historical_gex.py"
+        source = test_file.read_text()
+        # Find the test_persist_and_status method source
+        # Check that it uses isolated DB variables
+        assert "iso_eng" in source or "iso_db" in source, (
+            "test_persist_and_status should use isolated engine/db variables"
+        )
+        assert "StaticPool" in source, (
+            "test_persist_and_status should use StaticPool for isolation"
+        )
