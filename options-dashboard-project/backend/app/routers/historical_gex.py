@@ -509,3 +509,114 @@ def get_research(
         walkForward=result.get("walk_forward", {}),
         elapsedSeconds=round(elapsed, 2),
     )
+
+
+# ---------------------------------------------------------------------------
+# Data Quality endpoint — Phase 7.8L
+# ---------------------------------------------------------------------------
+
+
+class MetricOut(BaseModel):
+    name: str
+    value: float
+    numerator: int = 0
+    denominator: int = 0
+    unit: str = "ratio"
+    isCritical: bool = True
+    warning: Optional[str] = None
+
+
+class ExclusionOut(BaseModel):
+    reason: str
+    count: int
+    percentage: float
+    affectedInstruments: int = 0
+    affectedTimestamps: int = 0
+    affectedExpiries: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+class DataQualityOut(BaseModel):
+    generatedAt: str
+    classification: str
+    score: float
+    totalOptionCandles: int
+    totalOptionGreeks: int
+    totalHistoricalGex: int
+    totalNiftyCandles: int
+    totalContractSpecs: int
+    timestampsTotal: int
+    timestampsWithGex: int
+    timestampCoverage: float
+    totalSuccess: int
+    totalExcluded: int
+    metrics: list[MetricOut]
+    exclusions: list[ExclusionOut]
+    affectedExpiries: list[dict]
+    warnings: list[str]
+
+
+@app.get("/data-quality", response_model=DataQualityOut)
+def gex_data_quality(
+    startDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
+    endDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
+    db: Session = Depends(get_db),
+):
+    """Data Quality Contract — Phase 7.8L.
+
+    Returns a comprehensive data quality report for the Historical GEX
+    dataset including:
+    - Overall quality score (0-100)
+    - Classification (EXCELLENT / GOOD / DEGRADED / INSUFFICIENT)
+    - OI coverage metrics
+    - GEX success/exclusion rates
+    - Timestamp coverage
+    - Exclusion breakdown by reason
+    - Affected expiries and instruments
+    - Quality warnings
+    """
+    from app.services.gex_data_quality import get_data_quality_report
+
+    report = get_data_quality_report(db, start_date=startDate, end_date=endDate)
+
+    return DataQualityOut(
+        generatedAt=report.generated_at,
+        classification=report.classification,
+        score=report.score,
+        totalOptionCandles=report.total_option_candles,
+        totalOptionGreeks=report.total_option_greeks,
+        totalHistoricalGex=report.total_historical_gex,
+        totalNiftyCandles=report.total_nifty_candles,
+        totalContractSpecs=report.total_contract_specs,
+        timestampsTotal=report.timestamps_total,
+        timestampsWithGex=report.timestamps_with_gex,
+        timestampCoverage=round(report.timestamp_coverage, 4),
+        totalSuccess=report.total_success,
+        totalExcluded=report.total_excluded,
+        metrics=[
+            MetricOut(
+                name=m.name,
+                value=round(m.value, 4),
+                numerator=m.numerator,
+                denominator=m.denominator,
+                unit=m.unit,
+                isCritical=m.is_critical,
+                warning=m.warning,
+            )
+            for m in report.metrics
+        ],
+        exclusions=[
+            ExclusionOut(
+                reason=e.reason,
+                count=e.count,
+                percentage=round(e.percentage, 4),
+                affectedInstruments=e.affected_instruments,
+                affectedTimestamps=e.affected_timestamps,
+                affectedExpiries=e.affected_expiries,
+                description=e.description,
+            )
+            for e in report.exclusions
+        ],
+        affectedExpiries=report.affected_expiries,
+        warnings=report.warnings,
+    )
