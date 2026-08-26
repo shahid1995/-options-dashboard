@@ -12,6 +12,7 @@ const NAV_SECTIONS = [
     label: "MARKET",
     items: [
       { key: "dashboard", href: "/dashboard", label: "Dashboard", icon: "📊" },
+      { key: "gex", href: "/gex", label: "GEX Intelligence", icon: "🎯" },
     ],
   },
   {
@@ -43,6 +44,7 @@ const NAV_SECTIONS = [
  */
 const ROUTE_KEY_MAP = {
   "/dashboard": "dashboard",
+  "/gex": "gex",
   "/paper": "paper",
   "/positions": "positions",
   "/portfolio": "portfolio",
