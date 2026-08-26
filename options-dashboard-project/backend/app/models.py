@@ -528,3 +528,405 @@ class NiftyCandle(Base):
     __table_args__ = (
         UniqueConstraint("symbol", "interval", "open_time", name="uq_candle_identity"),
     )
+
+
+class ContractSpec(Base):
+    """Historical contract metadata for an expired option instrument (Phase 7.8).
+
+    Populated from the Upstox Get Expired Option Contracts API.  Each row
+    stores the authoritative per-instrument metadata for one specific
+    expired contract, identified by ``instrument_key``.
+
+    **Immutability rule:**  Once a valid ``lot_size`` is stored for an
+    ``instrument_key``, it is NEVER overwritten — not by a later API
+    response, not by the current lot size, not by any inferred value.
+    This guarantees reproducibility of any future GEX / exposure
+    calculation that consumes this metadata.
+
+    ``lot_size`` and ``minimum_lot`` are stored separately — they may
+    differ and must never be assumed equal.
+
+    The candle pipeline (nifty_candles) is completely independent of this
+    table.  This table is consumed ONLY by future phases (7.9+) that
+    reconstruct historical option chains and compute GEX.
+    """
+
+    __tablename__ = "contract_specs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Identity — instrument_key is the unique lookup key
+    instrument_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    underlying: Mapped[str] = mapped_column(String(16), index=True)
+    underlying_key: Mapped[str] = mapped_column(String(32))
+    expiry: Mapped[str] = mapped_column(String(10), index=True)
+    strike_price: Mapped[float] = mapped_column(Float)
+    instrument_type: Mapped[str] = mapped_column(String(8))  # CE or PE
+
+    # Contract specifications — exact values from Upstox API
+    # lot_size: authoritative historical value, nullable to represent unknown
+    lot_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    minimum_lot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    freeze_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tick_size: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Descriptive metadata
+    trading_symbol: Mapped[str] = mapped_column(String(64))
+    segment: Mapped[str] = mapped_column(String(16))
+    exchange: Mapped[str] = mapped_column(String(8))
+    weekly: Mapped[bool] = mapped_column(default=False)
+
+    # Provenance — every row traces back to its source
+    source: Mapped[str] = mapped_column(String(32))
+    source_reference: Mapped[str] = mapped_column(String(255))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("instrument_key", name="uq_contract_spec_key"),
+    )
+
+
+class OptionCandle(Base):
+    """One historical OHLCV candle for an expired option/future contract (Phase 7.13).
+
+    Stores intraday candle data for individual expired instruments.
+    Populated from the Upstox Expired Historical Candle Data API.
+
+    ``instrument_key`` is the canonical Upstox identity (e.g.
+    ``NSE_FO|48891|31-10-2024``) and links to ``contract_specs``
+    for metadata (lot_size, strike, CE/PE, etc.).
+
+    **Identity:** (instrument_key, interval, open_time) uniquely
+    identifies one candle.  This prevents duplicates while allowing
+    different expiries, strikes, CE/PE, and instruments to coexist.
+
+    **Raw data is immutable:**  OHLCV/OI values are stored exactly
+    as returned by Upstox.  Derived analytics (IV, Greeks, GEX)
+    are computed separately and never overwrite raw market data.
+
+    **Lot-size independence:**  This table does NOT contain lot_size.
+    Lot_size is in ``contract_specs`` and is looked up by instrument_key
+    when needed for GEX/exposure calculations.
+    """
+
+    __tablename__ = "option_candles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Identity — instrument_key links to contract_specs for metadata
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="3min")
+    open_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    # OHLCV from Upstox (raw, immutable)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float, default=0.0)
+    open_interest: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Provenance
+    source: Mapped[str] = mapped_column(String(32), default="UPSTOX_EXPIRED_CANDLE")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_key", "interval", "open_time",
+            name="uq_option_candle_identity",
+        ),
+    )
+
+
+class OptionGreeks(Base):
+    """Reconstructed historical option Greeks (Phase 7.19B).
+
+    Stores IV + per-unit Black-Scholes Greeks calculated from raw
+    ``option_candles`` + ``contract_specs`` + ``nifty_candles``.
+
+    **Three-layer architecture:**
+      - RAW (immutable): option_candles, nifty_candles, contract_specs
+      - MODEL (derived): option_greeks (this table)
+      - ANALYTICS (consumed): GEX, vega/delta exposure, IV research
+
+    **Calculation versioning:**  Each record carries a ``calc_version``
+    so different model configurations can coexist for the same raw data.
+
+    **Immutability:**  This table is never used to overwrite raw
+    market data.  OHLCV/OI in option_candles remains untouched.
+    """
+
+    __tablename__ = "option_greeks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Identity (matches option_candles)
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="3min")
+    open_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    # Market state at calculation time
+    spot: Mapped[float] = mapped_column(Float)           # NIFTY index close
+    strike: Mapped[float] = mapped_column(Float)         # from contract_specs
+    expiry: Mapped[str] = mapped_column(String(10))      # from contract_specs
+    option_type: Mapped[str] = mapped_column(String(4))  # CE or PE
+    option_price: Mapped[float] = mapped_column(Float)   # close price from option candle
+    lot_size: Mapped[int | None] = mapped_column(Integer, nullable=True)  # from contract_specs
+
+    # Calculation inputs
+    time_to_expiry: Mapped[float] = mapped_column(Float)     # year fraction
+    risk_free_rate: Mapped[float] = mapped_column(Float)     # decimal (0.065 = 6.5%)
+    intrinsic_value: Mapped[float] = mapped_column(Float)    # max(S-K,0) or max(K-S,0)
+
+    # Output: implied volatility
+    implied_volatility: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Output: per-unit Greeks
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gamma: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vega: Mapped[float | None] = mapped_column(Float, nullable=True)    # per 1.00 vol
+    theta: Mapped[float | None] = mapped_column(Float, nullable=True)   # annualized
+
+    # Calculation metadata
+    calc_model: Mapped[str] = mapped_column(String(32), default="BLACK_SCHOLES_EUROPEAN")
+    calc_version: Mapped[str] = mapped_column(String(16), default="1.0.0")
+    calculated_at: Mapped[datetime] = mapped_column(DateTime)
+
+    # Quality
+    status: Mapped[str] = mapped_column(String(16), default="SUCCESS")
+    error_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_key", "interval", "open_time", "calc_version",
+            name="uq_option_greeks_identity",
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.24 — Permanent Data Pipeline Infrastructure
+# ---------------------------------------------------------------------------
+
+
+class IngestionLog(Base):
+    """Record every data ingestion operation for observability.
+
+    Tracks contract metadata, NIFTY candle, and option candle ingestion
+    runs with full audit trail: timing, counts, errors, and metadata.
+
+    Design:
+      - One row per ingestion operation (per instrument/expiry/session).
+      - Never stores access tokens or secrets.
+      - Indexed for operational queries: latest run, failures, by instrument.
+    """
+
+    __tablename__ = "ingestion_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Run identity
+    run_id: Mapped[str] = mapped_column(String(32), index=True)
+    operation: Mapped[str] = mapped_column(String(32), index=True)
+    # 'contract_metadata' | 'nifty_candles' | 'option_candles' | 'greeks'
+
+    # Scope (nullable — batch operations may not target a single instrument)
+    instrument_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    expiry_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    session_date: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+
+    # Timing
+    started_at: Mapped[str] = mapped_column(String(32))  # ISO 8601
+    completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # Status
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    # 'RUNNING' | 'SUCCESS' | 'PARTIAL' | 'FAILED'
+
+    # Metrics
+    api_calls: Mapped[int] = mapped_column(Integer, default=0)
+    rows_fetched: Mapped[int] = mapped_column(Integer, default=0)
+    rows_inserted: Mapped[int] = mapped_column(Integer, default=0)
+    rows_skipped: Mapped[int] = mapped_column(Integer, default=0)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Error tracking
+    error_category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # 'AUTH_EXPIRED' | 'RATE_LIMIT' | 'API_ERROR' | 'NETWORK' | null
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Additional context (JSON blob, no secrets)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Indexes created via init_db() for idempotent CREATE INDEX IF NOT EXISTS
+
+
+class DataCompleteness(Base):
+    """Track data completeness per instrument/session.
+
+    Enables the system to determine whether a particular dataset is
+    complete without querying raw candle tables or the Upstox API.
+
+    Supports states:
+      EXPECTED   — data should exist but hasn't been fetched
+      PARTIAL    — some candles present, some missing
+      COMPLETE   — all expected candles present
+      MISSING    — expected but no data found
+      UNAVAILABLE — API returned empty/error
+      FAILED     — attempted but failed
+    """
+
+    __tablename__ = "data_completeness"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Identity
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True)
+    session_date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    data_type: Mapped[str] = mapped_column(String(32), index=True)
+    # 'option_candles' | 'nifty_candles' | 'contract_metadata'
+
+    # Completeness metrics
+    expected_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Status
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    # 'EXPECTED' | 'PARTIAL' | 'COMPLETE' | 'MISSING' | 'UNAVAILABLE' | 'FAILED'
+
+    # Audit
+    last_verified_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_attempted_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_key", "session_date", "data_type",
+            name="uq_data_completeness_identity",
+        ),
+        # Index on status created via init_db() for idempotent CREATE INDEX IF NOT EXISTS
+    )
+
+
+class IngestionCheckpoint(Base):
+    """Durable checkpoint for resumable ingestion operations.
+
+    Provides instrument-level checkpointing for long-running backfill
+    and ingestion jobs.  Survives process termination, server restart,
+    and machine restart.
+
+    The existing greeks_checkpoint table (Phase 7.23C) serves a similar
+    purpose for Greek reconstruction.  This table generalizes the pattern
+    for all ingestion pipelines.
+
+    Each (pipeline, instrument_key) pair is unique — re-running an
+    operation for the same instrument updates the existing checkpoint
+    rather than creating a new one.
+    """
+
+    __tablename__ = "ingestion_checkpoint"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Operation identity
+    pipeline: Mapped[str] = mapped_column(String(32), index=True)
+    # 'greeks' | 'backfill_contracts' | 'backfill_nifty' | 'backfill_options'
+    # | 'daily_options' | 'daily_nifty'
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # Progress
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    # 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED'
+    items_processed: Mapped[int] = mapped_column(Integer, default=0)
+    items_total: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Error tracking
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Timing
+    started_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    updated_at: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline", "instrument_key",
+            name="uq_ingestion_checkpoint_identity",
+        ),
+        # Index on pipeline+status created via init_db() for idempotent CREATE INDEX IF NOT EXISTS
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7.8A — Historical GEX Foundation
+# ---------------------------------------------------------------------------
+
+
+class HistoricalGexSnapshot(Base):
+    """Observed historical GEX snapshot at one (instrument_key, open_time).
+
+    One row per option-instrument per timestamp, storing the observed
+    gamma exposure contribution before aggregation. The strike-level and
+    chain-level GEX are computed by aggregation queries, not stored here.
+
+    **Formula (Phase 7.1 contract):**
+        raw_gex = gamma * OI * spot^2 * 0.01
+        call -> +raw_gex
+        put  -> -raw_gex
+
+    **Eligibility:**
+        Requires valid gamma, OI > 0, valid spot, valid strike, valid
+        option_type. Rows that fail eligibility are excluded with an
+        ``exclusion_reason`` rather than stored with null GEX.
+
+    **Versioning:**
+        ``calc_version`` allows different calculation methodologies to
+        coexist. "historical_gex_v1" is the initial observed-GEX version.
+
+    **Idempotency:**
+        Unique on (instrument_key, interval, open_time, calc_version)
+        via ON CONFLICT DO UPDATE.
+    """
+
+    __tablename__ = "historical_gex"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Identity
+    instrument_key: Mapped[str] = mapped_column(String(64), index=True)
+    interval: Mapped[str] = mapped_column(String(8), default="3min")
+    open_time: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+    # Market context
+    spot: Mapped[float] = mapped_column(Float)          # NIFTY index close at this candle
+    strike: Mapped[float] = mapped_column(Float)        # from contract_specs
+    expiry: Mapped[str] = mapped_column(String(10))     # from contract_specs
+    option_type: Mapped[str] = mapped_column(String(4)) # CE or PE
+
+    # Input components (for audit trail)
+    gamma: Mapped[float] = mapped_column(Float)         # per-unit gamma from option_greeks
+    open_interest: Mapped[float] = mapped_column(Float) # from option_candles
+    option_price: Mapped[float] = mapped_column(Float)  # close from option_candles
+    lot_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Computed GEX (Phase 7.1 contract)
+    raw_gex: Mapped[float] = mapped_column(Float)       # gamma * OI * spot^2 * 0.01
+    signed_gex: Mapped[float] = mapped_column(Float)    # +raw for CE, -raw for PE
+
+    # Calculation metadata
+    calc_version: Mapped[str] = mapped_column(String(16), default="h_gex_v1")
+    calculated_at: Mapped[datetime] = mapped_column(DateTime)
+
+    # Quality
+    status: Mapped[str] = mapped_column(String(16), default="SUCCESS")  # SUCCESS | EXCLUDED
+    exclusion_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "instrument_key", "interval", "open_time", "calc_version",
+            name="uq_historical_gex_identity",
+        ),
+    )
