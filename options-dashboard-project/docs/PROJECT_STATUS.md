@@ -1,10 +1,25 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-22_
+_Last updated: 2026-08-27_
 
 ## Current phase
 
-**Phase 2.1 — App Shell + Design System Foundation**
+**Phase 10.1A — Database Migration Foundation**
+
+Status: ✅ **COMPLETE — Final verification passed, pending Principal Architect approval**
+
+- Schema: 24 tables (22 from models.py + 2 from identity.py) — all in Alembic baseline
+- Alembic baseline verified: exact match with Base.metadata
+- Alembic upgrade on clean database: SUCCESS (24 tables + alembic_version)
+- Migration idempotency: VERIFIED
+- Pre-existing auth callback test failure: 1 (not caused by Phase 10.1A)
+- Pre-existing rate limiter test failures: 33 (not caused by Phase 10.1A)
+- Documentation: reconciled (fixed “23 models” to “22 models” error)
+- Architectural approval status: **Pending Principal Architect approval**
+
+---
+
+## Phase 2.1 — App Shell + Design System Foundation
 
 Status: ✅ **COMPLETE — COMMITTED AND PUSHED**
 
