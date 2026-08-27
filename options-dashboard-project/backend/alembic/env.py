@@ -11,7 +11,7 @@ same resolution logic used by app.db._engine().
 
 import os
 import sys
-from logging.config import fileConfig
+import logging
 
 from sqlalchemy import engine_from_config, pool
 
@@ -30,9 +30,12 @@ from app.identity import User, UserSession  # noqa: E402, F401  — Phase 10.1 i
 # access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Configure logging for Alembic WITHOUT using fileConfig.
+# fileConfig() modifies the root logger globally (adds StreamHandler,
+# changes level), which interferes with pytest's caplog fixture.
+# Instead, configure only the specific loggers Alembic needs.
+logging.getLogger("alembic").setLevel(logging.INFO)
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 # Metadata for autogenerate support — Alembic compares this against
 # the live database to detect schema differences.

@@ -25,7 +25,7 @@ reaching its limits — it creates tables on startup but cannot alter existing o
 Establish Alembic as the migration framework. Phase 10.1A implements:
 
 1. **Alembic infrastructure** — `alembic.ini`, `alembic/env.py`, baseline migration
-2. **Baseline migration** — captures the complete current schema (24 tables)
+2. **Baseline migration** — captures the complete current schema (24 tables: 23 from `models.py` + `users`/`user_sessions` from `identity.py`)
 3. **Startup integration** — `init_db()` runs Alembic migrations, then `create_all()` as safety net
 4. **Auth path cleanup** — `ensure_identity_schema()` removed from all request handlers
 5. **Identity module cleanup** — `ensure_identity_schema()` removed from `identity.py`
@@ -82,6 +82,17 @@ No ensure_column().
 - Remove `ensure_column()` function entirely
 - Production databases must be stamped before this change
 
+### Alembic logging fix (Phase 10.1A hardening)
+
+Alembic's default `env.py` uses `fileConfig()` which modifies the root logger
+ globally (adds `StreamHandler`, changes level). This interferes with pytest's
+ `caplog` fixture, causing flaky test failures in `test_strike_selection.py`.
+
+**Fix**: Replaced `fileConfig()` with targeted `logging.getLogger()` calls
+ that configure only `alembic` and `sqlalchemy.engine` loggers without touching
+ the root logger. This preserves Alembic CLI output while avoiding test
+ interference.
+
 ## 4. create_all() Status
 
 ### Current behavior
@@ -94,7 +105,7 @@ Creates any tables in `Base.metadata` that do not yet exist in the database. Doe
 
 ### Remaining dependency
 
-**All 24 Base.metadata tables are already in the Alembic baseline migration.** `create_all()` is effectively a no-op for new databases. It exists as a safety net for:
+**All 24 Base.metadata tables are already in the Alembic baseline migration.** (`greeks_checkpoint` is NOT in Base.metadata — it is a CLI-only table created via raw SQL.) `create_all()` is effectively a no-op for new databases. It exists as a safety net for:
 
 1. Edge cases where Alembic migration fails silently
 2. Tables added to `Base.metadata` but not yet in a migration
@@ -117,6 +128,9 @@ Remove `create_all()` once:
 ## 5. ensure_column() Inventory
 
 ### Complete catalog of all 15 ensure_column() calls
+
+All 15 calls add columns to tables that are in the Alembic baseline. The columns
+themselves are also in the baseline (verified by autogenerate).
 
 | # | Table | Column | DDL | Phase | In Alembic Baseline | Migration Needed | Risk of Removing |
 |---|-------|--------|-----|-------|--------------------|--------------------|------------------|

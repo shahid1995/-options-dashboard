@@ -208,7 +208,8 @@ def init_db():
     _run_alembic_migrations()
 
     # Step 2: create_all() safety net (TRANSITIONAL — will be removed).
-    # Currently all 24 Base.metadata tables ARE in the Alembic baseline,
+    # Currently all 24 Base.metadata tables (23 from models.py + 1 from
+    # identity.py: users, user_sessions) ARE in the Alembic baseline,
     # so this is effectively a no-op. It remains as a safety net during
     # the transition period. Once all tables are confirmed in migrations
     # and the ensure_column() calls are converted, this line should be
