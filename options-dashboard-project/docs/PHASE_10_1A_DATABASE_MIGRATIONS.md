@@ -514,25 +514,68 @@ No special steps — `init_db()` runs `alembic upgrade head` on first startup.
 
 ## 12. Remaining Risks
 
-1. **`create_all()` safety net** — Still runs after Alembic. Will be removed in Phase 10.1B.
-2. **`ensure_column()` calls** — 15 legacy calls remain. All redundant with baseline. Will be removed in Phase 10.1B.
-3. **`greeks_checkpoint` table** — CLI-only, not in web schema. Documented decision to leave as-is.
-4. **Pre-existing auth test failures (3)** — Callback test needs `get_profile()` mock; 2 logout tests need identity tables in fixture. All pre-existing on identity foundation branch.
-5. **Production stamp procedure** — Must be followed carefully. See §7.
+1. **`greeks_checkpoint` table** — CLI-only, not in web schema. Documented decision to leave as-is.
+2. **Pre-existing auth test failures (3)** — Callback test needs `get_profile()` mock; 2 logout tests need identity tables in fixture. All pre-existing on identity foundation branch.
+3. **Production stamp procedure** — Must be followed carefully. See §7.
+4. **Production databases must be stamped** — Before deploying Phase 10.1B code, existing production databases must be stamped with `alembic stamp head`.
 
-## 13. Phase 10.1B Prerequisites
+## 13. Phase 10.1B — Database Migration Cutover
 
-Before Phase 10.1B can begin:
+**Status: ✅ COMPLETE**
 
-1. ✅ Alembic infrastructure established (Phase 10.1A)
-2. ✅ Baseline migration covers all tables (Phase 10.1A)
-3. ✅ Auth path cleaned of DDL (Phase 10.1A)
-4. ⬜ All production databases stamped with `alembic stamp head`
-5. ⬜ Production schema verified equivalent to Alembic baseline
-6. ⬜ Pre-existing auth callback test fixed (Phase 10.1 prerequisite)
+Phase 10.1B completed the transition from transitional/ad-hoc schema management to Alembic-only.
 
-Phase 10.1B will:
-- Convert `ensure_column()` calls to Alembic migrations (no-op migrations documenting the columns)
-- Remove `create_all()` from `init_db()`
-- Remove `ensure_column()` and `_existing_columns()` functions
-- Result: Alembic as sole schema management mechanism
+### What was removed
+
+| Mechanism | Before | After |
+|-----------|--------|-------|
+| `Base.metadata.create_all()` | Called in `init_db()` | **REMOVED** — Alembic is sole schema DDL |
+| `ensure_column()` × 15 | Called in `init_db()` | **REMOVED** — all columns in Alembic baseline |
+| `_existing_columns()` | Helper for `ensure_column` | **REMOVED** |
+
+### What remains
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `_run_alembic_migrations()` | ✅ Kept | Sole schema management |
+| `backfill_all_exposures()` | ✅ Kept | Data migration, not DDL |
+| Composite indexes (SQLite) | ✅ Kept | Not in Alembic baseline, idempotent |
+| `greeks_checkpoint` | ✅ Unchanged | CLI-only, raw SQL |
+| CLI tools (candle_backfill, etc.) | ✅ Unchanged | Use `create_all()` independently |
+
+### Test infrastructure
+
+- Tests still use `Base.metadata.create_all()` in their own fixtures (test-local engines)
+- Production `init_db()` no longer calls `create_all()`
+- Alembic `env.py` updated to accept a provided engine (critical for in-memory SQLite tests)
+
+### Final init_db() architecture
+
+```
+Application startup (init_db)
+    |
+    v
+Step 1: Alembic upgrade head        <-- Sole schema management
+    |
+    v
+Step 2: backfill_all_exposures()    <-- Data migration (idempotent)
+    |
+    v
+Step 3: Composite indexes           <-- SQLite-only (idempotent)
+```
+
+### Regression test results
+
+```
+Phase 10.1A/B core tests (21 collected): 21/21 passed
+  test_alembic_migrations.py       — 9/9 passed
+  test_db_migration.py             — 8/8 passed
+  test_identity_foundation.py      — 4/4 passed
+
+Regression batches:
+  Broad regression (35 files)      — 1208 passed, 7 skipped
+  Candle/contract/resolution/auth  — 478 passed, 3 failed (pre-existing auth)
+  Phase 712-724 tests              — 479 passed, 48 failed (all pre-existing)
+
+Zero Phase 10.1B-introduced failures.
+```

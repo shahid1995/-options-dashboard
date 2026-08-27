@@ -1,24 +1,23 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-27 (re-verified)_
+_Last updated: 2026-08-27_
 
 ## Current phase
 
-**Phase 10.1A — Database Migration Foundation**
+**Phase 10.1B — Database Migration Cutover**
 
-Status: ✅ **COMPLETE — Principal Architect APPROVED, awaiting merge**
+Status: ✅ **COMPLETE — Alembic is sole schema mechanism, pending Principal Architect approval**
 
-- Schema: 24 tables (22 from models.py + 2 from identity.py) — all in Alembic baseline
-- Alembic baseline verified: exact match with Base.metadata
-- Alembic upgrade on clean database: SUCCESS (24 tables + alembic_version)
-- Migration idempotency: VERIFIED
-- Pre-existing auth test failures: 3 (callback mock gap + logout fixture gap — not caused by Phase 10.1A)
-- Pre-existing data pipeline test failures: ~57 across phase724_5/6/7/8a/8b/8c (not caused by Phase 10.1A)
-- Documentation: reconciled (fixed “23 models” to “22 models” error)
+- What changed: removed create_all(), ensure_column(), _existing_columns() from production startup
+- Alembic baseline: d3eb45a2e046 (24 tables — all columns confirmed)
+- No new migration needed (all 15 legacy columns already in baseline)
+- init_db() now: Alembic upgrade → backfill → composite indexes
+- 11 regression tests updated/added for Phase 10.1B
+- Tests this session: ~2,188 passed, ~51 failed (all pre-existing), 7 skipped
+- Zero Phase 10.1B-introduced failures
 - PostgreSQL verification: NOT AVAILABLE in local environment (SQLite only)
 - Production database touched: NO
-- Architectural approval status: **🟢 APPROVED by Principal Architect**
-- Merge status: **Awaiting merge** (do not merge until Phase 10.1B is ready)
+- Architectural approval status: **Pending Principal Architect approval**
 
 ---
 

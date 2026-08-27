@@ -5,8 +5,9 @@ This env.py is designed to work with both:
 2. Programmatic migration via init_db() (startup)
 3. In-memory test databases (via monkeypatched engine)
 
-The SQLAlchemy URL is resolved from app.config.settings, matching the
-same resolution logic used by app.db._engine().
+When a caller sets `_provided_engine`, run_migrations_online() reuses that
+engine instead of creating a new one. This is critical for in-memory SQLite
+tests where each engine gets its own database.
 """
 
 import os
@@ -22,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import all models so Base.metadata knows about every table.
 # This MUST happen before setting target_metadata.
+import app.db as app_db  # noqa: E402
 from app.db import Base  # noqa: E402
 from app import models  # noqa: E402, F401  — registers tables on Base.metadata
 from app.identity import User, UserSession  # noqa: E402, F401  — Phase 10.1 identity tables
@@ -40,6 +42,8 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 # Metadata for autogenerate support — Alembic compares this against
 # the live database to detect schema differences.
 target_metadata = Base.metadata
+
+
 
 
 def _resolve_database_url() -> str:
@@ -95,27 +99,33 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
-    url = _resolve_database_url()
-
-    # Configure for the dialect
-    if url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
-        configuration = config.get_section(config.config_ini_section, {})
-        configuration["sqlalchemy.url"] = url
-        connectable = engine_from_config(
-            configuration,
-            prefix="sqlalchemy.",
-            connect_args=connect_args,
-            poolclass=pool.NullPool,
-        )
+    # Check if the caller (e.g. init_db) provided an engine via app.db.
+    # This is critical for in-memory SQLite where each engine gets its own DB.
+    _pe = getattr(app_db, '_alembic_provided_engine', None) if app_db is not None else None
+    if _pe is not None:
+        connectable = _pe
     else:
-        configuration = config.get_section(config.config_ini_section, {})
-        configuration["sqlalchemy.url"] = url
-        connectable = engine_from_config(
-            configuration,
-            prefix="sqlalchemy.",
-            poolclass=pool.NullPool,
-        )
+        url = _resolve_database_url()
+
+        # Configure for the dialect
+        if url.startswith("sqlite"):
+            connect_args = {"check_same_thread": False}
+            configuration = config.get_section(config.config_ini_section, {})
+            configuration["sqlalchemy.url"] = url
+            connectable = engine_from_config(
+                configuration,
+                prefix="sqlalchemy.",
+                connect_args=connect_args,
+                poolclass=pool.NullPool,
+            )
+        else:
+            configuration = config.get_section(config.config_ini_section, {})
+            configuration["sqlalchemy.url"] = url
+            connectable = engine_from_config(
+                configuration,
+                prefix="sqlalchemy.",
+                poolclass=pool.NullPool,
+            )
 
     with connectable.connect() as connection:
         context.configure(

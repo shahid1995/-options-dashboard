@@ -1,11 +1,11 @@
-"""Tests for the Phase 10.1A Alembic migration infrastructure.
+"""Tests for the Alembic migration infrastructure (Phase 10.1A/B).
 
 These tests verify:
 1. Alembic baseline migration creates all tables including users/user_sessions
 2. Migrations are idempotent (upgrade head is safe to run multiple times)
-3. init_db() runs Alembic migrations and falls back to create_all()
-4. Schema detection matches model definitions
-5. No runtime DDL in auth path
+3. init_db() runs Alembic migrations as sole schema mechanism
+4. No runtime DDL in auth path
+5. Phase 10.1B: no create_all() or ensure_column() in production startup
 """
 
 import os
@@ -18,14 +18,19 @@ from sqlalchemy.pool import StaticPool
 
 
 @pytest.fixture
-def fresh_engine():
-    """Create a fresh in-memory SQLite engine for migration tests."""
+def fresh_engine(tmp_path):
+    """Create a fresh file-based SQLite engine for migration tests.
+
+    File-based, not in-memory, because Alembic creates its own engine
+    internally. Both must point to the same database file.
+    """
+    db_path = tmp_path / "test_fresh.db"
     engine = create_engine(
-        "sqlite://",
+        f"sqlite:///{db_path}",
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
-    return engine
+    yield engine
+    engine.dispose()
 
 
 @pytest.fixture
@@ -72,7 +77,7 @@ def test_alembic_baseline_creates_all_model_tables(fresh_engine):
 
 
 def test_init_db_uses_alembic_when_available(monkeypatch, fresh_engine):
-    """Verify init_db() calls Alembic migrations then create_all()."""
+    """Verify init_db() calls Alembic migrations as sole schema mechanism."""
     monkeypatch.setattr("app.db.engine", fresh_engine)
     monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=fresh_engine))
 
@@ -170,6 +175,28 @@ def test_alembic_stamped_database_is_upgradeable(temp_db):
         result = conn.execute(text("SELECT version_num FROM alembic_version")).fetchall()
         assert len(result) == 1, "alembic_version table should have exactly one row"
     engine2.dispose()
+
+
+def test_production_init_db_has_no_create_all():
+    """Phase 10.1B: production init_db() must not call create_all()."""
+    import inspect
+    import app.db as db_module
+    source = inspect.getsource(db_module.init_db)
+    assert "create_all" not in source, (
+        "init_db() must not call create_all() after Phase 10.1B. "
+        "Alembic is the sole schema management mechanism."
+    )
+
+
+def test_production_init_db_has_no_ensure_column():
+    """Phase 10.1B: production init_db() must not call ensure_column()."""
+    import inspect
+    import app.db as db_module
+    source = inspect.getsource(db_module.init_db)
+    assert "ensure_column" not in source, (
+        "init_db() must not call ensure_column() after Phase 10.1B. "
+        "All legacy columns are in the Alembic baseline."
+    )
 
 
 def test_auth_callback_does_not_call_ensure_identity_schema(monkeypatch):
