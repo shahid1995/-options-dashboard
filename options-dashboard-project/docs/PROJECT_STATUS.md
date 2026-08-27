@@ -492,6 +492,8 @@ ChatGPT review: ⏳ pending
 | Phase 7 — Journal & performance analytics | ⏳ Planned | Not started |
 | Phase 8 — Backtesting | ⏳ Planned | Not started |
 | Phase 9 — Strategy scanner | ⏳ Planned | Not started |
+| Phase 10.1 — Alembic migration foundation | ✅ Complete | PR #20 merged to feat/phase-10-identity-foundation |
+| Phase 10.2 — Identity & session hardening | 🔄 Design | Design document created (PHASE_10_2_IDENTITY_HARDENING.md) — pending Principal Architect approval |
 | Phase 10 — Custom trading terminal/dashboard | ⏳ Planned | Not started |
 | Phase 11 — Automation / alerts | ⏳ Planned | Not started |
 | Phase 12 — Multi-broker expansion | ⏳ Planned | Foundation pulled forward + implemented in Phase 6.5.0.2 (broker-neutral contracts, gateway/registry, Upstox adapter). Remaining: second broker (architectural proof test), additional adapters, persistent multi-broker connections, account-management UI, broker capability matrices |
