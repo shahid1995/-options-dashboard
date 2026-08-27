@@ -1,12 +1,12 @@
 # Phase 10.1A — Database Migration Foundation
 
-_Last updated: 2026-08-27_
+_Last updated: 2026-08-27 (verified)_
 
 ## Status
 
 **CONDITIONALLY APPROVED — Final verification complete, pending Principal Architect approval**
 
-_Verification date: 2026-08-27_
+_Verification date: 2026-08-27 (re-verified, documentation corrected)_
 
 ## 1. Problem
 
@@ -417,7 +417,7 @@ Phase 10.1A core tests (32 collected):
   test_alembic_migrations.py         — 7/7 passed
   test_identity_foundation.py        — 4/4 passed
   test_db_migration.py               — 7/7 passed
-  test_auth_router.py                — 11/12 passed (1 pre-existing failure)
+  test_auth_router.py                — 11/14 passed (3 pre-existing failures)
 
 Regression batches (representative, not exhaustive due to environment):
   test_cors.py                       — 11/11 passed
@@ -461,30 +461,44 @@ Regression batches (representative, not exhaustive due to environment):
   test_upstox*.py (3)                — passed
   test_phase723*.py (2)              — 68 passed
   test_phase724_1-4.py (4)           — 177 passed
-  test_phase724_5-9.py (5)           — 190 passed, 62 failed (pre-existing)
+  test_phase724_5-9.py (8 files)     — ~167 passed, ~80 failed (all pre-existing)
   test_phase721_persistence.py       — 26 passed, 1 failed (pre-existing)
 ```
 
 ### Pre-existing failures (NOT caused by Phase 10.1A)
 
 ```
-tests/test_auth_router.py::test_callback_with_code_sets_session_cookie_and_redirects
-```
+tests/test_auth_router.py — 3 failures:
+  1. test_callback_with_code_sets_session_cookie_and_redirects
+     Fails because callback calls get_profile() after token exchange,
+     but test only mocks exchange_code_for_token. Verified pre-existing.
+  2. test_logout_clears_token
+     Fails with 'no such table: user_sessions' — test fixture does not
+     create identity tables. Verified pre-existing (identity foundation
+     added session-dependent logout logic).
+  3. test_logout_via_header
+     Same fixture gap as above.
 
-This test fails because the callback calls `get_profile()` after token exchange,
-but the test only mocks `exchange_code_for_token`. Verified as pre-existing.
-
-```
 tests/test_phase724_8c_rate_limiter.py — 33 failures
-```
+  Pre-existing async rate limiter test failures unrelated to Phase 10.1A.
 
-Pre-existing async rate limiter test failures unrelated to Phase 10.1A.
+tests/test_phase724_8b_optimized_backfill.py — ~9 failures
+  Pre-existing backfill concurrency test failures.
 
-```
-tests/test_phase721_persistence.py::TestDatabasePathDeterminism::test_engine_url_is_absolute
-```
+tests/test_phase724_8a_backfill_optimization.py — 5 failures
+  Pre-existing backfill optimization test failures.
 
-Pre-existing: engine URL resolution differs in test environment (gets bare `sqlite://` instead of absolute path).
+tests/test_phase724_5_backfill_orchestrator.py — 7 failures
+  Pre-existing backfill orchestrator test failures.
+
+tests/test_phase724_6_daily_ingestion.py — 1 failure
+  Pre-existing: 'OptionGreeks is not defined' import error in test fixture.
+
+tests/test_phase724_7_production_readiness.py — 1 failure
+  Pre-existing: checkpoint recovery test assertion mismatch.
+
+tests/test_phase721_persistence.py::test_engine_url_is_absolute — 1 failure
+  Pre-existing: engine URL resolution differs in test environment.
 
 ## 11. Deployment Instructions
 
@@ -503,7 +517,7 @@ No special steps — `init_db()` runs `alembic upgrade head` on first startup.
 1. **`create_all()` safety net** — Still runs after Alembic. Will be removed in Phase 10.1B.
 2. **`ensure_column()` calls** — 15 legacy calls remain. All redundant with baseline. Will be removed in Phase 10.1B.
 3. **`greeks_checkpoint` table** — CLI-only, not in web schema. Documented decision to leave as-is.
-4. **Pre-existing auth callback test failure** — Needs mock for `get_profile()` on Phase 10.1 identity branch.
+4. **Pre-existing auth test failures (3)** — Callback test needs `get_profile()` mock; 2 logout tests need identity tables in fixture. All pre-existing on identity foundation branch.
 5. **Production stamp procedure** — Must be followed carefully. See §7.
 
 ## 13. Phase 10.1B Prerequisites

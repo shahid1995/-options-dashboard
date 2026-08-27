@@ -1,20 +1,22 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-27_
+_Last updated: 2026-08-27 (re-verified)_
 
 ## Current phase
 
 **Phase 10.1A — Database Migration Foundation**
 
-Status: ✅ **COMPLETE — Final verification passed, pending Principal Architect approval**
+Status: ✅ **COMPLETE — Re-verified, pending Principal Architect approval**
 
 - Schema: 24 tables (22 from models.py + 2 from identity.py) — all in Alembic baseline
 - Alembic baseline verified: exact match with Base.metadata
 - Alembic upgrade on clean database: SUCCESS (24 tables + alembic_version)
 - Migration idempotency: VERIFIED
-- Pre-existing auth callback test failure: 1 (not caused by Phase 10.1A)
-- Pre-existing rate limiter test failures: 33 (not caused by Phase 10.1A)
+- Pre-existing auth test failures: 3 (callback mock gap + logout fixture gap — not caused by Phase 10.1A)
+- Pre-existing data pipeline test failures: ~57 across phase724_5/6/7/8a/8b/8c (not caused by Phase 10.1A)
 - Documentation: reconciled (fixed “23 models” to “22 models” error)
+- PostgreSQL verification: NOT AVAILABLE in local environment (SQLite only)
+- Production database touched: NO
 - Architectural approval status: **Pending Principal Architect approval**
 
 ---
@@ -208,7 +210,7 @@ The following require interactive browser-based testing with real Upstox OAuth c
 - Strategy Builder CRUD with authenticated session (create, read, update, delete, duplicate)
 - Dynamic template resolution with authenticated session
 - Paper execution lifecycle (preview → confirm → execute)
-- `execution_metadata` after real authenticated execution
+- `execution_metadata` after real authenticated execution
 - Retry/idempotency with real authenticated execution
 - Position/exit workflow (single exit, bulk exit)
 - Authenticated WebSocket live updates
