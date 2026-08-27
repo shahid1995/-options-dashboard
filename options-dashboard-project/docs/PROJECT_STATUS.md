@@ -6,7 +6,7 @@ _Last updated: 2026-08-27_
 
 **Phase 10.1B — Database Migration Cutover**
 
-Status: ✅ **COMPLETE — Alembic is sole schema mechanism, pending Principal Architect approval**
+Status: ✅ **COMPLETE — Alembic is sole schema mechanism, approved and merged (PR #20)**
 
 - What changed: removed create_all(), ensure_column(), _existing_columns() from production startup
 - Alembic baseline: d3eb45a2e046 (24 tables — all columns confirmed)
@@ -18,7 +18,9 @@ Status: ✅ **COMPLETE — Alembic is sole schema mechanism, pending Principal A
 - Zero Phase 10.1B-introduced failures
 - PostgreSQL verification: NOT AVAILABLE in local environment (SQLite only)
 - Production database touched: NO
-- Architectural approval status: **Pending Principal Architect approval**
+- Architectural approval: **🟢 APPROVED by Principal Architect**
+- Merge: PR #20 merged to `feat/phase-10-identity-foundation` (commit `fbb4bc5`)
+- Not yet merged to `main`
 
 ---
 
