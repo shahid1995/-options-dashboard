@@ -82,7 +82,7 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
     provider = str(data.get("broker") or "UPSTOX").strip().upper()
     email = str(data.get("email") or "").strip().lower() or None
     display_name = str(data.get("user_name") or "").strip() or None
-    is_active = data.get("is_active", True)
+    broker_active = bool(data.get("is_active", True))
 
     user = (
         db.query(User)
@@ -95,7 +95,7 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
             id=str(uuid4()),
             email=email,
             display_name=display_name,
-            status="active" if is_active else "suspended",
+            status="active" if broker_active else "suspended",
             identity_source="upstox",
             broker_provider=provider,
             broker_user_id=broker_user_id,
@@ -105,7 +105,11 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
     else:
         user.email = email or user.email
         user.display_name = display_name or user.display_name
-        user.status = "active" if is_active else "suspended"
+        # Do not let broker login silently undo a future StrikeNova admin
+        # suspension/disable action. Only an active account may be refreshed
+        # by broker activity; disabled/suspended are platform-owned states.
+        if user.status == "active" and not broker_active:
+            user.status = "suspended"
         user.last_login_at = _utcnow()
 
     db.flush()
