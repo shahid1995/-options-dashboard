@@ -120,9 +120,8 @@ def _run_alembic_migrations() -> None:
     """Run Alembic migrations against the current engine.
 
     Called from init_db() to apply versioned schema migrations at startup.
-    This replaces the previous ``create_all``-only approach: Alembic now owns
-    the authoritative schema definition for new databases, while ``create_all``
-    serves as a safety net for any tables not yet captured in migrations.
+    This is the PRIMARY schema management path — Alembic owns the
+    authoritative schema definition.
 
     For existing databases created by the old ``create_all`` path, run
     ``alembic stamp head`` once to mark them as current before deploying
@@ -137,31 +136,124 @@ def _run_alembic_migrations() -> None:
     # Override sqlalchemy.url to use the current engine's URL so tests
     # with monkeypatched engines still work correctly.
     alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
-    try:
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Alembic migrations applied successfully")
-    except Exception as e:
-        logger.warning("Alembic migration failed (falling back to create_all): %s", e)
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Alembic migrations applied successfully")
+
+
+# ---------------------------------------------------------------------------
+# TRANSITIONAL SCHEMA ARCHITECTURE (Phase 10.1A)
+# ---------------------------------------------------------------------------
+#
+# The current startup sequence is a TRANSITIONAL architecture:
+#
+#   1. Alembic upgrade head      — versioned, authoritative
+#   2. create_all()              — safety net (transitional)
+#   3. ensure_column()           — legacy column additions (transitional)
+#   4. backfill + indexes        — data migrations
+#
+# TARGET architecture (to be completed in future phases):
+#
+#   Application start
+#       |
+#       v
+#   Alembic upgrade head    — ONLY schema management mechanism
+#       |
+#       v
+#   No request-path DDL.
+#   No create_all().
+#   No ensure_column().
+#
+# The create_all() and ensure_column() calls below exist because:
+#   - Alembic baseline was just introduced; all existing tables ARE
+#     captured, but the safety net protects against edge cases.
+#   - ensure_column() calls cover columns added in Phases 5.0-8F
+#     that predate Alembic and have not yet been converted to
+#     proper Alembic migrations.
+#
+# These will be removed in Phase 10.1B when all legacy columns
+# are migrated to Alembic.
+#
+# PRODUCTION SAFETY: create_all() and ensure_column() only run during
+# application startup (init_db), NEVER during request handling.
+# The auth path was cleaned in Phase 10.1A to remove all DDL.
+# ---------------------------------------------------------------------------
 
 
 def init_db():
-    """Creates tables on startup. Imported lazily so models can import Base."""
+    """Initialize database schema on application startup.
+
+    **TRANSITIONAL ARCHITECTURE** — This function runs a multi-step
+    schema initialization that will be simplified in future phases.
+
+    Current sequence:
+      1. Alembic upgrade head (authoritative, versioned)
+      2. create_all() (safety net for unmigrated tables — transitional)
+      3. ensure_column() (legacy column additions — transitional)
+      4. backfill + indexes (data migrations)
+
+    Target sequence (Phase 10.1B+):
+      1. Alembic upgrade head (sole schema management)
+
+    This function is called ONCE at application startup from the
+    FastAPI lifespan handler. It is NEVER called during request
+    processing.
+    """
+    import logging
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
-    # Phase 10.1A: Run Alembic migrations first for versioned schema management.
-    # Fall back to create_all for any tables not yet captured in migrations.
-    try:
-        _run_alembic_migrations()
-    except Exception:
-        pass  # Logged inside _run_alembic_migrations; proceed with create_all
+    logger = logging.getLogger(__name__)
 
-    # Safety net: create_all creates tables not yet in Alembic migrations.
-    # Once all tables are in migrations, this becomes a no-op.
+    # Step 1: Alembic migrations (authoritative schema management).
+    # This MUST succeed — if it fails, the application should not start.
+    _run_alembic_migrations()
+
+    # Step 2: create_all() safety net (TRANSITIONAL — will be removed).
+    # Currently all 24 Base.metadata tables ARE in the Alembic baseline,
+    # so this is effectively a no-op. It remains as a safety net during
+    # the transition period. Once all tables are confirmed in migrations
+    # and the ensure_column() calls are converted, this line should be
+    # removed.
+    #
+    # IMPORTANT: This MUST NOT run during request handling. It only runs
+    # during application startup via init_db().
     Base.metadata.create_all(bind=engine)
-    # Phase 6.7: strategy_templates and strategy_template_legs tables are
-    # created by create_all above.
-    # Phase 6.8B: add V2 dynamic formula columns to strategy_template_legs.
-    # All nullable with defaults — idempotent and safe on existing V1 rows.
+    # -----------------------------------------------------------------------
+    # LEGACY ensure_column() CALLS (TRANSITIONAL — will be removed in 10.1B)
+    # -----------------------------------------------------------------------
+    #
+    # These 15 ensure_column() calls add columns to existing tables that
+    # were introduced in Phases 5.0-8F, before Alembic was adopted.
+    # They are all nullable with defaults, idempotent, and safe.
+    #
+    # INVENTORY (see docs/PHASE_10_1A_DATABASE_MIGRATIONS.md §ensure_column):
+    #
+    # Table                     Column               Phase  In Alembic?  Migration needed?
+    # ------------------------- -------------------- ------ ------------ -----------------
+    # strategy_template_legs    strike_mode           6.8B   YES (enum)   NO — in baseline
+    # strategy_template_legs    strike_offset         6.8B   YES          NO — in baseline
+    # strategy_template_legs    strike_offset_pct     6.8B   YES          NO — in baseline
+    # strategy_template_legs    target_delta          6.8B   YES          NO — in baseline
+    # strategy_template_legs    expiry_mode           6.8B   YES          NO — in baseline
+    # strategy_template_legs    expiry_dte_min        6.8B   YES          NO — in baseline
+    # strategy_template_legs    expiry_dte_max        6.8B   YES          NO — in baseline
+    # strategy_template_legs    formula_version       6.8B   YES          NO — in baseline
+    # strategy_executions       execution_metadata    6.10   YES          NO — in baseline
+    # strategy_executions       tags                  7.0    YES          NO — in baseline
+    # strategy_executions       notes                 7.0    YES          NO — in baseline
+    # trades                    strategy_execution_id 5.0    YES          NO — in baseline
+    # trades                    client_order_id       5.0    YES          NO — in baseline
+    # gex_snapshots             sweep_data            7.6    YES          NO — in baseline
+    # gex_snapshots             owner_id              8F     YES          NO — in baseline
+    #
+    # ALL of these columns are already represented in the Alembic baseline
+    # migration (d3eb45a2e046). The ensure_column() calls are redundant
+    # for new databases. They exist solely for pre-existing databases that
+    # were created before the Alembic baseline and have not yet been
+    # stamped. Once production databases are stamped, these can be removed.
+    #
+    # Phase 10.1B action: Convert these to a single Alembic migration that
+    # is a no-op (columns already exist), then remove these calls.
+    # -----------------------------------------------------------------------
     ensure_column(engine, "strategy_template_legs", "strike_mode", "VARCHAR(20) DEFAULT 'fixed'")
     ensure_column(engine, "strategy_template_legs", "strike_offset", "INTEGER NULL")
     ensure_column(engine, "strategy_template_legs", "strike_offset_pct", "FLOAT NULL")
@@ -170,16 +262,12 @@ def init_db():
     ensure_column(engine, "strategy_template_legs", "expiry_dte_min", "INTEGER NULL")
     ensure_column(engine, "strategy_template_legs", "expiry_dte_max", "INTEGER NULL")
     ensure_column(engine, "strategy_template_legs", "formula_version", "INTEGER DEFAULT 1")
-    # Phase 6.10: V2 execution audit trail
     ensure_column(engine, "strategy_executions", "execution_metadata", "TEXT NULL")
     ensure_column(engine, "strategy_executions", "tags", "TEXT NULL")
     ensure_column(engine, "strategy_executions", "notes", "TEXT NULL")
-    # Existing databases predate the Phase 5.0 journal-linkage columns.
     ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
     ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
-    # Phase 7.6: sweep enrichment column on gex_snapshots
     ensure_column(engine, "gex_snapshots", "sweep_data", "TEXT NULL")
-    # Phase 8F: owner_id for multi-user snapshot isolation
     ensure_column(engine, "gex_snapshots", "owner_id", "VARCHAR(128) NULL")
     # Phase 6.5.0.1: conservative one-time backfill of strategy-leg
     # attribution for pre-existing, provably unambiguous executions.
