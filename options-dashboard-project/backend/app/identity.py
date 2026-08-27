@@ -9,12 +9,11 @@ broker tokens remain in the existing token store.
 from __future__ import annotations
 
 import hashlib
-import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, Session
+from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base, engine
 
@@ -92,9 +91,6 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
     )
 
     if user is None:
-        # Email is useful as an initial identity hint, but it is deliberately
-        # not marked "verified" by this phase; broker authentication is not a
-        # substitute for StrikeNova email verification policy.
         user = User(
             id=str(uuid4()),
             email=email,
@@ -144,7 +140,7 @@ def revoke_session(db: Session, session_id: str) -> bool:
 
 
 def get_active_session(db: Session, session_id: str | None) -> UserSession | None:
-    if not session_id or not secrets.compare_digest(session_id, session_id):
+    if not session_id:
         return None
     now = _utcnow()
     return (
