@@ -116,10 +116,47 @@ def ensure_column(engine, table: str, column: str, ddl: str) -> None:
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
 
+def _run_alembic_migrations() -> None:
+    """Run Alembic migrations against the current engine.
+
+    Called from init_db() to apply versioned schema migrations at startup.
+    This replaces the previous ``create_all``-only approach: Alembic now owns
+    the authoritative schema definition for new databases, while ``create_all``
+    serves as a safety net for any tables not yet captured in migrations.
+
+    For existing databases created by the old ``create_all`` path, run
+    ``alembic stamp head`` once to mark them as current before deploying
+    this code.
+    """
+    import logging
+    from alembic.config import Config
+    from alembic import command
+
+    logger = logging.getLogger(__name__)
+    alembic_cfg = Config("alembic.ini")
+    # Override sqlalchemy.url to use the current engine's URL so tests
+    # with monkeypatched engines still work correctly.
+    alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    try:
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic migrations applied successfully")
+    except Exception as e:
+        logger.warning("Alembic migration failed (falling back to create_all): %s", e)
+
+
 def init_db():
     """Creates tables on startup. Imported lazily so models can import Base."""
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
+    # Phase 10.1A: Run Alembic migrations first for versioned schema management.
+    # Fall back to create_all for any tables not yet captured in migrations.
+    try:
+        _run_alembic_migrations()
+    except Exception:
+        pass  # Logged inside _run_alembic_migrations; proceed with create_all
+
+    # Safety net: create_all creates tables not yet in Alembic migrations.
+    # Once all tables are in migrations, this becomes a no-op.
     Base.metadata.create_all(bind=engine)
     # Phase 6.7: strategy_templates and strategy_template_legs tables are
     # created by create_all above.

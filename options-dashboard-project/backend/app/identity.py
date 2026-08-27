@@ -15,7 +15,7 @@ from uuid import uuid4
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
-from app.db import Base, engine
+from app.db import Base
 
 
 SESSION_TTL = timedelta(hours=24)
@@ -53,17 +53,6 @@ class UserSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-def ensure_identity_schema() -> None:
-    """Create only the Phase 10 identity tables if they do not exist yet.
-
-    The application currently uses ``Base.metadata.create_all`` rather than
-    Alembic migrations. This isolated create_all is intentionally limited to
-    the new identity tables so Phase 10 can be introduced without touching
-    existing schema objects.
-    """
-    Base.metadata.create_all(bind=engine, tables=[User.__table__, UserSession.__table__])
 
 
 def hash_session_id(session_id: str) -> str:
