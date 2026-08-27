@@ -1,14 +1,24 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
+
 from app.brokers.domain.enums import BROKER_ID_UPSTOX
 from app.brokers.domain.errors import BrokerError
 from app.brokers.gateway import gateway
+from app.config import settings
+from app.db import SessionLocal
+from app.identity import (
+    create_session_record,
+    ensure_identity_schema,
+    get_active_session,
+    get_or_create_user_from_upstox,
+    revoke_session,
+)
 from app.routers.deps import get_session_id
 from app.services import token_store
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +29,7 @@ SESSION_COOKIE = "session_id"
 
 @router.get("/login")
 def login():
-    """Redirects the browser to the broker's login page (via the gateway)."""
+    """Redirect the browser to the broker's login page via the gateway."""
     state = token_store.create_oauth_state()
     adapter = gateway.create(BROKER_ID_UPSTOX)
     return RedirectResponse(adapter.get_authorization_url(state))
@@ -31,7 +41,7 @@ async def callback(
     error: str | None = None,
     state: str | None = None,
 ):
-    """The broker redirects here after the user logs in on their site."""
+    """Complete broker OAuth and bind the session to a durable StrikeNova user."""
     if error:
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(error)}")
     if not token_store.consume_oauth_state(state):
@@ -42,24 +52,50 @@ async def callback(
     try:
         adapter = gateway.create(BROKER_ID_UPSTOX)
         access_token = await adapter.exchange_authorization_code(code)
+        # Upstox's authenticated profile supplies the stable broker user ID
+        # that becomes the external identity key for the StrikeNova account.
+        profile = await gateway.create(BROKER_ID_UPSTOX, access_token=access_token).get_profile()
     except BrokerError as e:
-        logger.error("Token exchange failed: %s", e)
+        logger.error("Token/profile exchange failed: %s", e)
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
-    session_id = token_store.set_token(access_token)
+
+    # Phase 10.1: persist StrikeNova identity and durable session ownership.
+    # The broker access token itself remains exclusively in token_store.
+    ensure_identity_schema()
+    db = SessionLocal()
+    session_id = None
+    try:
+        user = get_or_create_user_from_upstox(db, profile)
+        if user.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+
+        session_id = token_store.set_token(access_token)
+        create_session_record(db, user.id, session_id)
+    except HTTPException:
+        if session_id:
+            token_store.clear_token(session_id)
+        raise
+    except Exception:
+        db.rollback()
+        if session_id:
+            token_store.clear_token(session_id)
+        logger.exception("Failed to persist StrikeNova identity/session")
+        return RedirectResponse(f"{settings.FRONTEND_URL}?login_error=account_setup_failed")
+    finally:
+        db.close()
 
     # Phase 7.24.8: Also persist the token for CLI tools.
     try:
         from app.services.upstox_token_manager import UpstoxTokenManager
-        from datetime import datetime, timedelta, timezone
+
         _mgr = UpstoxTokenManager()
         _mgr.save(access_token, expires_at=datetime.now(timezone.utc) + timedelta(hours=24))
     except Exception:
         logger.debug("Could not persist token to cache (non-critical)")
 
-    # Send the user back to the dashboard, now logged in. The session ID is
-    # passed in the URL fragment (never sent to servers) because the frontend
-    # and backend are on different sites, so browsers that block third-party
-    # cookies would drop the cookie on later API calls.
+    # Send the user back to the dashboard. The session ID is passed in the
+    # URL fragment because it is not sent to servers as a query parameter.
     response = RedirectResponse(f"{settings.FRONTEND_URL}/dashboard#session_id={session_id}")
     response.set_cookie(
         SESSION_COOKIE,
@@ -74,14 +110,55 @@ async def callback(
 
 @router.get("/status")
 def status(session_id: str | None = Depends(get_session_id)):
-    """Frontend calls this to check if we currently have a valid session."""
+    """Frontend calls this to check if the current session is valid."""
     return {"logged_in": token_store.get_token(session_id) is not None}
+
+
+@router.get("/me")
+def me(session_id: str | None = Depends(get_session_id)):
+    """Return the authenticated StrikeNova account without broker secrets."""
+    if token_store.get_token(session_id) is None:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    ensure_identity_schema()
+    db = SessionLocal()
+    try:
+        session = get_active_session(db, session_id)
+        if session is None:
+            raise HTTPException(status_code=401, detail="StrikeNova session is invalid or expired")
+
+        from app.identity import User
+
+        user = db.query(User).filter(User.id == session.user_id).one_or_none()
+        if user is None or user.status != "active":
+            raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+
+        return {
+            "user_id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "status": user.status,
+            "identity_source": user.identity_source,
+            "broker_provider": user.broker_provider,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        }
+    finally:
+        db.close()
 
 
 @router.post("/logout")
 def logout(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
+
+    ensure_identity_schema()
+    db = SessionLocal()
+    try:
+        revoke_session(db, session_id)
+    finally:
+        db.close()
+
     token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
