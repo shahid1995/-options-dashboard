@@ -5,9 +5,10 @@ This env.py is designed to work with both:
 2. Programmatic migration via init_db() (startup)
 3. In-memory test databases (via monkeypatched engine)
 
-When a caller sets `_provided_engine`, run_migrations_online() reuses that
-engine instead of creating a new one. This is critical for in-memory SQLite
-tests where each engine gets its own database.
+When a caller sets ``config.attributes['connectable']``, run_migrations_online()
+reuses that engine instead of creating a new one. This uses Alembic's official
+Config.attributes mechanism and is critical for in-memory SQLite tests where
+each engine gets its own database.
 """
 
 import os
@@ -23,7 +24,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import all models so Base.metadata knows about every table.
 # This MUST happen before setting target_metadata.
-import app.db as app_db  # noqa: E402
 from app.db import Base  # noqa: E402
 from app import models  # noqa: E402, F401  — registers tables on Base.metadata
 from app.identity import User, UserSession  # noqa: E402, F401  — Phase 10.1 identity tables
@@ -99,12 +99,11 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context.
     """
-    # Check if the caller (e.g. init_db) provided an engine via app.db.
-    # This is critical for in-memory SQLite where each engine gets its own DB.
-    _pe = getattr(app_db, '_alembic_provided_engine', None) if app_db is not None else None
-    if _pe is not None:
-        connectable = _pe
-    else:
+    # Check if the caller (e.g. init_db) provided an engine via
+    # Alembic's Config.attributes mechanism. This is the official way
+    # to share a connection and is critical for in-memory SQLite tests.
+    connectable = config.attributes.get("connectable")
+    if connectable is None:
         url = _resolve_database_url()
 
         # Configure for the dialect

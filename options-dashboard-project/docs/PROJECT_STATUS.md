@@ -11,9 +11,10 @@ Status: ✅ **COMPLETE — Alembic is sole schema mechanism, pending Principal A
 - What changed: removed create_all(), ensure_column(), _existing_columns() from production startup
 - Alembic baseline: d3eb45a2e046 (24 tables — all columns confirmed)
 - No new migration needed (all 15 legacy columns already in baseline)
+- Alembic connection: uses Config.attributes (official API, no module-global state)
 - init_db() now: Alembic upgrade → backfill → composite indexes
 - 11 regression tests updated/added for Phase 10.1B
-- Tests this session: ~2,188 passed, ~51 failed (all pre-existing), 7 skipped
+- Tests: ~2,494 passed, ~54 failed (all pre-existing, verified via baseline comparison), 7 skipped
 - Zero Phase 10.1B-introduced failures
 - PostgreSQL verification: NOT AVAILABLE in local environment (SQLite only)
 - Production database touched: NO

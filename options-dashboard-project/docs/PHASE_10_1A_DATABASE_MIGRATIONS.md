@@ -543,11 +543,31 @@ Phase 10.1B completed the transition from transitional/ad-hoc schema management 
 | `greeks_checkpoint` | ✅ Unchanged | CLI-only, raw SQL |
 | CLI tools (candle_backfill, etc.) | ✅ Unchanged | Use `create_all()` independently |
 
+### Alembic connection/engine design
+
+Alembic's official `Config.attributes` mechanism is used to share the current
+engine with `env.py` when running programmatically via `init_db()`:
+
+```python
+# db.py — _run_alembic_migrations()
+alembic_cfg.attributes["connectable"] = engine
+command.upgrade(alembic_cfg, "head")
+```
+
+```python
+# env.py — run_migrations_online()
+connectable = config.attributes.get("connectable")
+```
+
+This avoids module-global state and uses Alembic's supported API. CLI-driven
+`alembic upgrade head` (without `Config.attributes`) falls back to creating
+its own engine from the URL, which is the correct behavior for CLI usage.
+
 ### Test infrastructure
 
 - Tests still use `Base.metadata.create_all()` in their own fixtures (test-local engines)
 - Production `init_db()` no longer calls `create_all()`
-- Alembic `env.py` updated to accept a provided engine (critical for in-memory SQLite tests)
+- Alembic `env.py` uses `Config.attributes` to accept a provided engine
 
 ### Final init_db() architecture
 
@@ -564,7 +584,7 @@ Step 2: backfill_all_exposures()    <-- Data migration (idempotent)
 Step 3: Composite indexes           <-- SQLite-only (idempotent)
 ```
 
-### Regression test results
+### Regression test results (verified with baseline comparison)
 
 ```
 Phase 10.1A/B core tests (21 collected): 21/21 passed
@@ -574,8 +594,22 @@ Phase 10.1A/B core tests (21 collected): 21/21 passed
 
 Regression batches:
   Broad regression (35 files)      — 1208 passed, 7 skipped
-  Candle/contract/resolution/auth  — 478 passed, 3 failed (pre-existing auth)
+  Candle/contract/resolution       — 467 passed
   Phase 712-724 tests              — 479 passed, 48 failed (all pre-existing)
+  GEX reliability (standalone)     — 54 passed
+  Other (live_verification, etc.)  — 265 passed
 
+Total executed: ~2,494 passed, ~54 failed, 7 skipped
 Zero Phase 10.1B-introduced failures.
 ```
+
+### Baseline comparison evidence
+
+| Test/category | Phase 10.1A (5e53ff2) | Phase 10.1B (e468576) | Introduced by 10.1B? |
+|---|---|---|---|
+| Auth router (3+11) | 3 failed, 11 passed | 3 failed, 11 passed | **NO** |
+| Rate limiter (33+8) | 33 failed, 8 passed | 33 failed, 8 passed | **NO** |
+| Backfill optimization (5+32) | 5 failed, 32 passed | 5 failed, 32 passed | **NO** |
+| Phase 721 persistence (1+26) | 1 failed, 26 passed | 1 failed, 26 passed | **NO** |
+| Broad regression (35 files) | 1208 passed, 7 skipped | 1208 passed, 7 skipped | **NO** |
+| Migration tests (18 vs 21) | 18 passed | 21 passed (3 new) | **NO** (new tests added) |

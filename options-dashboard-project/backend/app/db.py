@@ -5,11 +5,6 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
-# Set by _run_alembic_migrations() so Alembic's env.py reuses the same engine.
-# Critical for in-memory SQLite tests where each engine gets its own database.
-_alembic_provided_engine = None
-
-
 class Base(DeclarativeBase):
     pass
 
@@ -96,9 +91,11 @@ def _run_alembic_migrations() -> None:
     This is the PRIMARY schema management path — Alembic owns the
     authoritative schema definition.
 
-    Passes the current engine to Alembic's env.py so it reuses the same
-    connection. This is critical for in-memory SQLite tests where each
-    engine gets its own database.
+    Uses Alembic's ``Config.attributes`` to pass the current engine to
+    env.py. This avoids module-global state and ensures Alembic reuses
+    the same connection — critical for in-memory SQLite tests.
+    CLI-driven ``alembic upgrade head`` (without Config.attributes) falls
+    back to creating its own engine from the URL.
     """
     import logging
     from alembic.config import Config
@@ -107,14 +104,10 @@ def _run_alembic_migrations() -> None:
     logger = logging.getLogger(__name__)
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
-    # Pass the current engine so Alembic's env.py reuses it directly.
-    # Critical for in-memory SQLite tests where each engine gets its own DB.
-    global _alembic_provided_engine
-    _alembic_provided_engine = engine
-    try:
-        command.upgrade(alembic_cfg, "head")
-    finally:
-        _alembic_provided_engine = None
+    # Alembic's official mechanism for sharing a connection.
+    # env.py reads config.attributes['connectable'] when present.
+    alembic_cfg.attributes["connectable"] = engine
+    command.upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations applied successfully")
 
 
