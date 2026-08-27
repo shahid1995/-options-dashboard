@@ -12,7 +12,6 @@ from app.config import settings
 from app.db import SessionLocal
 from app.identity import (
     create_session_record,
-    ensure_identity_schema,
     get_active_session,
     get_or_create_user_from_upstox,
     revoke_session,
@@ -61,7 +60,7 @@ async def callback(
 
     # Phase 10.1: persist StrikeNova identity and durable session ownership.
     # The broker access token itself remains exclusively in token_store.
-    ensure_identity_schema()
+    # Schema is managed by Alembic migrations (Phase 10.1A), not runtime create_all.
     db = SessionLocal()
     session_id = None
     try:
@@ -120,7 +119,7 @@ def me(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    ensure_identity_schema()
+    # Schema is managed by Alembic migrations (Phase 10.1A).
     db = SessionLocal()
     try:
         session = get_active_session(db, session_id)
@@ -152,7 +151,7 @@ def logout(session_id: str | None = Depends(get_session_id)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    ensure_identity_schema()
+    # Schema is managed by Alembic migrations (Phase 10.1A).
     db = SessionLocal()
     try:
         revoke_session(db, session_id)

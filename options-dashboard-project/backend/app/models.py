@@ -50,8 +50,8 @@ class Trade(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
     # Phase 5.0 linkage to the authoritative execution layer (nullable so the
-    # legacy journal path keeps working unchanged; columns added to existing
-    # databases by ``db.init_db``'s ensure_column migration).
+    # legacy journal path keeps working unchanged). Columns added to existing
+    # databases via the Alembic baseline migration (Phase 10.1A/B).
     strategy_execution_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     client_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

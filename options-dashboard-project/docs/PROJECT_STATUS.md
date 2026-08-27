@@ -1,10 +1,28 @@
 # Options Dashboard — Current Project Status
 
-_Last updated: 2026-08-22_
+_Last updated: 2026-08-27_
 
 ## Current phase
 
-**Phase 2.1 — App Shell + Design System Foundation**
+**Phase 10.1B — Database Migration Cutover**
+
+Status: ✅ **COMPLETE — Alembic is sole schema mechanism, pending Principal Architect approval**
+
+- What changed: removed create_all(), ensure_column(), _existing_columns() from production startup
+- Alembic baseline: d3eb45a2e046 (24 tables — all columns confirmed)
+- No new migration needed (all 15 legacy columns already in baseline)
+- Alembic connection: uses Config.attributes (official API, no module-global state)
+- init_db() now: Alembic upgrade → backfill → composite indexes
+- 11 regression tests updated/added for Phase 10.1B
+- Tests: ~2,494 passed, ~54 failed (all pre-existing, verified via baseline comparison), 7 skipped
+- Zero Phase 10.1B-introduced failures
+- PostgreSQL verification: NOT AVAILABLE in local environment (SQLite only)
+- Production database touched: NO
+- Architectural approval status: **Pending Principal Architect approval**
+
+---
+
+## Phase 2.1 — App Shell + Design System Foundation
 
 Status: ✅ **COMPLETE — COMMITTED AND PUSHED**
 
@@ -193,7 +211,7 @@ The following require interactive browser-based testing with real Upstox OAuth c
 - Strategy Builder CRUD with authenticated session (create, read, update, delete, duplicate)
 - Dynamic template resolution with authenticated session
 - Paper execution lifecycle (preview → confirm → execute)
-- `execution_metadata` after real authenticated execution
+- `execution_metadata` after real authenticated execution
 - Retry/idempotency with real authenticated execution
 - Position/exit workflow (single exit, bulk exit)
 - Authenticated WebSocket live updates

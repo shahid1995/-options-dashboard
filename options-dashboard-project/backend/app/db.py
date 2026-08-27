@@ -5,7 +5,6 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
-
 class Base(DeclarativeBase):
     pass
 
@@ -85,81 +84,92 @@ def get_db():
         db.close()
 
 
-def _existing_columns(engine, table: str) -> set[str]:
-    """Names of the columns currently present on ``table`` (SQLite or Postgres)."""
-    with engine.connect() as conn:
-        if engine.dialect.name == "sqlite":
-            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
-            return {r[1] for r in rows}
-        rows = conn.execute(
-            text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name = :table"
-            ),
-            {"table": table},
-        ).fetchall()
-        return {r[0] for r in rows}
+def _run_alembic_migrations() -> None:
+    """Run Alembic migrations against the current engine.
 
+    Called from init_db() to apply versioned schema migrations at startup.
+    This is the PRIMARY schema management path — Alembic owns the
+    authoritative schema definition.
 
-def ensure_column(engine, table: str, column: str, ddl: str) -> None:
-    """Idempotent lightweight migration: add ``column`` if the table lacks it.
-
-    ``create_all`` creates missing *tables* but never alters existing ones.
-    Phase 5.0 added nullable columns to the pre-existing ``trades`` table;
-    this helper adds them to existing databases at startup. New tables are
-    still handled entirely by ``Base.metadata.create_all``.
+    Uses Alembic's ``Config.attributes`` to pass the current engine to
+    env.py. This avoids module-global state and ensures Alembic reuses
+    the same connection — critical for in-memory SQLite tests.
+    CLI-driven ``alembic upgrade head`` (without Config.attributes) falls
+    back to creating its own engine from the URL.
     """
-    if not _existing_columns(engine, table):
-        return  # table does not exist yet; create_all will define it fully
-    if column not in _existing_columns(engine, table):
-        with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+    import logging
+    from alembic.config import Config
+    from alembic import command
+
+    logger = logging.getLogger(__name__)
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+    # Alembic's official mechanism for sharing a connection.
+    # env.py reads config.attributes['connectable'] when present.
+    alembic_cfg.attributes["connectable"] = engine
+    command.upgrade(alembic_cfg, "head")
+    logger.info("Alembic migrations applied successfully")
+
+
+# ---------------------------------------------------------------------------
+# DATABASE SCHEMA ARCHITECTURE (Phase 10.1B — final)
+# ---------------------------------------------------------------------------
+#
+# Alembic is the SOLE authoritative schema management mechanism.
+#
+# Startup sequence:
+#   1. Alembic upgrade head       — versioned, authoritative schema DDL
+#   2. Data backfill (idempotent) — strategy-leg attribution backfill
+#   3. Composite indexes         — SQLite-only pipeline query indexes
+#
+# Removed in Phase 10.1B:
+#   - Base.metadata.create_all() — no longer in production startup
+#   - ensure_column()            — all 15 legacy columns are in baseline
+#   - _existing_columns()        — no longer needed
+#
+# CLI tools (candle_backfill, run_backfill, run_daily, etc.) may still
+# call Base.metadata.create_all() for their own database setup — those
+# are separate from the web application startup path.
+#
+# greeks_checkpoint remains CLI-owned raw SQL, intentionally outside
+# Base.metadata and the Alembic baseline.
+# ---------------------------------------------------------------------------
 
 
 def init_db():
-    """Creates tables on startup. Imported lazily so models can import Base."""
+    """Initialize database on application startup.
+
+    Alembic owns the authoritative schema. This function:
+      1. Runs ``alembic upgrade head`` (schema DDL)
+      2. Runs idempotent data backfills
+      3. Creates composite indexes (SQLite only)
+
+    Called ONCE from the FastAPI lifespan handler. Never called during
+    request processing.
+    """
+    import logging
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
-    Base.metadata.create_all(bind=engine)
-    # Phase 6.7: strategy_templates and strategy_template_legs tables are
-    # created by create_all above.
-    # Phase 6.8B: add V2 dynamic formula columns to strategy_template_legs.
-    # All nullable with defaults — idempotent and safe on existing V1 rows.
-    ensure_column(engine, "strategy_template_legs", "strike_mode", "VARCHAR(20) DEFAULT 'fixed'")
-    ensure_column(engine, "strategy_template_legs", "strike_offset", "INTEGER NULL")
-    ensure_column(engine, "strategy_template_legs", "strike_offset_pct", "FLOAT NULL")
-    ensure_column(engine, "strategy_template_legs", "target_delta", "FLOAT NULL")
-    ensure_column(engine, "strategy_template_legs", "expiry_mode", "VARCHAR(20) DEFAULT 'fixed'")
-    ensure_column(engine, "strategy_template_legs", "expiry_dte_min", "INTEGER NULL")
-    ensure_column(engine, "strategy_template_legs", "expiry_dte_max", "INTEGER NULL")
-    ensure_column(engine, "strategy_template_legs", "formula_version", "INTEGER DEFAULT 1")
-    # Phase 6.10: V2 execution audit trail
-    ensure_column(engine, "strategy_executions", "execution_metadata", "TEXT NULL")
-    ensure_column(engine, "strategy_executions", "tags", "TEXT NULL")
-    ensure_column(engine, "strategy_executions", "notes", "TEXT NULL")
-    # Existing databases predate the Phase 5.0 journal-linkage columns.
-    ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
-    ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
-    # Phase 7.6: sweep enrichment column on gex_snapshots
-    ensure_column(engine, "gex_snapshots", "sweep_data", "TEXT NULL")
-    # Phase 8F: owner_id for multi-user snapshot isolation
-    ensure_column(engine, "gex_snapshots", "owner_id", "VARCHAR(128) NULL")
-    # Phase 6.5.0.1: conservative one-time backfill of strategy-leg
-    # attribution for pre-existing, provably unambiguous executions.
-    # Idempotent — rows already present are never duplicated.
+    logger = logging.getLogger(__name__)
+
+    # Step 1: Alembic migrations (sole schema management mechanism).
+    # This MUST succeed — if it fails, the application should not start.
+    _run_alembic_migrations()
+
+    # Step 2: Idempotent data backfill — strategy-leg attribution.
+    # Conservative one-time backfill for pre-existing, provably unambiguous
+    # executions. Rows already present are never duplicated.
     from app.services.leg_exposure import backfill_all_exposures
 
-    # Create a session bound to the *current* engine variable so that
-    # backfill_all_exposures always queries the same database that create_all
-    # just migrated — even when engine is monkeypatched in tests.
     session = sessionmaker(bind=engine)()
     try:
         backfill_all_exposures(session)
     finally:
         session.close()
 
-    # Phase 7.24.1: Create indexes for pipeline infrastructure tables.
-    # Uses CREATE INDEX IF NOT EXISTS for idempotent execution.
+    # Step 3: Composite indexes for pipeline infrastructure queries.
+    # These are NOT in the Alembic baseline (composite + covering indexes)
+    # and use CREATE INDEX IF NOT EXISTS for idempotent execution.
     if engine.dialect.name == "sqlite":
         with engine.begin() as conn:
             for stmt in [
