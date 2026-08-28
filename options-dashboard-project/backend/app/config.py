@@ -2,8 +2,11 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    UPSTOX_API_KEY: str
-    UPSTOX_API_SECRET: str
+    # DEPRECATED in Phase 10.2B-2: per-user credentials in broker_connections.
+    # Kept for backward compatibility during migration.  Remove in 10.2B-6.
+    # New code MUST use resolve_user_credentials() instead.
+    UPSTOX_API_KEY: str = ""
+    UPSTOX_API_SECRET: str = ""
     UPSTOX_REDIRECT_URI: str
     FRONTEND_URL: str = "http://localhost:3000"
     # Phase 9C: CORS — set ALLOW_LOCALHOST_CORS=True only in development

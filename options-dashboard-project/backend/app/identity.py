@@ -65,20 +65,23 @@ class BrokerConnection(Base):
     connection metadata. Each row represents one broker account
     linked to one StrikeNova user. (AD-2, AD-5)
 
+    Status lifecycle:
+      pending  → connected → expired | disconnected
+      pending:  credentials stored via POST /auth/connect, no OAuth yet
+      connected: first OAuth completed, broker_account_id populated
+
     broker_account_id lifecycle:
-      1. Populated at connection creation time from the broker OAuth profile
-         (e.g. Upstox user_id, FYERS app_id).  The value is broker-specific
-         and opaque to the platform — StrikeNova never interprets it.
-      2. Immutable after creation — it is part of the unique constraint
-         (user_id, broker, broker_account_id).  A different account requires
-         a new BrokerConnection row.
-      3. Required (NOT NULL) — every connection must identify the upstream
-         broker account it was authorised against.
+      1. Initially "pending" when credentials are stored (POST /auth/connect)
+         before the first OAuth completes.
+      2. After first successful OAuth, updated to the broker's account ID
+         (e.g. Upstox user_id, FYERS app_id).  Immutable thereafter.
+      3. Required (NOT NULL) — "pending" is a sentinel for pre-OAuth rows.
+      4. Part of unique constraint (user_id, broker, broker_account_id).
+         "pending" allows one pre-OAuth row per (user, broker).
 
     is_default invariant:
       At most one connection per (user_id, broker) may have is_default=True.
-      Enforced at the PostgreSQL schema level via a partial unique index
-      (uq_one_default_per_user_broker).
+      Enforced via partial unique index uq_one_default_per_user_broker.
     """
 
     __tablename__ = "broker_connections"
@@ -194,11 +197,22 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
     return user
 
 
-def create_session_record(db: Session, user_id: str, session_id: str) -> UserSession:
+def create_session_record(
+    db: Session,
+    user_id: str,
+    session_id: str,
+    broker_connection_id: str | None = None,
+) -> UserSession:
+    """Create a durable session record linking session → user.
+
+    broker_connection_id links the session to the specific broker
+    connection used for authentication (nullable for backward compat).
+    """
     now = _utcnow()
     record = UserSession(
         user_id=user_id,
         session_hash=hash_session_id(session_id),
+        broker_connection_id=broker_connection_id,
         created_at=now,
         expires_at=now + SESSION_TTL,
     )
@@ -234,3 +248,191 @@ def get_active_session(db: Session, session_id: str | None) -> UserSession | Non
         )
         .one_or_none()
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 10.2B-2 — BYOB Credential Management
+# ---------------------------------------------------------------------------
+
+
+def resolve_user_credentials(
+    user_id: str, broker: str, db: Session
+) -> dict:
+    """Resolve a user's encrypted broker credentials from broker_connections.
+
+    Selects the default connection (or most recent) for the given
+    (user_id, broker) where credentials are available.
+
+    Returns a dict suitable for passing to the adapter constructor:
+      {"api_key": "...", "api_secret": "...", "redirect_uri": "..."}
+
+    Raises ValueError if no credential-bearing connection exists.
+
+    Security: this function NEVER returns platform-level credentials.
+    It only returns per-user encrypted values from broker_connections.
+    """
+    from app.crypto import decrypt
+
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker.upper(),
+            BrokerConnection.broker_api_key_encrypted.isnot(None),
+        )
+        .order_by(
+            BrokerConnection.is_default.desc(),
+            BrokerConnection.created_at.desc(),
+        )
+        .first()
+    )
+    if conn is None:
+        raise ValueError(
+            f"No {broker} credentials found for user {user_id}. "
+            f"Use POST /auth/connect to store your broker credentials first."
+        )
+
+    credentials = {}
+    api_key = decrypt(conn.broker_api_key_encrypted)
+    if not api_key:
+        raise ValueError(
+            f"Stored API key for {broker} is empty after decryption"
+        )
+    credentials["api_key"] = api_key
+
+    if conn.broker_api_secret_encrypted:
+        api_secret = decrypt(conn.broker_api_secret_encrypted)
+        if api_secret:
+            credentials["api_secret"] = api_secret
+
+    if conn.broker_redirect_uri:
+        credentials["redirect_uri"] = conn.broker_redirect_uri
+
+    return credentials
+
+
+def store_credentials(
+    db: Session,
+    user_id: str,
+    broker: str,
+    api_key: str,
+    api_secret: str,
+    *,
+    redirect_uri: str | None = None,
+    display_label: str | None = None,
+) -> BrokerConnection:
+    """Encrypt and store a user's broker Developer App credentials.
+
+    Creates or updates a BrokerConnection row.  New connections are created
+    with broker_account_id="pending" and status="pending" — the real
+    broker_account_id is populated after the first successful OAuth.
+
+    Returns the BrokerConnection row.
+    """
+    from app.crypto import encrypt
+
+    broker_upper = broker.upper()
+
+    # Check for existing pending connection for this (user, broker)
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.broker_account_id == "pending",
+        )
+        .first()
+    )
+
+    if conn is None:
+        conn = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user_id,
+            broker=broker_upper,
+            broker_account_id="pending",
+            status="pending",
+            display_label=display_label,
+            connected_at=_utcnow(),
+        )
+        db.add(conn)
+
+    conn.broker_api_key_encrypted = encrypt(api_key)
+    conn.broker_api_secret_encrypted = encrypt(api_secret)
+    if redirect_uri:
+        conn.broker_redirect_uri = redirect_uri
+    if display_label:
+        conn.display_label = display_label
+
+    conn.updated_at = _utcnow()
+    db.flush()
+    return conn
+
+
+def get_or_create_connection(
+    db: Session,
+    user_id: str,
+    broker: str,
+    broker_account_id: str,
+    *,
+    status: str = "connected",
+) -> BrokerConnection:
+    """Create or update a BrokerConnection after successful OAuth.
+
+    Called after OAuth callback to:
+      1. Replace broker_account_id="pending" with the real account ID
+      2. Set status="connected"
+      3. Update connected_at timestamp
+
+    If a connection with the real broker_account_id already exists,
+    it is updated (re-login scenario).
+
+    broker_account_id must be pre-extracted by the adapter layer (AD-6).
+    """
+    broker_upper = broker.upper()
+
+    # First: check if a pending row exists for this (user, broker)
+    pending_conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.broker_account_id == "pending",
+        )
+        .first()
+    )
+
+    # Second: check if a connected row with this account ID exists
+    existing_conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.broker_account_id == broker_account_id,
+        )
+        .first()
+    )
+
+    if existing_conn is not None:
+        # Re-login to existing connection
+        conn = existing_conn
+    elif pending_conn is not None:
+        # Transition from pending → connected
+        conn = pending_conn
+    else:
+        # New connection (e.g. first OAuth without prior credential storage)
+        conn = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user_id,
+            broker=broker_upper,
+            broker_account_id=broker_account_id,
+            connected_at=_utcnow(),
+        )
+        db.add(conn)
+
+    conn.broker_account_id = broker_account_id
+    conn.status = status
+    conn.disconnected_at = None
+    conn.connected_at = _utcnow()
+    conn.updated_at = _utcnow()
+    db.flush()
+    return conn
