@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from unittest.mock import MagicMock
 
 from app.db import Base, get_db
 from app.identity import (
@@ -240,39 +241,7 @@ class TestUserIdOwnership:
         pos = db_session.query(Position).first()
         assert pos.user_id == user_id
 
-    def test_different_session_same_user_sees_same_data(self, client, db_session):
-        """Two sessions for the same user see the same data."""
-        from app.models import Position
-
-        user_id = str(uuid4())
-        user = User(
-            id=user_id, status="active", identity_source="upstox",
-            broker_provider="UPSTOX", broker_user_id="multi-sess",
-        )
-        db_session.add(user)
-        db_session.flush()
-
-        sid_a = token_store.set_token("tok-sess-a")
-        create_session_record(db_session, user_id, sid_a)
-
-        sid_b = token_store.set_token("tok-sess-b")
-        create_session_record(db_session, user_id, sid_b)
-
-        pos = Position(
-            user_id=user_id, symbol="NIFTY", expiry="2026-08-28",
-            strike=25000.0, option_type="call", net_quantity=1,
-            average_entry_price=100.0, lot_size=50, status="open",
-        )
-        db_session.add(pos)
-        db_session.commit()
-
-        # token_store is single-session (last-set wins), so we can't test
-        # two simultaneous sessions with the in-memory store. But the DB
-        # records confirm both sessions map to the same user.
-        assert get_active_session(db_session, sid_a) is not None
-        assert get_active_session(db_session, sid_b) is not None
-        assert get_active_session(db_session, sid_a).user_id == user_id
-        assert get_active_session(db_session, sid_b).user_id == user_id
+    # Real multi-session API tests are in TestSameUserMultiSession (§9).
 
 
 # ===========================================================================
@@ -472,3 +441,186 @@ class TestLoginLogoutRoundTrip:
 
         # Session should now be revoked
         assert get_active_session(db_session, session_id) is None
+
+
+# ===========================================================================
+# §8: Broker session-expiry handling (regression for gex /capture)
+# ===========================================================================
+
+
+class TestBrokerSessionExpiry:
+    """When the broker returns a session-expiry error, the affected session
+    token must be cleared and the client must receive HTTP 401.
+
+    Regression test for the audit finding that Phase 10.2A removed the
+    SESSION_CODES check from gex.trigger_capture.
+    """
+
+    def test_capture_broker_session_expiry_clears_token_and_returns_401(
+        self, client, db_session, monkeypatch
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from app.brokers.domain.errors import BrokerError, BrokerErrorCode
+        from app.services import token_store
+
+        session_id, _ = create_test_identity(db_session, "tok-capture-expiry")
+        assert token_store.get_token(session_id) is not None
+
+        # Mock the gateway to raise TOKEN_EXPIRED
+        mock_adapter = AsyncMock()
+        mock_adapter.get_option_chain = AsyncMock(
+            side_effect=BrokerError(BrokerErrorCode.TOKEN_EXPIRED, "Session expired")
+        )
+        mock_gw = MagicMock()
+        mock_gw.create.return_value = mock_adapter
+
+        with patch("app.brokers.gateway.gateway", mock_gw):
+            resp = client.post(
+                "/gex/capture",
+                headers=_headers(session_id),
+                params={"symbol": "NIFTY", "expiry_date": "2026-08-28"},
+            )
+        assert resp.status_code == 401
+        assert "expired" in resp.json()["detail"].lower()
+
+        # Token must have been cleared from the store
+        assert token_store.get_token(session_id) is None
+
+    def test_capture_broker_generic_error_returns_502(self, client, db_session):
+        """Non-session broker errors must NOT clear the token — return 502."""
+        from unittest.mock import AsyncMock, patch
+
+        from app.brokers.domain.errors import BrokerError, BrokerErrorCode
+        from app.services import token_store
+
+        session_id, _ = create_test_identity(db_session, "tok-capture-502")
+        assert token_store.get_token(session_id) is not None
+
+        mock_adapter = AsyncMock()
+        mock_adapter.get_option_chain = AsyncMock(
+            side_effect=BrokerError(BrokerErrorCode.NETWORK_ERROR, "Connection refused")
+        )
+        mock_gw = MagicMock()
+        mock_gw.create.return_value = mock_adapter
+
+        with patch("app.brokers.gateway.gateway", mock_gw):
+            resp = client.post(
+                "/gex/capture",
+                headers=_headers(session_id),
+                params={"symbol": "NIFTY", "expiry_date": "2026-08-28"},
+            )
+        assert resp.status_code == 502
+
+        # Token must NOT be cleared
+        assert token_store.get_token(session_id) is not None
+
+
+# ===========================================================================
+# §9: Same-user multi-session (real API-level test)
+# ===========================================================================
+
+
+class TestSameUserMultiSession:
+    """Two simultaneous session IDs mapped to the same user.id must both
+    resolve correctly and see the same data via real API calls.
+    """
+
+    def test_two_sessions_same_user_see_same_data(self, client, db_session):
+        """Both sessions resolve to the same user_id and see the same positions."""
+        from app.models import Position
+
+        # Create one user with two sessions
+        user_id = str(uuid4())
+        user = User(
+            id=user_id, status="active", identity_source="upstox",
+            broker_provider="UPSTOX", broker_user_id="multi-sess",
+        )
+        db_session.add(user)
+        db_session.flush()
+
+        sid_a = token_store.set_token("tok-sess-a")
+        create_session_record(db_session, user_id, sid_a)
+
+        sid_b = token_store.set_token("tok-sess-b")
+        create_session_record(db_session, user_id, sid_b)
+
+        # Create a position owned by this user
+        pos = Position(
+            user_id=user_id, symbol="NIFTY", expiry="2026-08-28",
+            strike=25000.0, option_type="call", net_quantity=1,
+            average_entry_price=100.0, lot_size=50, status="open",
+        )
+        db_session.add(pos)
+        db_session.commit()
+
+        # Session A sees the position
+        resp_a = client.get("/paper/positions", headers=_headers(sid_a))
+        assert resp_a.status_code == 200
+        assert len(resp_a.json()) == 1
+
+        # Session B sees the same position
+        resp_b = client.get("/paper/positions", headers=_headers(sid_b))
+        assert resp_b.status_code == 200
+        assert len(resp_b.json()) == 1
+
+        # Both resolve to the same user_id (verify via DB since API
+        # response doesn't expose user_id)
+        from app.models import Position as PosModel
+        pos_a = db_session.query(PosModel).filter_by(user_id=user_id).first()
+        assert pos_a is not None
+        assert pos_a.user_id == user_id
+
+    def test_two_sessions_both_authenticate(self, client, db_session):
+        """Both sessions independently pass authentication."""
+        user_id = str(uuid4())
+        user = User(
+            id=user_id, status="active", identity_source="upstox",
+            broker_provider="UPSTOX", broker_user_id="multi-auth",
+        )
+        db_session.add(user)
+        db_session.flush()
+
+        sid_a = token_store.set_token("tok-auth-a")
+        create_session_record(db_session, user_id, sid_a)
+
+        sid_b = token_store.set_token("tok-auth-b")
+        create_session_record(db_session, user_id, sid_b)
+
+        # Both return 200 on a protected endpoint
+        resp_a = client.get("/auth/me", headers=_headers(sid_a))
+        resp_b = client.get("/auth/me", headers=_headers(sid_b))
+        assert resp_a.status_code == 200
+        assert resp_b.status_code == 200
+        assert resp_a.json()["user_id"] == user_id
+        assert resp_b.json()["user_id"] == user_id
+
+    def test_revoking_one_session_does_not_affect_the_other(
+        self, client, db_session
+    ):
+        """Revoking session A leaves session B functional."""
+        user_id = str(uuid4())
+        user = User(
+            id=user_id, status="active", identity_source="upstox",
+            broker_provider="UPSTOX", broker_user_id="multi-revoke",
+        )
+        db_session.add(user)
+        db_session.flush()
+
+        sid_a = token_store.set_token("tok-rev-a")
+        create_session_record(db_session, user_id, sid_a)
+
+        sid_b = token_store.set_token("tok-rev-b")
+        create_session_record(db_session, user_id, sid_b)
+
+        # Revoke session A
+        revoke_session(db_session, sid_a)
+
+        # Session A → 401
+        resp_a = client.get("/auth/me", headers=_headers(sid_a))
+        assert resp_a.status_code == 401
+
+        # Session B still works
+        resp_b = client.get("/auth/me", headers=_headers(sid_b))
+        assert resp_b.status_code == 200
+        assert resp_b.json()["user_id"] == user_id

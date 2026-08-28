@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.deps import AuthenticatedUser, CurrentUser
+from app.brokers.domain.errors import BrokerErrorCode
+from app.routers.deps import AuthenticatedUser, CurrentUser, get_session_id
 from app.services import token_store
 from app.services.gex_history import (
     record_gex_snapshot,
@@ -228,6 +229,7 @@ def snapshot_count(
 async def trigger_capture(
     symbol: str = Query("NIFTY", description="Underlying symbol"),
     expiry_date: str = Query(..., description="Expiry date YYYY-MM-DD"),
+    session_id: str | None = Depends(get_session_id),
     user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
@@ -261,6 +263,9 @@ async def trigger_capture(
     try:
         chain = await adapter.get_option_chain(symbol, expiry_date)
     except BrokerError as e:
+        if e.code in BrokerErrorCode.SESSION_CODES:
+            token_store.clear_token(session_id)
+            raise HTTPException(status_code=401, detail="Upstox session expired.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error: {e.message}") from e
 
     # Capture and persist — scoped to this user
