@@ -1,7 +1,7 @@
 """Multi-user token storage with per-session isolation and DB persistence.
 
 Phase 10.2B-3: Dual-layer architecture — in-memory cache backed by PostgreSQL.
-Tokens survive server restarts via rehydrate_cache() on startup.
+Tokens survive server restarts via get_token() DB fallback on cache miss.
 
 Each session owns exactly one broker token.  Sessions are identified by
 cryptographically strong IDs (``secrets.token_urlsafe(32)``).  Token lookup
@@ -193,29 +193,40 @@ def get_all_session_ids() -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Rehydration — startup recovery from DB
+# Startup — DB token health check (no in-memory rehydration)
 # ---------------------------------------------------------------------------
 
+# Phase 10.2B-3 design decision:
+# In-memory cache cannot be rehydrated because the DB stores session_hash
+# (SHA-256), not the plaintext session_id needed as the cache key.
+# Instead, get_token() uses a DB fallback on cache miss, which correctly
+# looks up by session_hash and repopulates the in-memory cache with the
+# correct plaintext key.
+#
+# This means the first request per session after a server restart goes
+# through the slow DB path (decrypt + join), and subsequent requests hit
+# the fast in-memory path.  This is the correct trade-off: it avoids
+# storing plaintext session IDs in the database.
 
-def rehydrate_cache() -> int:
-    """Load active tokens from DB into memory cache on startup.
 
-    Queries broker_tokens joined with user_sessions for active, non-expired,
-    non-revoked sessions.  Decrypts each token and populates _sessions.
+def startup_db_check() -> int:
+    """Verify DB connectivity and count active tokens at startup.
 
-    Returns the number of sessions rehydrated.
+    Returns the number of active (non-expired, non-revoked) tokens in DB.
+    These tokens will be loaded on-demand via get_token() DB fallback.
+    Does NOT populate the in-memory cache.
     """
     count = 0
     try:
         from app.db import SessionLocal
-        from app.identity import BrokerToken, UserSession, hash_session_id
-        from app.crypto import decrypt
+        from app.identity import BrokerToken, UserSession
+        from datetime import datetime, timezone
 
         db = SessionLocal()
         try:
-            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
-            rows = (
-                db.query(BrokerToken, UserSession)
+            now = datetime.now(timezone.utc)
+            count = (
+                db.query(BrokerToken)
                 .join(
                     UserSession,
                     BrokerToken.session_hash == UserSession.session_hash,
@@ -225,29 +236,19 @@ def rehydrate_cache() -> int:
                     UserSession.revoked_at.is_(None),
                     UserSession.expires_at > now,
                 )
-                .all()
+                .count()
             )
-            for bt, us in rows:
-                try:
-                    plaintext = decrypt(bt.broker_token_encrypted)
-                    _sessions[us.session_hash] = {
-                        "access_token": plaintext,
-                        "created_at": time.time(),
-                    }
-                    count += 1
-                except Exception:
-                    logger.warning(
-                        "Failed to decrypt token during rehydration",
-                        extra={"event": "auth.rehydrate.decrypt_failed", "session_hash_prefix": us.session_hash[:8]},
-                    )
         finally:
             db.close()
     except Exception:
-        logger.exception("Failed to rehydrate token cache from DB")
+        logger.warning(
+            "DB token health check failed (non-critical)",
+            extra={"event": "auth.startup.db_check_failed"},
+        )
 
     logger.info(
-        "Token cache rehydrated",
-        extra={"event": "auth.rehydrate.complete", "count": count},
+        "DB token health check passed",
+        extra={"event": "auth.startup.db_check", "active_tokens": count},
     )
     return count
 
@@ -304,20 +305,19 @@ def consume_oauth_state(state: str | None) -> dict | None:
     if not state:
         return None
 
-    # Check if this is a signed state (contains a dot separator)
+    # Dot-containing states are ALWAYS treated as signed (HMAC) states.
+    # They must NOT silently downgrade to the legacy unsigned path.
     if "." in state:
-        # Try signed format
         b64, sig = state.rsplit(".", 1)
         try:
             expected_sig = hmac.new(
                 _get_state_hmac_key(), b64.encode(), hashlib.sha256
             ).hexdigest()[:32]
             if not hmac.compare_digest(sig, expected_sig):
-                return None
+                return None  # Tampered — reject, do NOT fall through
             payload = json.loads(base64.urlsafe_b64decode(b64))
             if time.time() - payload.get("ts", 0) > _STATE_TTL_SECONDS:
-                return None
-            # Consume from pending states
+                return None  # Expired
             created_at = _pending_states.pop(state, None)
             if created_at is None:
                 return None  # Already consumed or not from us
@@ -326,9 +326,10 @@ def consume_oauth_state(state: str | None) -> dict | None:
                 "broker": payload.get("brk", "UPSTOX"),
             }
         except Exception:
-            pass
+            # Corrupted signed state — reject, do NOT fall through to legacy
+            return None
 
-    # Fallback: old CSRF-only format
+    # Legacy: unsigned CSRF-only state (no dot separator)
     created_at = _pending_states.pop(state, None)
     if created_at is not None and time.time() - created_at <= _STATE_TTL_SECONDS:
         return {"session_id": "", "broker": "UPSTOX"}

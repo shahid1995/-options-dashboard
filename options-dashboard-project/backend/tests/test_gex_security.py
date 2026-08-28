@@ -366,13 +366,17 @@ class TestTokenSecurity:
         # This is a structural test — the token should not leak through
         # the response model (LiveGexResponse has no token field)
 
-    def test_get_any_token_is_deprecated(self):
-        """get_any_token() should log a deprecation warning."""
-        from app.services.token_store import set_token, get_any_token
-        set_token("token_a")
-        # Should return a token but log a warning
-        result = get_any_token()
-        assert result == "token_a"  # Backward compatible
+    def test_get_any_token_removed(self):
+        """get_any_token() was removed in Phase 10.2B-3.
+
+        The deprecated cross-session token accessor must no longer be
+        importable.  All callers must use get_token(session_id) instead.
+        """
+        import importlib
+        import app.services.token_store as ts_mod
+        assert not hasattr(ts_mod, "get_any_token"), (
+            "get_any_token() must be removed — use get_token(session_id)"
+        )
 
     def test_session_id_is_cryptographically_random(self):
         from app.services.token_store import set_token

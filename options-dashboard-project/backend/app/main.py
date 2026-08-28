@@ -194,14 +194,15 @@ async def lifespan(app: FastAPI):
     global _capture_task
     init_db()
 
-    # Phase 10.2B-3: Rehydrate token cache from DB after migrations.
-    # Loads active tokens into memory so sessions survive server restarts.
+    # Phase 10.2B-3: Verify DB token health at startup.
+    # Tokens survive restarts via get_token() DB fallback (memory miss -> DB -> decrypt -> cache).
+    # No in-memory rehydration: DB stores session_hash, not plaintext session_id.
     try:
-        from app.services.token_store import rehydrate_cache
-        count = rehydrate_cache()
-        logger.info("Token cache rehydrated: %d sessions loaded", count)
+        from app.services.token_store import startup_db_check
+        count = startup_db_check()
+        logger.info("DB token health check: %d active tokens", count)
     except Exception:
-        logger.warning("Token cache rehydration failed (non-critical)")
+        logger.warning("DB token health check failed (non-critical)")
 
     # Start background GEX capture if enabled
     if getattr(settings, "GEX_HISTORY_ENABLED", False):
