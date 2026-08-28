@@ -25,6 +25,7 @@ from app.models import (
     Position, StrategyExecution, StrategyLegExposure, PaperOrder, PaperAccount,
 )
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.leg_exposure import (
     maintain_exposure_on_exit, exposures_for_position, reconcile_position_exposures,
 )
@@ -73,8 +74,9 @@ def _login():
 
 
 @pytest.fixture()
-def logged_in(client):
-    return token_store.set_token("tok-exit-test")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-exit-test")
+    return session_id
 
 
 HDR = lambda tok: {"X-Session-Id": tok}
@@ -146,7 +148,7 @@ def _exit_request(client_order_id="exit-test-001", quantity=None):
 
 def test_exit_position_uses_exit_side_over_net_quantity(db_session, logged_in):
     """exit_position() uses exit_side parameter when provided."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)  # LONG position
 
     # Exit with exit_side="sell" (matching LONG position — same as auto-derived)
@@ -165,7 +167,7 @@ def test_exit_position_uses_exit_side_over_net_quantity(db_session, logged_in):
 
 def test_exit_position_with_buy_side_on_long_position(db_session, logged_in):
     """exit_position() with exit_side='buy' on a LONG position — forces BUY."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)  # LONG
 
     # Exit with exit_side="buy" — this is for exiting a SELL exposure
@@ -180,7 +182,7 @@ def test_exit_position_with_buy_side_on_long_position(db_session, logged_in):
 
 def test_exit_position_fallback_to_net_quantity_when_no_exit_side(db_session, logged_in):
     """When exit_side is None, falls back to net_quantity derivation."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)  # LONG
 
     result = exit_position(
@@ -196,7 +198,7 @@ def test_exit_position_fallback_to_net_quantity_when_no_exit_side(db_session, lo
 
 def test_maintain_exposure_targeted_specific_exposure(db_session, logged_in):
     """maintain_exposure_on_exit with target_exposure_id reduces THAT exposure."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=7)
     exp_a = _exposure(db_session, uid, "exec-a", pos.id, remaining_quantity=2, action="buy")
     exp_b = _exposure(db_session, uid, "exec-b", pos.id, remaining_quantity=5, action="buy")
@@ -217,7 +219,7 @@ def test_maintain_exposure_targeted_specific_exposure(db_session, logged_in):
 
 def test_maintain_exposure_fallback_fifo_when_no_target(db_session, logged_in):
     """Without target_exposure_id, FIFO across dominant side is used."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=7)
     exp_a = _exposure(db_session, uid, "exec-a", pos.id, remaining_quantity=2, action="buy")
     exp_b = _exposure(db_session, uid, "exec-b", pos.id, remaining_quantity=5, action="buy")
@@ -242,7 +244,7 @@ def test_maintain_exposure_fallback_fifo_when_no_target(db_session, logged_in):
 
 def test_shared_instrument_exit_strategy_b_only(db_session, logged_in):
     """Strategy A and B share same instrument. Exit B leaves A untouched."""
-    uid = logged_in
+    uid = db_session._test_user_id
     _account(db_session, uid)
     se_a = _execution(db_session, uid, "exec-a", "Strategy A")
     se_b = _execution(db_session, uid, "exec-b", "Strategy B")
@@ -271,7 +273,7 @@ def test_shared_instrument_exit_strategy_b_only(db_session, logged_in):
 
 def test_shared_instrument_exit_sell_exposure_on_net_long(db_session, logged_in):
     """SELL CE exposure on a net-long position. Exit should use BUY."""
-    uid = logged_in
+    uid = db_session._test_user_id
     _account(db_session, uid)
     se_a = _execution(db_session, uid, "exec-a", "Strategy A")
     se_b = _execution(db_session, uid, "exec-b", "Strategy B")
@@ -304,7 +306,7 @@ def test_shared_instrument_exit_sell_exposure_on_net_long(db_session, logged_in)
 
 def test_buy_ce_to_sell_ce(db_session, logged_in):
     """BUY CE exposure exits via SELL CE."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2, option_type="call")
     exp = _exposure(db_session, uid, "exec-1", pos.id, option_type="call", action="buy")
 
@@ -320,7 +322,7 @@ def test_buy_ce_to_sell_ce(db_session, logged_in):
 
 def test_sell_ce_to_buy_ce(db_session, logged_in):
     """SELL CE exposure exits via BUY CE."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=-2, option_type="call")
     exp = _exposure(db_session, uid, "exec-1", pos.id, option_type="call", action="sell")
 
@@ -336,7 +338,7 @@ def test_sell_ce_to_buy_ce(db_session, logged_in):
 
 def test_buy_pe_to_sell_pe(db_session, logged_in):
     """BUY PE exposure exits via SELL PE."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2, option_type="put", strike=24900.0)
     exp = _exposure(db_session, uid, "exec-1", pos.id, option_type="put", action="buy",
                     strike=24900.0)
@@ -353,7 +355,7 @@ def test_buy_pe_to_sell_pe(db_session, logged_in):
 
 def test_sell_pe_to_buy_pe(db_session, logged_in):
     """SELL PE exposure exits via BUY PE."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=-2, option_type="put", strike=24900.0)
     exp = _exposure(db_session, uid, "exec-1", pos.id, option_type="put", action="sell",
                     strike=24900.0)
@@ -374,7 +376,7 @@ def test_sell_pe_to_buy_pe(db_session, logged_in):
 
 def test_preview_returns_targets_without_mutation(client, logged_in, db_session):
     """POST /paper/exit-intent/preview resolves targets without mutating state."""
-    uid = logged_in
+    uid = db_session._test_user_id
     _account(db_session, uid)
     se = _execution(db_session, uid, "exec-prev")
     pos = _position(db_session, uid, net_quantity=2, strategy_execution_id="exec-prev")
@@ -409,7 +411,7 @@ def test_preview_returns_targets_without_mutation(client, logged_in, db_session)
 
 def test_preview_no_matching_targets(client, logged_in, db_session):
     """Preview returns NO_MATCHING_TARGETS when selector matches nothing."""
-    uid = logged_in
+    uid = db_session._test_user_id
     resp = client.post("/paper/exit-intent/preview", headers=HDR(logged_in), json={
         "client_order_id": "preview-empty-001",
         "scope": "STRATEGY",
@@ -434,7 +436,7 @@ def test_preview_rejects_unauthenticated(client, db_session):
 
 def test_preview_strategy_scope(client, logged_in, db_session):
     """Preview with STRATEGY scope resolves correct exposures."""
-    uid = logged_in
+    uid = db_session._test_user_id
     _account(db_session, uid)
     se = _execution(db_session, uid, "exec-s1", "Iron Condor")
     pos = _position(db_session, uid, net_quantity=2, strategy_execution_id="exec-s1")
@@ -460,7 +462,7 @@ def test_preview_strategy_scope(client, logged_in, db_session):
 
 def test_idempotent_exit_replay(db_session, logged_in):
     """Retrying the same client_order_id returns original result."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)
     exp = _exposure(db_session, uid, "exec-1", pos.id, remaining_quantity=2)
 
@@ -485,7 +487,7 @@ def test_idempotent_exit_replay(db_session, logged_in):
 
 def test_excess_quantity_rejected(db_session, logged_in):
     """Quantity exceeding remaining is rejected."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)
     exp = _exposure(db_session, uid, "exec-1", pos.id, remaining_quantity=2)
 
@@ -506,7 +508,7 @@ def test_zero_quantity_rejected_via_schema(db_session, logged_in):
 
 def test_partial_exit_preserves_remaining(db_session, logged_in):
     """Partial exit reduces quantity correctly."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=3)
     exp = _exposure(db_session, uid, "exec-1", pos.id, remaining_quantity=3)
 
@@ -529,7 +531,7 @@ def test_partial_exit_preserves_remaining(db_session, logged_in):
 
 def test_exit_closed_position_rejected(db_session, logged_in):
     """Exiting a closed position is rejected."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=0, status="closed")
 
     with pytest.raises(PaperExecutionError) as exc_info:
@@ -542,7 +544,7 @@ def test_exit_closed_position_rejected(db_session, logged_in):
 
 def test_targeted_exposure_not_found(db_session, logged_in):
     """Targeting a non-existent exposure returns False (best-effort)."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)
     now = datetime.now(timezone.utc)
 
@@ -559,7 +561,7 @@ def test_targeted_exposure_not_found(db_session, logged_in):
 
 def test_user_isolation_exit(db_session, logged_in):
     """User cannot exit another user's position."""
-    uid = logged_in
+    uid = db_session._test_user_id
     other_uid = "user-other-exit"
     pos = _position(db_session, other_uid, net_quantity=2)
 
@@ -577,7 +579,7 @@ def test_user_isolation_exit(db_session, logged_in):
 
 def test_paper_order_records_exit_side(db_session, logged_in):
     """PaperOrder records the exit_side, not the net quantity derived side."""
-    uid = logged_in
+    uid = db_session._test_user_id
     pos = _position(db_session, uid, net_quantity=2)  # LONG
     exp = _exposure(db_session, uid, "exec-1", pos.id, remaining_quantity=2)
 
@@ -596,7 +598,7 @@ def test_paper_order_records_exit_side(db_session, logged_in):
 
 def test_preview_includes_warning_about_market_price(client, logged_in, db_session):
     """Preview warns that market prices will be resolved at execution time."""
-    uid = logged_in
+    uid = db_session._test_user_id
     _account(db_session, uid)
     se = _execution(db_session, uid, "exec-warn")
     pos = _position(db_session, uid, net_quantity=2, strategy_execution_id="exec-warn")

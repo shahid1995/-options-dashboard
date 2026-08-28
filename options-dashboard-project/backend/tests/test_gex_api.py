@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.db import Base, engine
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 client = TestClient(app)
 
@@ -81,7 +82,13 @@ def setup_db():
 
 def _auth():
     """Create a new session and return auth headers."""
-    sid = token_store.set_token("fake-token")
+    from app.db import SessionLocal
+    db = SessionLocal()
+    try:
+        sid, uid = create_test_identity(db, "fake-token")
+        db.commit()
+    finally:
+        db.close()
     return {"X-Session-Id": sid}
 
 

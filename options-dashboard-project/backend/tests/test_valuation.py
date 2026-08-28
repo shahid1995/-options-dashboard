@@ -40,6 +40,7 @@ from app.models import (
     PaperAccount,
 )
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.valuation import (
     STALE_THRESHOLD_SECONDS,
     _is_stale,
@@ -185,8 +186,10 @@ def _login():
 
 
 @pytest.fixture()
-def logged_in(client):
-    return token_store.set_token("tok-valuation-test")
+def logged_in(client, db_session):
+    session_id, user_id = create_test_identity(db_session, "tok-valuation-test")
+    db_session._test_user_id = user_id
+    return session_id
 
 
 HDR = lambda tok: {"X-Session-Id": tok}
@@ -394,7 +397,7 @@ class TestValuationEndpoint:
 
     def test_long_position_live_pnl(self, client, logged_in, db_session):
         """Long position with valid LTP computes correct Live P&L."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         pos = _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
         db_session.commit()
@@ -416,7 +419,7 @@ class TestValuationEndpoint:
         assert pv["live_pnl_pct"] == pytest.approx(20.0, abs=0.1)
 
     def test_short_position_live_pnl(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         pos = _position(db_session, uid, net_quantity=-3, average_entry_price=200.0)
         db_session.commit()
@@ -431,7 +434,7 @@ class TestValuationEndpoint:
         assert pv["live_pnl"] == 3900.0
 
     def test_missing_ltp_returns_unavailable(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2)
         db_session.commit()
@@ -448,7 +451,7 @@ class TestValuationEndpoint:
         assert body["summary"]["status"] == "unavailable"
 
     def test_realized_pnl_unchanged(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, realized_pnl=500.0)
         db_session.commit()
@@ -460,7 +463,7 @@ class TestValuationEndpoint:
         assert pv["realized_pnl"] == 500.0
 
     def test_closed_position_excluded(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, status="open")
         _position(db_session, uid, net_quantity=0, status="closed", strike=26000.0)
@@ -474,7 +477,7 @@ class TestValuationEndpoint:
         assert len(body["positions"]) == 1
 
     def test_user_isolation(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         pos_mine = _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
         other_uid = "other-valuation-user"
@@ -491,7 +494,7 @@ class TestValuationEndpoint:
 
     def test_strategy_aggregation(self, client, logged_in, db_session):
         """Strategy-level P&L aggregation from leg exposures."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         exec1 = _execution(db_session, uid, "exec-1", "Bull Call")
         pos = _position(db_session, uid, net_quantity=2, average_entry_price=100.0,
@@ -517,7 +520,7 @@ class TestValuationEndpoint:
         Strategy A: entry @ ₹100, Strategy B: entry @ ₹140
         Position avg = weighted avg, but leg P&L must use各自的 entry.
         """
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         exec_a = _execution(db_session, uid, "exec-a", "Strategy A")
         exec_b = _execution(db_session, uid, "exec-b", "Strategy B")
@@ -568,7 +571,7 @@ class TestValuationEndpoint:
             A = (150-100) × 2 × 65 = 6500
             B = (150-140) × 5 × 65 = 3250
         """
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         exec_a = _execution(db_session, uid, "exec-a", "Strategy A")
         exec_b = _execution(db_session, uid, "exec-b", "Strategy B")
@@ -598,7 +601,7 @@ class TestValuationEndpoint:
 
     def test_leg_pnl_unavailable_when_order_missing(self, client, logged_in, db_session):
         """Leg P&L is unavailable when source PaperOrder cannot be joined."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         exec1 = _execution(db_session, uid, "exec-1")
         pos = _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
@@ -622,7 +625,7 @@ class TestValuationEndpoint:
 
     def test_stale_price_status(self, client, logged_in, db_session):
         """LTP resolved but quote_timestamp is old → stale."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
         db_session.commit()
@@ -638,7 +641,7 @@ class TestValuationEndpoint:
 
     def test_fresh_price_not_stale(self, client, logged_in, db_session):
         """LTP resolved with recent quote_timestamp → available."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
         db_session.commit()
@@ -651,7 +654,7 @@ class TestValuationEndpoint:
 
     def test_partial_availability(self, client, logged_in, db_session):
         """Position A has LTP, Position B has no LTP → partial status."""
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, strike=25000.0,
                   average_entry_price=100.0)
@@ -672,7 +675,7 @@ class TestValuationEndpoint:
         assert summary["positions_unavailable"] == 1
 
     def test_deterministic_ordering(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         for i in range(3):
             _position(db_session, uid, net_quantity=1, strike=24000.0 + i * 500,
@@ -688,7 +691,7 @@ class TestValuationEndpoint:
         assert ids1 == ids2
 
     def test_summary_fields(self, client, logged_in, db_session):
-        uid = logged_in
+        uid = db_session._test_user_id
         _account(db_session, uid)
         _position(db_session, uid, net_quantity=2, average_entry_price=100.0)
         db_session.commit()

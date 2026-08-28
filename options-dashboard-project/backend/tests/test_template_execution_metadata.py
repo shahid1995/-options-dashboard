@@ -70,8 +70,10 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-metadata-test")
+def logged_in(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-metadata-test")
+    return session_id
 
 
 def headers(session_id):

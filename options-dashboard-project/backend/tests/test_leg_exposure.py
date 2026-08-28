@@ -31,6 +31,7 @@ from app.models import (
     Trade,
 )
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.leg_exposure import (
     LegExposureError,
     allocate_exit,
@@ -113,8 +114,10 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-leg-exposure")
+def logged_in(client, db_session):
+    session_id, user_id = create_test_identity(db_session, "tok-leg-exposure")
+    db_session._test_user_id = user_id
+    return session_id
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -177,7 +180,7 @@ def test_one_strategy_one_leg_creates_exposure(client, logged_in, db_session):
     rows = exposures(db_session)
     assert len(rows) == 1
     row = rows[0]
-    assert row.user_id == logged_in
+    assert row.user_id == db_session._test_user_id
     assert row.position_id == pos.id
     assert row.execution_id == pos.strategy_execution_id
     assert row.action == "buy"
@@ -323,7 +326,7 @@ def test_user_isolation_exposures_untouched(client, logged_in, db_session):
 
     execute(client, logged_in, exec_payload("exec-iso-a", "Strat A", [leg_payload(25000, "call", "buy", 2)]))
     execute(client, logged_in, exec_payload("exec-iso-b", "Strat B", [leg_payload(25000, "call", "sell", 1)]))
-    pos = db_session.query(Position).filter_by(user_id=logged_in, strike=25000, option_type="call").one()
+    pos = db_session.query(Position).filter_by(user_id=db_session._test_user_id, strike=25000, option_type="call").one()
     exit_position(client, logged_in, pos.id, {"client_order_id": "exit-iso", "quantity": 1})
 
     # Other user's exposure is byte-for-byte untouched.
@@ -331,7 +334,7 @@ def test_user_isolation_exposures_untouched(client, logged_in, db_session):
     assert len(others) == 1
     assert others[0].remaining_quantity == 3
     assert others[0].status == "open"
-    mine = db_session.query(StrategyLegExposure).filter_by(user_id=logged_in).all()
+    mine = db_session.query(StrategyLegExposure).filter_by(user_id=db_session._test_user_id).all()
     assert len(mine) == 2
     # Only the logged-in user's dominant-side exposure was reduced.
     assert {r.action for r in mine} == {"buy", "sell"}
@@ -495,7 +498,7 @@ def test_duplicate_exit_never_double_decrements_exposures(client, logged_in, db_
 def test_mixed_legacy_and_new_exposure_never_blocks_exit(client, logged_in, db_session):
     now = utcnow()
     db_session.add(Position(
-        user_id=logged_in, symbol="NIFTY", expiry=EXPIRY, strike=25100,
+        user_id=db_session._test_user_id, symbol="NIFTY", expiry=EXPIRY, strike=25100,
         option_type="call", net_quantity=1, average_entry_price=50.0,
         lot_size=LOT, realized_pnl=0.0, status="open",
         strategy_execution_id="legacy-exec", opened_at=now,

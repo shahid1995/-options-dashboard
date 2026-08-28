@@ -23,6 +23,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.routers.paper import MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 LOT = 65
 EXPIRY = "2026-08-27"
@@ -111,8 +112,9 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-bulk-exit")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-bulk-exit")
+    return session_id
 
 
 def headers(session_id):
@@ -665,10 +667,10 @@ def test_analytics_reflects_bulk_exit(client, logged_in, db_session):
 
 
 def test_exit_all_isolated_per_user(client, db_session):
-    session_a = token_store.set_token("tok-bulk-user-a")
+    session_a, user_a = create_test_identity(db_session, "tok-bulk-user-a")
     execute(client, session_a, long_call_payload())
 
-    session_b = token_store.set_token("tok-bulk-user-b")
+    session_b, user_b = create_test_identity(db_session, "tok-bulk-user-b")
     resp = exit_all(client, session_b, {"client_order_id": "bulk-exit-iso-b"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "NO_POSITIONS"
@@ -677,16 +679,16 @@ def test_exit_all_isolated_per_user(client, db_session):
     from app.models import Position
 
     pos = db_session.query(Position).first()
-    assert pos.user_id == session_a  # positions are keyed by the session id
+    assert pos.user_id == user_a  # positions are keyed by the user id
     assert pos.status == "open"
     assert len(open_positions(db_session)) == 1
 
 
 def test_exit_strategy_isolated_per_user(client, db_session):
-    session_a = token_store.set_token("tok-bulk-user-a2")
+    session_a, user_a2 = create_test_identity(db_session, "tok-bulk-user-a2")
     exec_id = execute(client, session_a, long_call_payload()).json()["execution_id"]
 
-    session_b = token_store.set_token("tok-bulk-user-b2")
+    session_b, user_b2 = create_test_identity(db_session, "tok-bulk-user-b2")
     resp = exit_strategy(
         client, session_b, exec_id, {"client_order_id": "bulk-exit-strat-iso-b"}
     )

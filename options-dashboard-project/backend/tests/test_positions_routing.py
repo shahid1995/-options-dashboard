@@ -25,6 +25,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import Position, StrategyExecution, PaperOrder
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 
 @pytest.fixture()
@@ -63,9 +64,11 @@ def _login():
 
 
 @pytest.fixture()
-def logged_in(client):
-    """Returns the session_id (used as user_id by require_session)."""
-    return token_store.set_token("tok-xyz")
+def logged_in(client, db_session):
+    """Returns the session_id after creating a proper identity."""
+    session_id, user_id = create_test_identity(db_session, "tok-xyz")
+    db_session._test_user_id = user_id
+    return session_id
 
 
 HDR = lambda tok: {"X-Session-Id": tok}
@@ -110,7 +113,7 @@ def _make_position(
 
 def test_legacy_no_params_returns_open_only(client, logged_in, db_session):
     """No query params → legacy get_open_positions() → open only."""
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -126,7 +129,7 @@ def test_legacy_no_params_returns_open_only(client, logged_in, db_session):
 
 
 def test_status_open_returns_open_only(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -142,7 +145,7 @@ def test_status_open_returns_open_only(client, logged_in, db_session):
 
 
 def test_status_closed_returns_closed_only(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -158,7 +161,7 @@ def test_status_closed_returns_closed_only(client, logged_in, db_session):
 
 
 def test_all_true_returns_all_positions(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -174,7 +177,7 @@ def test_all_true_returns_all_positions(client, logged_in, db_session):
 
 
 def test_symbol_filter(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     nifty = _make_position(db_session, user_id=uid, symbol="NIFTY", net_quantity=2, status="open")
     bank = _make_position(db_session, user_id=uid, symbol="BANKNIFTY", strike=50000.0, net_quantity=1, status="open")
 
@@ -190,7 +193,7 @@ def test_symbol_filter(client, logged_in, db_session):
 
 
 def test_option_type_filter(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     call = _make_position(db_session, user_id=uid, option_type="call", net_quantity=2, status="open")
     put = _make_position(db_session, user_id=uid, option_type="put", strike=24900.0, net_quantity=1, status="open")
 
@@ -206,7 +209,7 @@ def test_option_type_filter(client, logged_in, db_session):
 
 
 def test_strategy_execution_id_filter(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     se = StrategyExecution(
         user_id=uid, execution_id="exec-1", client_order_id="coid-1",
         strategy_tag="Bull Call Spread", symbol="NIFTY", status="FILLED",
@@ -230,7 +233,7 @@ def test_strategy_execution_id_filter(client, logged_in, db_session):
 
 
 def test_all_true_with_pagination(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     for i in range(5):
         _make_position(db_session, user_id=uid, strike=25000.0 + i * 100, net_quantity=i + 1, status="open")
 
@@ -253,7 +256,7 @@ def test_all_true_with_pagination(client, logged_in, db_session):
 
 
 def test_all_tab_returns_both_open_and_closed(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -269,7 +272,7 @@ def test_all_tab_returns_both_open_and_closed(client, logged_in, db_session):
 
 
 def test_open_tab_excludes_closed(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -283,7 +286,7 @@ def test_open_tab_excludes_closed(client, logged_in, db_session):
 
 
 def test_closed_tab_excludes_open(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     open_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     closed_pos = _make_position(db_session, user_id=uid, strike=25100.0, net_quantity=0, status="closed")
 
@@ -299,7 +302,7 @@ def test_closed_tab_excludes_open(client, logged_in, db_session):
 
 
 def test_user_isolation(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     my_pos = _make_position(db_session, user_id=uid, net_quantity=2, status="open")
     other_pos = _make_position(db_session, user_id="user-other-xyz", strike=25100.0, net_quantity=1, status="open")
 
@@ -325,7 +328,7 @@ def test_unauthenticated_rejected(client, db_session):
 
 
 def test_enriched_response_includes_strategy_tag(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     se = StrategyExecution(
         user_id=uid, execution_id="exec-test", client_order_id="coid-test",
         strategy_tag="Iron Condor", symbol="NIFTY", status="FILLED",
@@ -348,7 +351,7 @@ def test_enriched_response_includes_strategy_tag(client, logged_in, db_session):
 
 
 def test_no_broker_fields_leaked(client, logged_in, db_session):
-    uid = logged_in
+    uid = db_session._test_user_id
     _make_position(db_session, user_id=uid, net_quantity=2, status="open")
 
     resp = client.get("/paper/positions", params={"all": True}, headers=HDR(logged_in))

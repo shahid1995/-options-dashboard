@@ -20,7 +20,7 @@ Covers:
 - LIVE execution remains disabled
 
 NOTE: The token_store is a single-session store (one active session at a time).
-Tests that need two users switch the active session via ``switch_user()``
+Tests that need two users switch the active session via ``switch_user(db_session, ...)``
 before each request rather than holding two simultaneous sessions.
 """
 
@@ -42,6 +42,7 @@ from app.models import (
     StrategyLegExposure,
 )
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 
 LOT = 65
@@ -76,28 +77,32 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-templates-6701")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-templates-6701")
+    return session_id
 
 
 @pytest.fixture
-def other_user(client):
+def other_user(client, db_session):
     """Set a different user as the active session. NOTE: this invalidates
     logged_in's session because token_store is single-session."""
-    return token_store.set_token("tok-templates-other-user")
+    session_id, _ = create_test_identity(db_session, "tok-templates-other-user")
+    return session_id
 
 
 def headers(session_id):
     return {"X-Session-Id": session_id}
 
 
-def switch_user(token_str):
+def switch_user(db, token_str):
     """Switch the active user and return the new session_id.
 
+    Creates proper User + UserSession rows for the new identity.
     Because token_store is single-session, this invalidates any previous
     session. Call this before every request that needs a specific user.
     """
-    return token_store.set_token(token_str)
+    session_id, _ = create_test_identity(db, token_str)
+    return session_id
 
 
 # ---- Payload helpers -------------------------------------------------------
@@ -245,14 +250,14 @@ class TestCreateTemplate:
         assert resp2.status_code == 409
         assert "already exists" in resp2.json()["detail"]
 
-    def test_different_users_can_have_same_name(self, client, logged_in):
+    def test_different_users_can_have_same_name(self, client, logged_in, db_session):
         # Create as user A
         resp1 = create_template(client, logged_in, name="Same Name")
         assert resp1.status_code == 201
         id1 = resp1.json()["id"]
 
         # Switch to user B (invalidates user A's session)
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         resp2 = create_template(client, other_sid, name="Same Name")
         assert resp2.status_code == 201
         id2 = resp2.json()["id"]
@@ -279,12 +284,12 @@ class TestGetTemplate:
         resp = client.get("/paper/templates/999999", headers=headers(logged_in))
         assert resp.status_code == 404
 
-    def test_get_other_user_template_returns_404(self, client, logged_in):
+    def test_get_other_user_template_returns_404(self, client, logged_in, db_session):
         # Create as user A
         created = create_template(client, logged_in, name="Private").json()
 
         # Switch to user B — user A's template should be invisible
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         resp = client.get(
             f"/paper/templates/{created['id']}",
             headers=headers(other_sid),
@@ -311,12 +316,12 @@ class TestListTemplates:
         names = {t["name"] for t in resp.json()}
         assert names == {"T1", "T2"}
 
-    def test_list_excludes_other_users(self, client, logged_in):
+    def test_list_excludes_other_users(self, client, logged_in, db_session):
         # Create as user A
         create_template(client, logged_in, name="Mine")
 
         # Switch to user B, create theirs
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         create_template(client, other_sid, name="Theirs")
 
         # User B should only see their own
@@ -389,12 +394,12 @@ class TestUpdateTemplate:
         )
         assert resp.status_code == 200
 
-    def test_update_other_user_returns_404(self, client, logged_in):
+    def test_update_other_user_returns_404(self, client, logged_in, db_session):
         # Create as user A
         created = create_template(client, logged_in, name="Mine").json()
 
         # Switch to user B — should not be able to modify user A's template
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         resp = client.put(
             f"/paper/templates/{created['id']}",
             headers=headers(other_sid),
@@ -456,12 +461,12 @@ class TestDuplicateTemplate:
         )
         assert resp.status_code == 409
 
-    def test_duplicate_other_users_returns_404(self, client, logged_in):
+    def test_duplicate_other_users_returns_404(self, client, logged_in, db_session):
         # Create as user A
         created = create_template(client, logged_in, name="Private").json()
 
         # Switch to user B — should not be able to duplicate user A's template
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         resp = client.post(
             f"/paper/templates/{created['id']}/duplicate",
             headers=headers(other_sid),
@@ -511,7 +516,7 @@ class TestDeleteTemplate:
         template_id = created["id"]
 
         # Switch to user B — should not be able to delete user A's template
-        other_sid = switch_user("tok-templates-other-user")
+        other_sid = switch_user(db_session, "tok-templates-other-user")
         resp = client.delete(
             f"/paper/templates/{template_id}",
             headers=headers(other_sid),
@@ -1048,21 +1053,21 @@ class TestV2Duplicate:
 # ---------------------------------------------------------------------------
 
 class TestV2UserIsolation:
-    def test_user_b_cannot_read_v2_template(self, client, logged_in):
+    def test_user_b_cannot_read_v2_template(self, client, logged_in, db_session):
         resp = create_v2_template(client, logged_in, "User A V2", [
             v2_leg(strike_mode="atm", formula_version=2)
         ])
         tid = resp.json()["id"]
-        other = switch_user("tok-v2-other-user")
+        other = switch_user(db_session, "tok-v2-other-user")
         resp = client.get(f"/paper/templates/{tid}", headers=headers(other))
         assert resp.status_code == 404
 
-    def test_user_b_cannot_update_v2_template(self, client, logged_in):
+    def test_user_b_cannot_update_v2_template(self, client, logged_in, db_session):
         resp = create_v2_template(client, logged_in, "User A V2 Upd", [
             v2_leg(strike_mode="atm", formula_version=2)
         ])
         tid = resp.json()["id"]
-        other = switch_user("tok-v2-other-user")
+        other = switch_user(db_session, "tok-v2-other-user")
         resp = client.put(
             f"/paper/templates/{tid}",
             headers=headers(other),
@@ -1070,21 +1075,21 @@ class TestV2UserIsolation:
         )
         assert resp.status_code == 404
 
-    def test_user_b_cannot_delete_v2_template(self, client, logged_in):
+    def test_user_b_cannot_delete_v2_template(self, client, logged_in, db_session):
         resp = create_v2_template(client, logged_in, "User A V2 Del", [
             v2_leg(strike_mode="atm", formula_version=2)
         ])
         tid = resp.json()["id"]
-        other = switch_user("tok-v2-other-user")
+        other = switch_user(db_session, "tok-v2-other-user")
         resp = client.delete(f"/paper/templates/{tid}", headers=headers(other))
         assert resp.status_code == 404
 
-    def test_user_b_cannot_duplicate_v2_template(self, client, logged_in):
+    def test_user_b_cannot_duplicate_v2_template(self, client, logged_in, db_session):
         resp = create_v2_template(client, logged_in, "User A V2 Dup", [
             v2_leg(strike_mode="atm", formula_version=2)
         ])
         tid = resp.json()["id"]
-        other = switch_user("tok-v2-other-user")
+        other = switch_user(db_session, "tok-v2-other-user")
         resp = client.post(
             f"/paper/templates/{tid}/duplicate",
             headers=headers(other),
