@@ -194,6 +194,15 @@ async def lifespan(app: FastAPI):
     global _capture_task
     init_db()
 
+    # Phase 10.2B-3: Rehydrate token cache from DB after migrations.
+    # Loads active tokens into memory so sessions survive server restarts.
+    try:
+        from app.services.token_store import rehydrate_cache
+        count = rehydrate_cache()
+        logger.info("Token cache rehydrated: %d sessions loaded", count)
+    except Exception:
+        logger.warning("Token cache rehydration failed (non-critical)")
+
     # Start background GEX capture if enabled
     if getattr(settings, "GEX_HISTORY_ENABLED", False):
         _stop_event.clear()

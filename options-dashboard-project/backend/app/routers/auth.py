@@ -50,7 +50,6 @@ def login(
     BYOB OAuth.  This avoids the OAuth-state-to-user-identity problem
     entirely (authenticated-first flow).
     """
-    state = token_store.create_oauth_state()
     broker_id = broker.upper()
 
     # Try to resolve user's per-user credentials (BYOB path)
@@ -71,6 +70,14 @@ def login(
                         pass  # No stored credentials — fall back to platform key
             finally:
                 db.close()
+
+    # Phase 10.2B-3: Embed session_id in signed OAuth state for callback binding.
+    # This eliminates the race condition where the callback couldn't identify
+    # which user initiated the OAuth flow.
+    if session_id and token_store.get_token(session_id):
+        state = token_store.create_oauth_state(session_id=session_id, broker=broker_id)
+    else:
+        state = token_store.create_oauth_state()  # fallback: no session binding
 
     adapter = gateway.create(broker_id, **user_credentials)
     return RedirectResponse(adapter.get_authorization_url(state))
@@ -94,43 +101,36 @@ async def callback(
     """
     if error:
         return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(error)}")
-    if not token_store.consume_oauth_state(state):
+    # Phase 10.2B-3: Extract session_id + broker from signed OAuth state.
+    # This eliminates the race condition — we know EXACTLY which user initiated OAuth.
+    state_data = token_store.consume_oauth_state(state)
+    if state_data is None:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
-    broker_id = broker.upper()
+    bound_session_id = state_data.get("session_id", "")
+    broker_id = state_data.get("broker", broker.upper())
 
-    # Resolve user's per-user credentials from broker_connections.
-    # The user authenticated to StrikeNova BEFORE initiating OAuth
-    # (authenticated-first flow), so we know their identity from the session.
+    # Resolve user's per-user credentials from the bound session.
+    # Deterministic: we know exactly which session initiated this OAuth flow.
     user_credentials: dict = {}
     user_id_for_connection: str | None = None
 
-    # Attempt to identify the user from any active session.
-    # This is safe because the user MUST have been authenticated to
-    # initiate the login flow.
-    pre_db = SessionLocal()
-    try:
-        active_session = (
-            pre_db.query(UserSession)
-            .filter(
-                UserSession.revoked_at.is_(None),
-                UserSession.expires_at > datetime.now(timezone.utc),
-            )
-            .order_by(UserSession.created_at.desc())
-            .first()
-        )
-        if active_session is not None:
-            user_id_for_connection = active_session.user_id
-            try:
-                user_credentials = resolve_user_credentials(
-                    user_id_for_connection, broker_id, pre_db
-                )
-            except ValueError:
-                pass  # No stored credentials — will use platform key fallback
-    finally:
-        pre_db.close()
+    if bound_session_id:
+        pre_db = SessionLocal()
+        try:
+            session = get_active_session(pre_db, bound_session_id)
+            if session is not None:
+                user_id_for_connection = session.user_id
+                try:
+                    user_credentials = resolve_user_credentials(
+                        user_id_for_connection, broker_id, pre_db
+                    )
+                except ValueError:
+                    pass  # No stored credentials — will use platform key fallback
+        finally:
+            pre_db.close()
 
     try:
         # Create adapter with USER's credentials — both exchange and profile
@@ -165,11 +165,16 @@ async def callback(
                 "Could not extract broker account ID from %s profile", broker_id
             )
 
-        session_id = token_store.set_token(access_token)
+        session_id = token_store.set_token(
+            access_token,
+            connection_id=connection.id if connection else None,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
         create_session_record(
             db, user.id, session_id,
             broker_connection_id=connection.id if connection else None,
         )
+        db.commit()  # Commit all DB changes from this callback
     except HTTPException:
         if session_id:
             token_store.clear_token(session_id)
@@ -313,6 +318,7 @@ def logout(session_id: str | None = Depends(get_session_id), db: Session = Depen
         raise HTTPException(status_code=401, detail="Not logged in")
 
     revoke_session(db, session_id)
+    db.commit()
 
     token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})
