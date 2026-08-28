@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     CANDLE_INTERVAL: str = "3min"
     CANDLE_BACKFILL_ENABLED: bool = False
 
+    # Phase 10.2B-1: Broker credential encryption key.
+    # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    # This is the stable encryption key — not rotatable via config.
+    TOKEN_ENCRYPTION_KEY: str = ""
+
     class Config:
         env_file = ".env"
 

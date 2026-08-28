@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # This MUST happen before setting target_metadata.
 from app.db import Base  # noqa: E402
 from app import models  # noqa: E402, F401  — registers tables on Base.metadata
-from app.identity import User, UserSession  # noqa: E402, F401  — Phase 10.1 identity tables
+from app.identity import User, UserSession, BrokerConnection, BrokerToken  # noqa: E402, F401  — Phase 10.1/10.2B identity tables
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

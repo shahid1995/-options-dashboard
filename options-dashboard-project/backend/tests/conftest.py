@@ -5,6 +5,7 @@ os.environ.setdefault("UPSTOX_API_KEY", "test-api-key")
 os.environ.setdefault("UPSTOX_API_SECRET", "test-api-secret")
 os.environ.setdefault("UPSTOX_REDIRECT_URI", "http://localhost:8000/auth/callback")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
+os.environ.setdefault("TOKEN_ENCRYPTION_KEY", "test-encryption-key-for-dev-only")
 
 import pytest
 

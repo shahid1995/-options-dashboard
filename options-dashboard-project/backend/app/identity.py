@@ -12,7 +12,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
@@ -53,6 +53,73 @@ class UserSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    broker_connection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("broker_connections.id"), nullable=True
+    )
+
+
+class BrokerConnection(Base):
+    """Persistent broker connection owned by a StrikeNova user. (AD-4)
+
+    Stores the user's per-user broker credentials (encrypted) and
+    connection metadata. Each row represents one broker account
+    linked to one StrikeNova user. (AD-2, AD-5)
+    """
+
+    __tablename__ = "broker_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    broker: Mapped[str] = mapped_column(String(32), index=True)
+    broker_account_id: Mapped[str] = mapped_column(String(128))
+    display_label: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    is_default: Mapped[bool] = mapped_column(default=True)
+    status: Mapped[str] = mapped_column(String(20), default="connected")
+    capability_mode: Mapped[str] = mapped_column(String(20), default="trading")
+
+    # Per-user broker credentials (encrypted — AD-2, AD-3)
+    broker_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_api_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_analytics_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_redirect_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_static_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+
+    # Provider-specific metadata
+    app_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    disconnected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "broker", "broker_account_id", name="uq_broker_connection"),
+    )
+
+
+class BrokerToken(Base):
+    """Session-scoped broker token. (§5.2)
+
+    One row per (connection, session) pair. Tokens are encrypted at rest.
+    """
+
+    __tablename__ = "broker_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[str] = mapped_column(
+        ForeignKey("broker_connections.id", ondelete="CASCADE"), index=True
+    )
+    session_hash: Mapped[str] = mapped_column(String(64), index=True)
+    broker_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    broker_refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    broker_refresh_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", "session_hash", name="uq_broker_token_per_session"),
+    )
 
 
 def hash_session_id(session_id: str) -> str:
