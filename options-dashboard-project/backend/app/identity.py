@@ -217,7 +217,7 @@ def create_session_record(
         expires_at=now + SESSION_TTL,
     )
     db.add(record)
-    db.commit()
+    db.flush()
     db.refresh(record)
     return record
 
@@ -231,7 +231,7 @@ def revoke_session(db: Session, session_id: str) -> bool:
     if record is None:
         return False
     record.revoked_at = _utcnow()
-    db.commit()
+    db.flush()
     return True
 
 

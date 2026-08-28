@@ -44,10 +44,11 @@ def test_clear_token_when_already_empty():
 
 def test_oauth_state_consumed_once():
     state = token_store.create_oauth_state()
-    assert token_store.consume_oauth_state(state) is True
-    assert token_store.consume_oauth_state(state) is False
+    result = token_store.consume_oauth_state(state)
+    assert result is not None  # Phase 10.2B-3: returns dict, not bool
+    assert token_store.consume_oauth_state(state) is None  # Already consumed
 
 
 def test_oauth_state_rejects_unknown_or_missing():
-    assert token_store.consume_oauth_state("forged") is False
-    assert token_store.consume_oauth_state(None) is False
+    assert token_store.consume_oauth_state("forged") is None
+    assert token_store.consume_oauth_state(None) is None

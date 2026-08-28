@@ -46,6 +46,9 @@ def _extract_session_id(
 def _resolve_user(db: Session, sid: str) -> AuthenticatedUser:
     """Core resolution: session_id → (user_id, access_token).
 
+    Phase 10.2B-3: token_store.get_token() now has DB fallback, so this
+    function works across server restarts (memory → DB → decrypt → cache).
+
     Raises 401/403 on any failure.  Pure logic, no DI.
     """
     from app.identity import get_active_session, User
