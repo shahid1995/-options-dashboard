@@ -53,17 +53,61 @@ async def _request(method: str, path: str, base_url: str = BASE_URL, **kwargs) -
         raise UpstoxError(502, "Upstox returned an unreadable (non-JSON) response") from e
 
 
-def get_login_url(state: str) -> str:
+def get_login_url(
+    state: str,
+    *,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+) -> str:
+    """Build the Upstox OAuth authorization URL.
+
+    When client_id is provided (BYOB path), it is the user's own API key.
+    When omitted, falls back to the platform-level settings.UPSTOX_API_KEY
+    (backward compatible -- single-user deployments).
+
+    Raises UpstoxError if no API key is available.
+    """
+    effective_client_id = client_id or settings.UPSTOX_API_KEY
+    if not effective_client_id:
+        raise UpstoxError(
+            500,
+            "No Upstox API key available. "
+            "Either store your credentials via POST /auth/connect or "
+            "set UPSTOX_API_KEY in the environment."
+        )
     params = urlencode({
         "response_type": "code",
-        "client_id": settings.UPSTOX_API_KEY,
-        "redirect_uri": settings.UPSTOX_REDIRECT_URI,
+        "client_id": effective_client_id,
+        "redirect_uri": redirect_uri or settings.UPSTOX_REDIRECT_URI,
         "state": state,
     })
     return f"{BASE_URL}/login/authorization/dialog?{params}"
 
 
-async def exchange_code_for_token(code: str) -> str:
+async def exchange_code_for_token(
+    code: str,
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    redirect_uri: str | None = None,
+) -> str:
+    """Exchange an Upstox authorization code for an access token.
+
+    When client_id/client_secret are provided (BYOB path), they are the
+    user's own Developer App credentials.  When omitted, falls back to
+    platform-level settings (backward compatible).
+
+    Raises UpstoxError if no credentials are available.
+    """
+    effective_client_id = client_id or settings.UPSTOX_API_KEY
+    effective_secret = client_secret or settings.UPSTOX_API_SECRET
+    if not effective_client_id or not effective_secret:
+        raise UpstoxError(
+            500,
+            "No Upstox credentials available for token exchange. "
+            "Store your credentials via POST /auth/connect or "
+            "set UPSTOX_API_KEY/UPSTOX_API_SECRET in the environment."
+        )
     data = await _request(
         "POST",
         "/login/authorization/token",
@@ -73,9 +117,9 @@ async def exchange_code_for_token(code: str) -> str:
         },
         data={
             "code": code,
-            "client_id": settings.UPSTOX_API_KEY,
-            "client_secret": settings.UPSTOX_API_SECRET,
-            "redirect_uri": settings.UPSTOX_REDIRECT_URI,
+            "client_id": effective_client_id,
+            "client_secret": effective_secret,
+            "redirect_uri": redirect_uri or settings.UPSTOX_REDIRECT_URI,
             "grant_type": "authorization_code",
         },
     )

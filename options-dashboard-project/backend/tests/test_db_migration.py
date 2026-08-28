@@ -103,7 +103,7 @@ def test_init_db_uses_alembic(monkeypatch, temp_engine):
     assert "positions" in tables
     assert "paper_orders" in tables
     assert "alembic_version" in tables
-    assert len(tables) == 25  # 24 app tables + alembic_version
+    assert len(tables) == 27  # 26 app tables + alembic_version (10.2B-1 added broker_connections, broker_tokens)
 
 
 def test_init_db_creates_legacy_columns_via_baseline(monkeypatch, temp_engine):

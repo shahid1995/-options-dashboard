@@ -102,6 +102,8 @@ def test_callback_with_code_sets_session_cookie_and_redirects(client, monkeypatc
             }
         }
     )
+    # extract_account_id is a @staticmethod — must return str, not coroutine
+    mock_adapter.extract_account_id = MagicMock(return_value="broker-user-1")
     mock_gw = MagicMock()
     mock_gw.create.return_value = mock_adapter
     monkeypatch.setattr("app.routers.auth.gateway", mock_gw)
