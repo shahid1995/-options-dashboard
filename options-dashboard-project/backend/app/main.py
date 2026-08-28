@@ -69,22 +69,24 @@ async def _gex_capture_loop():
     while not _stop_event.is_set():
         cycle_start = _time.time()
         try:
-            # Get the current broker token — find an active session
-            active_sessions = get_all_session_ids()
-            if not active_sessions:
-                logger.debug("GEX capture skipped: no active broker session")
-                await _interruptible_sleep(interval)
-                continue
-
             # Fetch chain from the customer's authorized broker
             from app.brokers.adapters.upstox.mapper import UPSTOX_INSTRUMENT_KEYS as INSTRUMENT_KEYS
             from app.brokers.domain.enums import BROKER_ID_UPSTOX
             from app.brokers.gateway import gateway
 
-            # Use the most recently authenticated session
-            current_session_id = active_sessions[-1] if active_sessions else None
-            token = get_token(current_session_id)
+            # Phase 10.2B-4: Token priority
+            # 1. Analytics Token (1-year validity, read-only, most reliable)
+            # 2. OAuth session token (daily expiry, fallback)
+            # 3. Skip capture if no token available
+            token = _get_analytics_token_for_gex()
+            token_source = "analytics"
+            current_session_id = None
             if not token:
+                token, current_session_id = _get_oauth_token_for_gex()
+                token_source = "oauth"
+
+            if not token:
+                logger.debug("GEX capture skipped: no available token")
                 await _interruptible_sleep(interval)
                 continue
 
@@ -128,7 +130,11 @@ async def _gex_capture_loop():
             # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
-                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=current_session_id)
+                # owner_id tracks which session owns this snapshot.
+                # Analytics Token captures have no session (direct DB lookup),
+                # so owner_id is None.  OAuth captures use the session ID.
+                owner_id = current_session_id if token_source == "oauth" else None
+                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=owner_id)
                 status = result.get("status")
 
                 if status == "captured":
@@ -179,6 +185,54 @@ async def _gex_capture_loop():
         await _interruptible_sleep(effective_interval)
 
     logger.info("GEX capture loop stopped")
+
+
+def _get_analytics_token_for_gex() -> str | None:
+    """Find an Analytics Token from any connected user for background GEX.
+
+    Phase 10.2B-4: Uses per-user Analytics Tokens (1-year validity) instead
+    of daily-expiring OAuth tokens.  Returns the first available Analytics
+    Token, or None.
+    """
+    try:
+        from app.db import SessionLocal
+        from app.identity import BrokerConnection
+        from app.crypto import decrypt
+
+        db = SessionLocal()
+        try:
+            conn = (
+                db.query(BrokerConnection)
+                .filter(
+                    BrokerConnection.status == "connected",
+                    BrokerConnection.broker == "UPSTOX",
+                    BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+                )
+                .first()
+            )
+            if conn is None:
+                return None
+            return decrypt(conn.broker_analytics_token_encrypted)
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("Failed to get Analytics Token for GEX capture")
+        return None
+
+
+def _get_oauth_token_for_gex() -> tuple[str | None, str | None]:
+    """Fallback: find any active OAuth session token for background GEX.
+
+    OAuth tokens expire daily at 3:30 AM IST.
+    Returns (token, session_id) or (None, None).
+    """
+    from app.services.token_store import get_token, get_all_session_ids
+
+    active_sessions = get_all_session_ids()
+    if not active_sessions:
+        return None, None
+    session_id = active_sessions[-1]
+    return get_token(session_id), session_id
 
 
 async def _interruptible_sleep(seconds: float):

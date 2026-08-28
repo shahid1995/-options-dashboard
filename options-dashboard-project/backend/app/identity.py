@@ -440,3 +440,100 @@ def get_or_create_connection(
     conn.updated_at = _utcnow()
     db.flush()
     return conn
+
+
+# ---------------------------------------------------------------------------
+# Analytics Token management (Phase 10.2B-4)
+# ---------------------------------------------------------------------------
+
+
+def store_analytics_token(
+    db: Session,
+    user_id: str,
+    broker: str,
+    analytics_token: str,
+) -> BrokerConnection:
+    """Store an encrypted Analytics Token on the user's default connection.
+
+    The Analytics Token is encrypted at rest via Fernet (app.crypto).
+    Only one Analytics Token per (user, broker) — overwrites existing.
+
+    Raises ValueError if no connected broker connection exists.
+    """
+    from app.crypto import encrypt
+
+    broker_upper = broker.upper()
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.status == "connected",
+            BrokerConnection.is_default == True,
+        )
+        .first()
+    )
+    if conn is None:
+        raise ValueError(
+            f"No connected {broker_upper} connection found for this user. "
+            "Connect your broker first."
+        )
+    conn.broker_analytics_token_encrypted = encrypt(analytics_token)
+    conn.updated_at = _utcnow()
+    db.flush()
+    return conn
+
+
+def get_analytics_token(
+    db: Session,
+    user_id: str,
+    broker: str,
+) -> str | None:
+    """Retrieve and decrypt the Analytics Token for a user's broker connection.
+
+    Returns None if no Analytics Token is stored.
+    """
+    from app.crypto import decrypt
+
+    broker_upper = broker.upper()
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.status == "connected",
+            BrokerConnection.is_default == True,
+        )
+        .first()
+    )
+    if conn is None or conn.broker_analytics_token_encrypted is None:
+        return None
+    return decrypt(conn.broker_analytics_token_encrypted)
+
+
+def remove_analytics_token(
+    db: Session,
+    user_id: str,
+    broker: str,
+) -> bool:
+    """Remove the Analytics Token from a user's broker connection.
+
+    Returns True if a token was removed, False if none existed.
+    """
+    broker_upper = broker.upper()
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.status == "connected",
+            BrokerConnection.is_default == True,
+        )
+        .first()
+    )
+    if conn is None or conn.broker_analytics_token_encrypted is None:
+        return False
+    conn.broker_analytics_token_encrypted = None
+    conn.updated_at = _utcnow()
+    db.flush()
+    return True

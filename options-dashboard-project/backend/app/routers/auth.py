@@ -12,13 +12,17 @@ from app.brokers.gateway import gateway
 from app.config import settings
 from app.db import SessionLocal, get_db
 from app.identity import (
+    BrokerConnection,
     UserSession,
     create_session_record,
     get_active_session,
     get_or_create_connection,
     get_or_create_user_from_upstox,
+    get_analytics_token,
+    remove_analytics_token,
     resolve_user_credentials,
     revoke_session,
+    store_analytics_token,
     store_credentials,
 )
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
@@ -324,3 +328,94 @@ def logout(session_id: str | None = Depends(get_session_id), db: Session = Depen
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
     return response
+
+
+# ---------------------------------------------------------------------------
+# Analytics Token endpoints (Phase 10.2B-4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/connect-analytics-token")
+def connect_analytics_token(
+    broker: str = Body(default="UPSTOX", embed=True),
+    analytics_token: str = Body(..., embed=True),
+    user: AuthenticatedUser = Depends(CurrentUser()),
+    db: Session = Depends(get_db),
+):
+    """Store the user's Analytics Token for read-only market data access.
+
+    The user must have an active broker connection for this broker.
+    The Analytics Token is encrypted and stored on the broker_connection row.
+
+    Validation:
+    - analytics_token must be non-empty
+    - Maximum length: 512 characters
+    """
+    analytics_token = analytics_token.strip()
+    if not analytics_token:
+        raise HTTPException(status_code=422, detail="analytics_token must not be empty")
+    if len(analytics_token) > 512:
+        raise HTTPException(
+            status_code=422, detail="analytics_token must be 512 characters or fewer"
+        )
+
+    try:
+        store_analytics_token(db, user.user_id, broker, analytics_token)
+        db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    return {"ok": True, "broker": broker.upper(), "message": "Analytics Token stored"}
+
+
+@router.get("/analytics-token/status")
+def analytics_token_status(
+    broker: str = Query(default="UPSTOX"),
+    user: AuthenticatedUser = Depends(CurrentUser()),
+    db: Session = Depends(get_db),
+):
+    """Check if the user has an Analytics Token stored for this broker.
+
+    Does NOT return the actual token — only whether it exists.
+    """
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user.user_id,
+            BrokerConnection.broker == broker.upper(),
+            BrokerConnection.status == "connected",
+            BrokerConnection.is_default == True,
+        )
+        .first()
+    )
+    if conn is None:
+        return {
+            "has_analytics_token": False,
+            "broker": broker.upper(),
+            "message": "No connected broker found",
+        }
+
+    return {
+        "has_analytics_token": conn.broker_analytics_token_encrypted is not None,
+        "broker": broker.upper(),
+        "connection_id": conn.id,
+    }
+
+
+@router.delete("/analytics-token")
+def delete_analytics_token(
+    broker: str = Query(default="UPSTOX"),
+    user: AuthenticatedUser = Depends(CurrentUser()),
+    db: Session = Depends(get_db),
+):
+    """Remove the user's Analytics Token for this broker."""
+    removed = remove_analytics_token(db, user.user_id, broker)
+    db.commit()
+
+    if not removed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No Analytics Token found for {broker.upper()}",
+        )
+
+    return {"ok": True, "broker": broker.upper(), "message": "Analytics Token removed"}
