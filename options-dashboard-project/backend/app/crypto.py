@@ -5,10 +5,19 @@ All broker credentials stored in PostgreSQL are encrypted at rest using
 Fernet symmetric encryption (AES-128-CBC + HMAC-SHA256).
 
 Key derivation:
-  The TOKEN_ENCRYPTION_KEY environment variable is hashed with SHA-256 to
-  produce a 32-byte Fernet key. No salt is used — the key itself is the
-  secret, and a deterministic derivation ensures the same key always
-  produces the same Fernet instance (required for decryption).
+  TOKEN_ENCRYPTION_KEY is derived into a 32-byte Fernet key via
+  PBKDF2-HMAC-SHA256 with 480,000 iterations and a fixed, non-secret
+  derivation salt (_FIXED_SALT). The fixed salt is part of the algorithm,
+  not a key-management parameter — it prevents rainbow-table attacks on
+  the derivation itself. The derived Fernet key is deterministic: the same
+  TOKEN_ENCRYPTION_KEY always produces the same Fernet instance.
+
+Key rotation:
+  Changing TOKEN_ENCRYPTION_KEY invalidates ALL previously encrypted
+  ciphertext. Rotation requires: (1) set the new key, (2) re-encrypt
+  every row in broker_connections and broker_tokens, (3) deploy. There
+  is no automatic key rotation — TOKEN_ENCRYPTION_KEY is stable for the
+  lifetime of the deployment.
 
 Security properties:
   - Tokens are never logged, repr'd, or returned in error messages.

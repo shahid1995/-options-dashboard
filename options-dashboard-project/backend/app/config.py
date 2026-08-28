@@ -33,7 +33,9 @@ class Settings(BaseSettings):
 
     # Phase 10.2B-1: Broker credential encryption key.
     # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
-    # This is the stable encryption key — not rotatable via config.
+    # Changing this key invalidates all existing encrypted ciphertext —
+    # rotation requires re-encrypting every row in broker_connections
+    # and broker_tokens before deployment.
     TOKEN_ENCRYPTION_KEY: str = ""
 
     class Config:

@@ -64,6 +64,21 @@ class BrokerConnection(Base):
     Stores the user's per-user broker credentials (encrypted) and
     connection metadata. Each row represents one broker account
     linked to one StrikeNova user. (AD-2, AD-5)
+
+    broker_account_id lifecycle:
+      1. Populated at connection creation time from the broker OAuth profile
+         (e.g. Upstox user_id, FYERS app_id).  The value is broker-specific
+         and opaque to the platform — StrikeNova never interprets it.
+      2. Immutable after creation — it is part of the unique constraint
+         (user_id, broker, broker_account_id).  A different account requires
+         a new BrokerConnection row.
+      3. Required (NOT NULL) — every connection must identify the upstream
+         broker account it was authorised against.
+
+    is_default invariant:
+      At most one connection per (user_id, broker) may have is_default=True.
+      Enforced at the PostgreSQL schema level via a partial unique index
+      (uq_one_default_per_user_broker).
     """
 
     __tablename__ = "broker_connections"
@@ -95,6 +110,13 @@ class BrokerConnection(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "broker", "broker_account_id", name="uq_broker_connection"),
+        # Partial unique index: at most one default connection per (user, broker).
+        # Enforced ONLY at the schema level via Alembic migration
+        # (125e1807df8d).  NOT declared here because cross-dialect partial
+        # indexes (PostgreSQL WHERE vs SQLite WHERE) cannot be expressed
+        # portably in SQLAlchemy ORM metadata — create_all() would create
+        # a plain unique index on (user_id, broker) in SQLite, blocking
+        # legitimate multi-connection rows.
     )
 
 

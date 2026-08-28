@@ -76,6 +76,25 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column('broker_connection_id', sa.String(36), nullable=True))
         batch_op.create_foreign_key('fk_user_sessions_connection', 'broker_connections', ['broker_connection_id'], ['id'])
 
+    # 4. Partial unique index: at most one default connection per (user, broker)
+    #    Uses dialect detection because boolean literals differ:
+    #      PostgreSQL: WHERE is_default = true
+    #      SQLite:     WHERE is_default = 1
+    dialect = op.get_bind().dialect.name
+    if dialect == "postgresql":
+        op.execute(
+            "CREATE UNIQUE INDEX uq_one_default_per_user_broker "
+            "ON broker_connections (user_id, broker) "
+            "WHERE is_default = true"
+        )
+    else:
+        # SQLite supports partial unique indexes but uses integer booleans
+        op.execute(
+            "CREATE UNIQUE INDEX uq_one_default_per_user_broker "
+            "ON broker_connections (user_id, broker) "
+            "WHERE is_default = 1"
+        )
+
 
 def downgrade() -> None:
     """Downgrade schema."""
@@ -84,4 +103,5 @@ def downgrade() -> None:
         batch_op.drop_column('broker_connection_id')
 
     op.drop_table('broker_tokens')
+    op.drop_index('uq_one_default_per_user_broker', table_name='broker_connections')
     op.drop_table('broker_connections')
