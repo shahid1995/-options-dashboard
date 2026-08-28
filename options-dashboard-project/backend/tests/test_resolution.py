@@ -23,6 +23,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import StrategyExecution, PaperOrder, Position
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 
 LOT = 65
@@ -57,8 +58,9 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-resolve-6801")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-resolve-6801")
+    return session_id
 
 
 def headers(session_id):
@@ -310,7 +312,7 @@ class TestTemplateResolution:
         )
         assert resp.status_code == 404
 
-    def test_resolve_other_users_template_returns_404(self, client, logged_in):
+    def test_resolve_other_users_template_returns_404(self, client, logged_in, db_session):
         """Cannot resolve another user's template."""
         # Create template as user A
         resp = client.post(
@@ -332,7 +334,7 @@ class TestTemplateResolution:
         template_id = resp.json()["id"]
 
         # Switch to user B
-        other_sid = token_store.set_token("tok-resolve-other-user")
+        other_sid, other_uid = create_test_identity(db_session, "tok-resolve-other-user")
         resp = client.post(
             f"/paper/templates/{template_id}/resolve",
             headers=headers(other_sid),

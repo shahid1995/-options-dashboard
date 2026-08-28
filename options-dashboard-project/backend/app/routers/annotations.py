@@ -11,20 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import StrategyExecution
-from app.routers.deps import get_session_id
+from app.routers.deps import AuthenticatedUser, CurrentUser
 from app.schemas import TradeAnnotationsIn, TradeAnnotationsOut, TradeDetailOut, StrategyDetailOut
 from app.services.performance import _parse_tags, serialize_tags, get_trade_detail, get_strategy_detail
-from app.services.token_store import get_token
+
 
 router = APIRouter(prefix="/paper", tags=["annotations"])
 
 
-def require_session(session_id: str | None) -> tuple[str, str]:
-    """Validate the session and return (user_id, access_token)."""
-    token = get_token(session_id) if session_id else None
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-    return session_id, token
+def require_session(user: AuthenticatedUser) -> tuple[str, str]:
+    """Return (user.id, access_token). Phase 10.2A."""
+    return user.user_id, user.access_token
 
 
 @router.put(
@@ -34,7 +31,7 @@ def require_session(session_id: str | None) -> tuple[str, str]:
 def update_trade_annotations(
     execution_id: str,
     body: TradeAnnotationsIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """PUT /paper/analytics/trades/:id/annotations — update trade tags and notes.
@@ -44,7 +41,7 @@ def update_trade_annotations(
     validated as a string (max 2000 chars). The execution must belong to the
     authenticated user.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     exec_record = db.scalar(
         select(StrategyExecution).where(
             StrategyExecution.execution_id == execution_id,
@@ -84,11 +81,11 @@ def update_trade_annotations(
 )
 def trade_detail(
     execution_id: str,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/analytics/trades/:id — complete trade detail drill-down."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     detail = get_trade_detail(user_id, execution_id, db)
     if detail is None:
         raise HTTPException(status_code=404, detail="Execution not found")
@@ -101,11 +98,11 @@ def trade_detail(
 )
 def strategy_detail(
     strategy_name: str,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/analytics/strategies/:name — strategy detail with aggregate metrics."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     detail = get_strategy_detail(user_id, strategy_name, db)
     if detail is None:
         raise HTTPException(status_code=404, detail="Strategy not found")

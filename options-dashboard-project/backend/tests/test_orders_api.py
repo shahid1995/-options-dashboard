@@ -15,6 +15,7 @@ from app.db import Base, get_db
 from app.main import app
 from app.models import PaperOrder, StrategyExecution
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 
 
 @pytest.fixture()
@@ -53,8 +54,9 @@ def _login():
 
 
 @pytest.fixture()
-def logged_in(client):
-    return token_store.set_token("tok-xyz")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-xyz")
+    return session_id
 
 
 def _make_order(
@@ -121,8 +123,8 @@ def _headers(sid):
 
 def test_backward_compat_no_filters(db_session, client, logged_in):
     """No query params returns all orders (backward-compatible)."""
-    _make_order(db_session, client_order_id="ord-1", user_id=logged_in)
-    _make_order(db_session, client_order_id="ord-2", user_id=logged_in)
+    _make_order(db_session, client_order_id="ord-1", user_id=db_session._test_user_id)
+    _make_order(db_session, client_order_id="ord-2", user_id=db_session._test_user_id)
     resp = client.get("/paper/orders", headers=_headers(logged_in))
     assert resp.status_code == 200
     data = resp.json()
@@ -133,9 +135,9 @@ def test_backward_compat_no_filters(db_session, client, logged_in):
 
 
 def test_filter_by_status(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", status="FILLED")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", status="REJECTED", rejected_reason="Market closed")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-3", status="PENDING")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", status="FILLED")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", status="REJECTED", rejected_reason="Market closed")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-3", status="PENDING")
 
     resp = client.get("/paper/orders?status=FILLED", headers=_headers(logged_in))
     assert resp.status_code == 200
@@ -153,9 +155,9 @@ def test_filter_by_status(db_session, client, logged_in):
 
 
 def test_filter_by_symbol(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", symbol="NIFTY")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", symbol="BANKNIFTY")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-3", symbol="NIFTY")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", symbol="NIFTY")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", symbol="BANKNIFTY")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-3", symbol="NIFTY")
 
     resp = client.get("/paper/orders?symbol=NIFTY", headers=_headers(logged_in))
     data = resp.json()
@@ -164,7 +166,7 @@ def test_filter_by_symbol(db_session, client, logged_in):
 
 
 def test_filter_by_symbol_case_insensitive(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", symbol="NIFTY")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", symbol="NIFTY")
     resp = client.get("/paper/orders?symbol=nifty", headers=_headers(logged_in))
     data = resp.json()
     assert len(data) == 1
@@ -174,8 +176,8 @@ def test_filter_by_symbol_case_insensitive(db_session, client, logged_in):
 
 
 def test_filter_by_action(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", action="buy")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", action="sell")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", action="buy")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", action="sell")
 
     resp = client.get("/paper/orders?action=buy", headers=_headers(logged_in))
     data = resp.json()
@@ -187,8 +189,8 @@ def test_filter_by_action(db_session, client, logged_in):
 
 
 def test_filter_by_option_type(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", option_type="call")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", option_type="put")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", option_type="call")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", option_type="put")
 
     resp = client.get("/paper/orders?option_type=put", headers=_headers(logged_in))
     data = resp.json()
@@ -200,8 +202,8 @@ def test_filter_by_option_type(db_session, client, logged_in):
 
 
 def test_filter_by_kind(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", kind="entry")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", kind="exit")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", kind="entry")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", kind="exit")
 
     resp = client.get("/paper/orders?kind=exit", headers=_headers(logged_in))
     data = resp.json()
@@ -213,9 +215,9 @@ def test_filter_by_kind(db_session, client, logged_in):
 
 
 def test_filter_by_strategy_execution_id(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", execution_id="exec-A")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", execution_id="exec-B")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-3", execution_id="exec-A")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", execution_id="exec-A")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", execution_id="exec-B")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-3", execution_id="exec-A")
 
     resp = client.get("/paper/orders?strategy_execution_id=exec-A", headers=_headers(logged_in))
     data = resp.json()
@@ -227,9 +229,9 @@ def test_filter_by_strategy_execution_id(db_session, client, logged_in):
 
 
 def test_combined_filters(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", symbol="NIFTY", action="buy", status="FILLED")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", symbol="NIFTY", action="sell", status="FILLED")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-3", symbol="BANKNIFTY", action="buy", status="FILLED")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", symbol="NIFTY", action="buy", status="FILLED")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", symbol="NIFTY", action="sell", status="FILLED")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-3", symbol="BANKNIFTY", action="buy", status="FILLED")
 
     resp = client.get("/paper/orders?symbol=NIFTY&action=buy", headers=_headers(logged_in))
     data = resp.json()
@@ -243,7 +245,7 @@ def test_combined_filters(db_session, client, logged_in):
 
 def test_limit_and_offset(db_session, client, logged_in):
     for i in range(5):
-        _make_order(db_session, user_id=logged_in, client_order_id=f"ord-{i:03d}")
+        _make_order(db_session, user_id=db_session._test_user_id, client_order_id=f"ord-{i:03d}")
 
     resp = client.get("/paper/orders?limit=2", headers=_headers(logged_in))
     data = resp.json()
@@ -267,9 +269,9 @@ def test_limit_max_500(client, logged_in):
 
 
 def test_strategy_tag_attached(db_session, client, logged_in):
-    _make_execution(db_session, user_id=logged_in, execution_id="exec-1", strategy_tag="Iron Condor")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1", execution_id="exec-1")
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-2", execution_id=None)
+    _make_execution(db_session, user_id=db_session._test_user_id, execution_id="exec-1", strategy_tag="Iron Condor")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1", execution_id="exec-1")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-2", execution_id=None)
 
     resp = client.get("/paper/orders", headers=_headers(logged_in))
     data = resp.json()
@@ -286,7 +288,7 @@ def test_strategy_tag_attached(db_session, client, logged_in):
 
 
 def test_updated_at_present(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1")
     resp = client.get("/paper/orders", headers=_headers(logged_in))
     data = resp.json()
     assert "updated_at" in data[0]
@@ -297,7 +299,7 @@ def test_updated_at_present(db_session, client, logged_in):
 
 
 def test_user_isolation(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-mine")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-mine")
     _make_order(db_session, user_id="user-2", client_order_id="ord-theirs")
 
     resp = client.get("/paper/orders", headers=_headers(logged_in))
@@ -317,8 +319,8 @@ def test_unauthenticated_rejected(client):
     assert resp.status_code == 401
 
 
-def test_wrong_session_rejected(client):
-    token_store.set_token("other-token")
+def test_wrong_session_rejected(client, db_session):
+    create_test_identity(db_session, "other-token")
     resp = client.get("/paper/orders", headers={"X-Session-Id": "wrong"})
     assert resp.status_code == 401
 
@@ -336,7 +338,7 @@ def test_no_matching_orders(db_session, client, logged_in):
 
 
 def test_rejected_order_has_reason(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-rej", status="REJECTED", rejected_reason="Chain unavailable")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-rej", status="REJECTED", rejected_reason="Chain unavailable")
     resp = client.get("/paper/orders?status=REJECTED", headers=_headers(logged_in))
     data = resp.json()
     assert len(data) == 1
@@ -344,7 +346,7 @@ def test_rejected_order_has_reason(db_session, client, logged_in):
 
 
 def test_filled_order_no_rejected_reason(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-fill", status="FILLED")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-fill", status="FILLED")
     resp = client.get("/paper/orders?status=FILLED", headers=_headers(logged_in))
     data = resp.json()
     assert len(data) == 1
@@ -355,7 +357,7 @@ def test_filled_order_no_rejected_reason(db_session, client, logged_in):
 
 
 def test_all_orders_are_paper(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1")
     resp = client.get("/paper/orders", headers=_headers(logged_in))
     data = resp.json()
     assert len(data) == 1
@@ -366,7 +368,7 @@ def test_all_orders_are_paper(db_session, client, logged_in):
 
 
 def test_no_broker_credentials_leaked(db_session, client, logged_in):
-    _make_order(db_session, user_id=logged_in, client_order_id="ord-1")
+    _make_order(db_session, user_id=db_session._test_user_id, client_order_id="ord-1")
     resp = client.get("/paper/orders", headers=_headers(logged_in))
     data = resp.json()
     order = data[0]
@@ -381,7 +383,7 @@ def test_no_broker_credentials_leaked(db_session, client, logged_in):
 def test_partial_execution_representation(db_session, client, logged_in):
     _make_order(
         db_session,
-        user_id=logged_in,
+        user_id=db_session._test_user_id,
         client_order_id="ord-partial",
         quantity=10,
         filled_quantity=4,

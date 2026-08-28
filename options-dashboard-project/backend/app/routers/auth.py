@@ -3,13 +3,14 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.brokers.domain.enums import BROKER_ID_UPSTOX
 from app.brokers.domain.errors import BrokerError
 from app.brokers.gateway import gateway
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, get_db
 from app.identity import (
     create_session_record,
     get_active_session,
@@ -114,49 +115,39 @@ def status(session_id: str | None = Depends(get_session_id)):
 
 
 @router.get("/me")
-def me(session_id: str | None = Depends(get_session_id)):
+def me(session_id: str | None = Depends(get_session_id), db: Session = Depends(get_db)):
     """Return the authenticated StrikeNova account without broker secrets."""
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    # Schema is managed by Alembic migrations (Phase 10.1A).
-    db = SessionLocal()
-    try:
-        session = get_active_session(db, session_id)
-        if session is None:
-            raise HTTPException(status_code=401, detail="StrikeNova session is invalid or expired")
+    session = get_active_session(db, session_id)
+    if session is None:
+        raise HTTPException(status_code=401, detail="StrikeNova session is invalid or expired")
 
-        from app.identity import User
+    from app.identity import User
 
-        user = db.query(User).filter(User.id == session.user_id).one_or_none()
-        if user is None or user.status != "active":
-            raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+    user = db.query(User).filter(User.id == session.user_id).one_or_none()
+    if user is None or user.status != "active":
+        raise HTTPException(status_code=403, detail="StrikeNova account is not active")
 
-        return {
-            "user_id": user.id,
-            "email": user.email,
-            "display_name": user.display_name,
-            "status": user.status,
-            "identity_source": user.identity_source,
-            "broker_provider": user.broker_provider,
-            "created_at": user.created_at.isoformat() if user.created_at else None,
-            "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-        }
-    finally:
-        db.close()
+    return {
+        "user_id": user.id,
+        "email": user.email,
+        "display_name": user.display_name,
+        "status": user.status,
+        "identity_source": user.identity_source,
+        "broker_provider": user.broker_provider,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+    }
 
 
 @router.post("/logout")
-def logout(session_id: str | None = Depends(get_session_id)):
+def logout(session_id: str | None = Depends(get_session_id), db: Session = Depends(get_db)):
     if token_store.get_token(session_id) is None:
         raise HTTPException(status_code=401, detail="Not logged in")
 
-    # Schema is managed by Alembic migrations (Phase 10.1A).
-    db = SessionLocal()
-    try:
-        revoke_session(db, session_id)
-    finally:
-        db.close()
+    revoke_session(db, session_id)
 
     token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})

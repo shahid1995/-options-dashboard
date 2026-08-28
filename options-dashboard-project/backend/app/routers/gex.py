@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.deps import get_session_id
+from app.routers.deps import AuthenticatedUser, CurrentUser
 from app.services import token_store
 from app.services.gex_history import (
     record_gex_snapshot,
@@ -37,12 +37,12 @@ router = APIRouter()
 # Auth helper
 # ---------------------------------------------------------------------------
 
-def require_session(session_id: str | None) -> str:
-    """Validate the session and return the session_id."""
-    token = token_store.get_token(session_id) if session_id else None
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-    return session_id
+def require_session(user: AuthenticatedUser) -> str:
+    """Validate the session and return the user.id.
+
+    Phase 10.2A: authentication is handled by get_current_user();
+    this helper returns the canonical application identity."""
+    return user.user_id
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +105,7 @@ class GexSnapshotListOut(BaseModel):
 @router.post("/snapshots", response_model=dict)
 def create_snapshot(
     body: GexSnapshotIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /gex/snapshots — Store a GEX snapshot.
@@ -113,7 +113,7 @@ def create_snapshot(
     Idempotent within 1-minute tolerance: same symbol + capturedAt within
     60 seconds → returns existing ID without inserting a duplicate.
     """
-    require_session(session_id)
+    user_id = require_session(user)
 
     snapshot_dict = body.model_dump()
     # Inject schema version for the persistence layer
@@ -134,7 +134,7 @@ def create_snapshot(
                 expiry=snapshot_dict.get("expiry"),
                 limit=1,
                 since=since_cutoff,
-                owner_id=session_id,
+                owner_id=user_id,
             )
             if recent:
                 last = recent[-1]
@@ -150,12 +150,12 @@ def create_snapshot(
                     except (ValueError, TypeError):
                         pass
 
-    result = record_gex_snapshot(db, snapshot_dict, owner_id=session_id)
+    result = record_gex_snapshot(db, snapshot_dict, owner_id=user_id)
     if result == 0:
         raise HTTPException(status_code=400, detail="Invalid snapshot data")
 
     # Get the ID of the just-inserted snapshot — scoped to this session
-    latest = get_latest_snapshot(db, snapshot_dict["symbol"], snapshot_dict.get("expiry"), owner_id=session_id)
+    latest = get_latest_snapshot(db, snapshot_dict["symbol"], snapshot_dict.get("expiry"), owner_id=user_id)
     snap_id = latest.get("id") if latest else None
 
     return {"ok": True, "id": snap_id, "duplicate": False}
@@ -167,11 +167,11 @@ def list_snapshots(
     expiry: str | None = Query(None, description="Filter by expiry"),
     limit: int = Query(200, ge=1, le=500, description="Max snapshots"),
     since: str | None = Query(None, description="ISO-8601 timestamp filter"),
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /gex/snapshots — Query stored GEX snapshots (oldest-first)."""
-    require_session(session_id)
+    user_id = require_session(user)
 
     since_dt = None
     if since:
@@ -181,7 +181,7 @@ def list_snapshots(
             raise HTTPException(status_code=400, detail="Invalid 'since' timestamp")
 
     # Phase 8F: scope snapshots to the authenticated session
-    snapshots = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=limit, since=since_dt, owner_id=session_id)
+    snapshots = get_gex_snapshots(db, symbol=symbol, expiry=expiry, limit=limit, since=since_dt, owner_id=user_id)
 
     return GexSnapshotListOut(
         snapshots=[GexSnapshotOut(**s) for s in snapshots],
@@ -194,14 +194,14 @@ def list_snapshots(
 def latest_snapshot(
     symbol: str = Query(..., description="Underlying symbol"),
     expiry: str | None = Query(None, description="Filter by expiry"),
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /gex/snapshots/latest — Get the most recent GEX snapshot."""
-    require_session(session_id)
+    user_id = require_session(user)
 
     # Phase 8F: scope to the authenticated session
-    snapshot = get_latest_snapshot(db, symbol=symbol, expiry=expiry, owner_id=session_id)
+    snapshot = get_latest_snapshot(db, symbol=symbol, expiry=expiry, owner_id=user_id)
     if snapshot is None:
         return None
 
@@ -211,13 +211,13 @@ def latest_snapshot(
 @router.get("/snapshots/count")
 def snapshot_count(
     symbol: str | None = Query(None, description="Filter by symbol"),
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /gex/snapshots/count — Count stored snapshots."""
-    require_session(session_id)
+    user_id = require_session(user)
     # Phase 8F: count only this session's snapshots
-    return {"count": count_gex_snapshots(db, symbol=symbol, owner_id=session_id)}
+    return {"count": count_gex_snapshots(db, symbol=symbol, owner_id=user_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ def snapshot_count(
 async def trigger_capture(
     symbol: str = Query("NIFTY", description="Underlying symbol"),
     expiry_date: str = Query(..., description="Expiry date YYYY-MM-DD"),
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /gex/capture — Manually trigger a GEX snapshot capture.
@@ -239,7 +239,7 @@ async def trigger_capture(
     Intended for operational testing and manual snapshot creation.
     The background capture loop handles automatic periodic captures.
     """
-    session_id = require_session(session_id)
+    user_id = require_session(user)
 
     from app.brokers.adapters.upstox.mapper import UPSTOX_INSTRUMENT_KEYS as INSTRUMENT_KEYS
     from app.brokers.domain.enums import BROKER_ID_UPSTOX
@@ -256,22 +256,15 @@ async def trigger_capture(
     except ValueError:
         raise HTTPException(status_code=422, detail="expiry_date must be YYYY-MM-DD")
 
-    # Fetch chain from customer's broker
-    token = token_store.get_token(session_id)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-
-    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=token)
+    # Fetch chain from customer's broker — token comes from AuthenticatedUser
+    adapter = gateway.create(BROKER_ID_UPSTOX, access_token=user.access_token)
     try:
         chain = await adapter.get_option_chain(symbol, expiry_date)
     except BrokerError as e:
-        if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token(session_id)
-            raise HTTPException(status_code=401, detail="Upstox session expired.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error: {e.message}") from e
 
-    # Capture and persist — scoped to this session
+    # Capture and persist — scoped to this user
     capture_service = GexCaptureService()
-    result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=session_id)
+    result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=user_id)
 
     return result

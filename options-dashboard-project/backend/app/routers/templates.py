@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.db import get_db
 from app.models import StrategyTemplate, StrategyTemplateLeg
-from app.routers.deps import get_session_id
+from app.routers.deps import AuthenticatedUser, CurrentUser
 from app.routers.paper import require_session
 from app.schemas import (
     ExecutionOut,
@@ -89,11 +89,11 @@ def _template_out(template: StrategyTemplate) -> dict:
 
 @router.get("/templates", response_model=list[StrategyTemplateOut])
 def list_templates(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/templates — List the authenticated user's strategy templates."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     templates = db.scalars(
         select(StrategyTemplate)
         .options(joinedload(StrategyTemplate.legs))
@@ -106,11 +106,11 @@ def list_templates(
 @router.post("/templates", status_code=201, response_model=StrategyTemplateOut)
 def create_template(
     body: StrategyTemplateCreateIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/templates — Create a new strategy template."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
 
     # Check for duplicate name within user
     existing = db.scalar(
@@ -168,11 +168,11 @@ def create_template(
 )
 def get_template(
     template_id: int,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/templates/:id — Retrieve one strategy template."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     template = _get_user_template(db, user_id, template_id)
     return _template_out(template)
 
@@ -183,7 +183,7 @@ def get_template(
 def update_template(
     template_id: int,
     body: StrategyTemplateUpdateIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """PUT /paper/templates/:id — Update a strategy template.
@@ -192,7 +192,7 @@ def update_template(
     When ``legs`` is provided, the entire leg set is replaced (idempotent
     full replacement, not merge).
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     template = _get_user_template(db, user_id, template_id)
 
     if body.name is not None:
@@ -254,7 +254,7 @@ def update_template(
 )
 def duplicate_template(
     template_id: int,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
     new_name: str | None = Query(default=None, description="Optional new name for the duplicate"),
 ):
@@ -262,7 +262,7 @@ def duplicate_template(
 
     Creates a deep copy with a new name (defaults to ``<original> (Copy)``).
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     source = _get_user_template(db, user_id, template_id)
 
     dup_name = new_name or f"{source.name} (Copy)"
@@ -318,7 +318,7 @@ def duplicate_template(
 @router.delete("/templates/{template_id}", status_code=204)
 def delete_template(
     template_id: int,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """DELETE /paper/templates/:id — Delete a strategy template.
@@ -326,7 +326,7 @@ def delete_template(
     Only deletes the template and its legs. NEVER affects historical
     executions, positions, exposures, orders, journal or P&L.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     template = _get_user_template(db, user_id, template_id)
     db.delete(template)
     db.commit()
@@ -339,7 +339,7 @@ def delete_template(
 )
 async def resolve_template(
     template_id: int,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/templates/:id/resolve — Resolve a saved template against live chain.
@@ -352,7 +352,7 @@ async def resolve_template(
     """
     from app.services.template_resolution import resolve_legs
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     template = _get_user_template(db, user_id, template_id)
 
     # Convert template legs to dicts
@@ -581,7 +581,7 @@ def _persist_execution_metadata(db: Session, execution_id: str, metadata: dict) 
 )
 async def execute_template_preview(
     template_id: int,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/templates/:id/execute/preview — Pre-execution resolution.
@@ -596,7 +596,7 @@ async def execute_template_preview(
         resolve_legs,
     )
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     template = _get_user_template(db, user_id, template_id)
     legs = _template_to_legs(template)
 
@@ -639,7 +639,7 @@ async def execute_template_preview(
 async def execute_template(
     template_id: int,
     request: TemplateExecuteRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/templates/:id/execute — Execute a V2 dynamic template.
@@ -661,7 +661,7 @@ async def execute_template(
     )
     from app.services.paper_execution import execute_strategy
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
 
     template = _get_user_template(db, user_id, template_id)

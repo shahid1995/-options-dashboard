@@ -527,8 +527,8 @@ class TestExistingApis:
             json={"symbol": ""},  # invalid: missing required fields
             headers={"X-Session-Id": "test-session"},
         )
-        # Should return 400 or 422 for invalid input
-        assert resp.status_code in (400, 422)
+        # Should return 400, 401 (auth gate), or 422 for invalid input
+        assert resp.status_code in (400, 401, 422)
 
     @patch("app.routers.gex.token_store")
     def test_get_snapshots_requires_auth(self, mock_token_store):

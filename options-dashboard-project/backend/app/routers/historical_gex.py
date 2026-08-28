@@ -8,7 +8,7 @@ Endpoints:
   GET /gex/analytics        — combined price+GEX relationship
   GET /gex/stats            — statistical analysis by regime/group
 
-All endpoints are read-only. No database writes.
+All endpoints require session authentication. Read-only. No database writes.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.routers.deps import get_current_user, AuthenticatedUser
 from app.services.historical_gex_analytics import GexAnalyticsEngine
 
 router = APIRouter()
@@ -177,6 +178,7 @@ def get_history(
     start: Optional[str] = Query(None, description="Start timestamp (ISO 8601)"),
     end: Optional[str] = Query(None, description="End timestamp (ISO 8601)"),
     limit: int = Query(500, ge=1, le=5000),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get historical GEX time-series with change and acceleration."""
@@ -237,6 +239,7 @@ def get_regime(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get gamma regime history."""
@@ -267,6 +270,7 @@ def get_flip(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=2000),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get gamma flip detection history."""
@@ -296,6 +300,7 @@ def get_walls(
     end: Optional[str] = Query(None),
     top_n: int = Query(3, ge=1, le=10),
     limit: int = Query(200, ge=1, le=2000),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get gamma wall detection history."""
@@ -341,6 +346,7 @@ def get_analytics(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     limit: int = Query(500, ge=1, le=5000),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get combined price+GEX relationship series with forward returns."""
@@ -382,6 +388,7 @@ def get_stats(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     forward_return: str = Query("spot_return_15m", description="Forward return field to analyze"),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get statistical analysis of forward returns grouped by regime/GEX change."""
@@ -461,6 +468,7 @@ def get_research(
     start: Optional[str] = Query(None),
     end: Optional[str] = Query(None),
     maxTimestamps: int = Query(500, ge=1, le=12262),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Run the Phase 7.8E Historical GEX research pipeline."""
@@ -560,6 +568,7 @@ class DataQualityOut(BaseModel):
 def gex_data_quality(
     startDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
     endDate: Optional[str] = Query(None, description="ISO date filter (inclusive)"),
+    user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Data Quality Contract — Phase 7.8L.

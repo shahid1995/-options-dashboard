@@ -116,8 +116,10 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-phase5")
+def logged_in(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-phase5")
+    return session_id
 
 
 def headers(session_id):
@@ -683,11 +685,12 @@ def test_simultaneous_duplicate_entries_single_execution(client, logged_in, db_s
 # ---- Isolation (§35) ---------------------------------------------------------
 
 
-def test_user_b_cannot_see_user_a_positions(client):
-    session_a = token_store.set_token("tok-user-a")
+def test_user_b_cannot_see_user_a_positions(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_a, _ = create_test_identity(db_session, "tok-user-a")
     execute(client, session_a, single_leg_payload(client_order_id="exec-iso-a"))
 
-    session_b = token_store.set_token("tok-user-b")
+    session_b, _ = create_test_identity(db_session, "tok-user-b")
     resp = client.get("/paper/positions", headers=headers(session_b))
     assert resp.status_code == 200
     assert resp.json() == []
@@ -703,12 +706,13 @@ def test_user_b_cannot_see_user_a_positions(client):
 
 def test_user_b_cannot_exit_user_a_position(client, db_session):
     from app.models import Position
+    from tests.test_helpers import create_test_identity
 
-    session_a = token_store.set_token("tok-user-a")
+    session_a, _ = create_test_identity(db_session, "tok-user-a")
     execute(client, session_a, single_leg_payload(client_order_id="exec-iso-b"))
     pos = db_session.query(Position).first()
 
-    session_b = token_store.set_token("tok-user-b")
+    session_b, _ = create_test_identity(db_session, "tok-user-b")
     resp = exit_position(client, session_b, pos.id, {"client_order_id": "exit-iso-b"})
     assert resp.status_code == 404
     assert db_session.query(Position).first().status == "open"
@@ -884,7 +888,7 @@ def test_legacy_position_without_execution_falls_back_to_custom(client, logged_i
 
     now = datetime.utcnow()
     db_session.add(Position(
-        user_id=logged_in, symbol="NIFTY", expiry=EXPIRY, strike=24400,
+        user_id=db_session._test_user_id, symbol="NIFTY", expiry=EXPIRY, strike=24400,
         option_type="call", net_quantity=1, average_entry_price=50.0,
         lot_size=LOT, realized_pnl=0.0, status="open",
         strategy_execution_id=None, opened_at=now,
@@ -901,7 +905,7 @@ def test_dangling_execution_id_falls_back_to_custom(client, logged_in, db_sessio
 
     now = datetime.utcnow()
     db_session.add(Position(
-        user_id=logged_in, symbol="NIFTY", expiry=EXPIRY, strike=24450,
+        user_id=db_session._test_user_id, symbol="NIFTY", expiry=EXPIRY, strike=24450,
         option_type="put", net_quantity=-1, average_entry_price=60.0,
         lot_size=LOT, realized_pnl=0.0, status="open",
         strategy_execution_id="exec-no-longer-exists", opened_at=now,
