@@ -354,6 +354,10 @@ def store_credentials(
             display_label=display_label,
             connected_at=_utcnow(),
         )
+        # is_default defaults to True via ORM metadata — this is correct for
+        # the first connection per (user, broker).  The partial unique index
+        # uq_one_default_per_user_broker enforces at most one default per
+        # (user, broker) at the schema level.
         db.add(conn)
 
     conn.broker_api_key_encrypted = encrypt(api_key)

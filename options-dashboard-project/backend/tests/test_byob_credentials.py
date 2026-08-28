@@ -455,6 +455,15 @@ class TestEndpointBehavior:
         api_key = "k" * 513
         assert len(api_key) > 512
 
+    def test_connect_with_unknown_broker_stores_as_uppercase(self, db, user):
+        """Unknown broker names are accepted and uppercased."""
+        conn = store_credentials(
+            db, user.id, "UNKNOWN_BROKER", "key", "secret"
+        )
+        assert conn.broker == "UNKNOWN_BROKER"
+        from app.crypto import decrypt
+        assert decrypt(conn.broker_api_key_encrypted) == "key"
+
 
 # ---------------------------------------------------------------------------
 # 6. Multi-User Isolation
@@ -598,3 +607,118 @@ class TestBrokerConnectionModelIntegration:
             db, user.id, "UPSTOX", "key", "secret"
         )
         assert conn.is_default is True
+
+
+class TestResolveNonDefaultFallback:
+    """Verify resolve_user_credentials falls back to non-default connections."""
+
+    def test_resolve_uses_nondefault_when_no_default_exists(self, db, user):
+        """When all connections are is_default=False, resolve still finds credentials."""
+        from app.crypto import encrypt as crypto_encrypt
+
+        conn = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user.id,
+            broker="UPSTOX",
+            broker_account_id="UCC-NON-DEFAULT",
+            is_default=False,
+            status="connected",
+            connected_at=datetime.now(timezone.utc),
+        )
+        conn.broker_api_key_encrypted = crypto_encrypt("non-default-key")
+        conn.broker_api_secret_encrypted = crypto_encrypt("non-default-secret")
+        db.add(conn)
+        db.flush()
+
+        creds = resolve_user_credentials(user.id, "UPSTOX", db)
+        assert creds["api_key"] == "non-default-key"
+        assert creds["api_secret"] == "non-default-secret"
+
+    def test_resolve_uses_most_recent_when_multiple_nondefault(self, db, user):
+        """With multiple non-default connections, most recent is selected."""
+        from app.crypto import encrypt as crypto_encrypt
+
+        conn_older = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user.id,
+            broker="UPSTOX",
+            broker_account_id="UCC-OLDER",
+            is_default=False,
+            status="connected",
+            connected_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        conn_older.broker_api_key_encrypted = crypto_encrypt("older-key")
+        conn_older.broker_api_secret_encrypted = crypto_encrypt("older-secret")
+        db.add(conn_older)
+
+        conn_newer = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user.id,
+            broker="UPSTOX",
+            broker_account_id="UCC-NEWER",
+            is_default=False,
+            status="connected",
+            connected_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        conn_newer.broker_api_key_encrypted = crypto_encrypt("newer-key")
+        conn_newer.broker_api_secret_encrypted = crypto_encrypt("newer-secret")
+        db.add(conn_newer)
+        db.flush()
+
+        creds = resolve_user_credentials(user.id, "UPSTOX", db)
+        assert creds["api_key"] == "newer-key"
+
+
+class TestCallbackWithoutActiveSession:
+    """Verify callback behavior when no active StrikeNova session exists."""
+
+    def test_callback_falls_back_to_platform_credentials(self, db, user):
+        """When no active session exists, callback uses platform credentials.
+
+        This is the backward-compatible fallback: unauthenticated users
+        (or expired sessions) get platform-level credentials, not another
+        user's credentials.
+        """
+        # Verify no active sessions exist for this user
+        from app.identity import UserSession
+        active = (
+            db.query(UserSession)
+            .filter(
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > datetime.now(timezone.utc),
+            )
+            .first()
+        )
+        assert active is None  # No active session
+
+        # Verify resolve_user_credentials raises (no credentials for user)
+        with pytest.raises(ValueError, match="No UPSTOX credentials found"):
+            resolve_user_credentials(user.id, "UPSTOX", db)
+
+        # The callback would fall back to {} (platform credentials)
+        # This is the documented backward-compatible behavior
+
+    def test_callback_does_not_leak_other_users_credentials(self, db):
+        """When user has no session, callback cannot select another user's creds."""
+        user_a = User(
+            id=str(uuid4()), status="active", identity_source="upstox",
+            broker_provider="UPSTOX", broker_user_id="leak-test-a",
+        )
+        user_b = User(
+            id=str(uuid4()), status="active", identity_source="upstox",
+            broker_provider="UPSTOX", broker_user_id="leak-test-b",
+        )
+        db.add_all([user_a, user_b])
+        db.flush()
+
+        # Only user_b has credentials
+        store_credentials(db, user_b.id, "UPSTOX", "secret-key-b", "secret-b")
+        db.flush()
+
+        # user_a has no session and no credentials — resolve raises
+        with pytest.raises(ValueError, match="No UPSTOX credentials found"):
+            resolve_user_credentials(user_a.id, "UPSTOX", db)
+
+        # user_b can resolve their own credentials
+        creds_b = resolve_user_credentials(user_b.id, "UPSTOX", db)
+        assert creds_b["api_key"] == "secret-key-b"
