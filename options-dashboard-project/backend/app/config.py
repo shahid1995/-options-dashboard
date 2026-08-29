@@ -5,9 +5,14 @@ class Settings(BaseSettings):
     # DEPRECATED in Phase 10.2B-2: per-user credentials in broker_connections.
     # Kept for backward compatibility during migration.  Remove in 10.2B-6.
     # New code MUST use resolve_user_credentials() instead.
+    # DEPRECATED in Phase 10.2B-2: per-user credentials in broker_connections.
+    # Kept for backward compatibility during migration.  Remove in 10.2B-6.
+    # New code MUST use resolve_user_credentials() instead.
     UPSTOX_API_KEY: str = ""
     UPSTOX_API_SECRET: str = ""
-    UPSTOX_REDIRECT_URI: str
+    # Phase 10.2B-6: UPSTOX_REDIRECT_URI is now optional.
+    # If empty, auto-derived from RAILWAY_PUBLIC_DOMAIN or BACKEND_URL.
+    UPSTOX_REDIRECT_URI: str = ""
     FRONTEND_URL: str = "http://localhost:3000"
     # Phase 9C: CORS — set ALLOW_LOCALHOST_CORS=True only in development
     ALLOW_LOCALHOST_CORS: bool = False
@@ -41,8 +46,26 @@ class Settings(BaseSettings):
     # and broker_tokens before deployment.
     TOKEN_ENCRYPTION_KEY: str = ""
 
+    # Phase 10.2B-6: Optional backend URL for auto-deriving UPSTOX_REDIRECT_URI
+    BACKEND_URL: str = ""
+
     class Config:
         env_file = ".env"
 
 
 settings = Settings()
+
+# Phase 10.2B-6: Auto-derive UPSTOX_REDIRECT_URI if not set.
+# Priority: explicit env var > BACKEND_URL > RAILWAY_PUBLIC_DOMAIN
+if not settings.UPSTOX_REDIRECT_URI:
+    import os as _os
+    _backend_url = (
+        settings.BACKEND_URL
+        or _os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+        or _os.environ.get("BACKEND_URL", "")
+    )
+    if _backend_url:
+        _backend_url = _backend_url.rstrip("/")
+        if not _backend_url.startswith("http"):
+            _backend_url = f"https://{_backend_url}"
+        settings.UPSTOX_REDIRECT_URI = f"{_backend_url}/auth/callback"

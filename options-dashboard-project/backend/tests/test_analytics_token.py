@@ -156,12 +156,16 @@ class TestAnalyticsTokenCRUD:
         finally:
             db.close()
 
-    def test_store_analytics_token_requires_connection(self, user_a):
-        """Raises ValueError if no connected broker exists."""
+    def test_store_analytics_token_creates_data_only_connection(self, user_a):
+        """Phase 10.2B-6: Creates data-only connection if none exists."""
         db = _get_db()
         try:
-            with pytest.raises(ValueError, match="No connected"):
-                store_analytics_token(db, user_a.id, "UPSTOX", "token")
+            conn = store_analytics_token(db, user_a.id, "UPSTOX", "token")
+            db.commit()
+            assert conn is not None
+            assert conn.broker_account_id == "data-only"
+            assert conn.data_status == "active"
+            assert conn.data_source == "analytics_token"
         finally:
             db.close()
 
@@ -348,8 +352,8 @@ class TestAnalyticsTokenEndpoints:
         )
         assert response.status_code == 422
 
-    def test_connect_analytics_token_no_connection_404(self, user_a):
-        """No connected broker → 404."""
+    def test_connect_analytics_token_creates_data_only(self, user_a):
+        """Phase 10.2B-6: No connected broker → creates data-only connection."""
         from fastapi.testclient import TestClient
         from app.main import app
         from app.services.token_store import set_token
@@ -369,7 +373,9 @@ class TestAnalyticsTokenEndpoints:
             json={"broker": "UPSTOX", "analytics_token": "token"},
             headers={"X-Session-Id": session_id},
         )
-        assert response.status_code == 404
+        # Phase 10.2B-6: Creates data-only connection instead of 404
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
 
     def test_analytics_token_status_returns_boolean(self, user_a, connection_a):
         """GET /auth/analytics-token/status returns boolean, not token."""

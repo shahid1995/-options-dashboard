@@ -193,6 +193,9 @@ def _get_analytics_token_for_gex() -> str | None:
     Phase 10.2B-4: Uses per-user Analytics Tokens (1-year validity) instead
     of daily-expiring OAuth tokens.  Returns the first available Analytics
     Token, or None.
+
+    Phase 10.2B-6: Also works with data-only connections (no OAuth required).
+    Queries data_status='active' for explicit data authorization.
     """
     try:
         from app.db import SessionLocal
@@ -207,6 +210,7 @@ def _get_analytics_token_for_gex() -> str | None:
                     BrokerConnection.status == "connected",
                     BrokerConnection.broker == "UPSTOX",
                     BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+                    BrokerConnection.data_status == "active",
                 )
                 .first()
             )

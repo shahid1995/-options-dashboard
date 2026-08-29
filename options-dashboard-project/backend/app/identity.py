@@ -96,6 +96,11 @@ class BrokerConnection(Base):
     connection metadata. Each row represents one broker account
     linked to one StrikeNova user. (AD-2, AD-5)
 
+    Three independent capabilities (Phase 10.2B-6):
+      1. Authentication — OAuth identity, profile, funds
+      2. Market Data — option chain, quotes, Greeks, GEX, historical
+      3. Trading — order placement, modification, cancellation
+
     Status lifecycle:
       pending  → connected → expired | disconnected
       pending:  credentials stored via POST /auth/connect, no OAuth yet
@@ -124,7 +129,13 @@ class BrokerConnection(Base):
     display_label: Mapped[str | None] = mapped_column(String(160), nullable=True)
     is_default: Mapped[bool] = mapped_column(default=True)
     status: Mapped[str] = mapped_column(String(20), default="connected")
-    capability_mode: Mapped[str] = mapped_column(String(20), default="trading")
+    capability_mode: Mapped[str] = mapped_column(String(20), default="trading")  # DEPRECATED: use data_status + trading_status
+
+    # Phase 10.2B-6: Independent capability status
+    data_status: Mapped[str] = mapped_column(String(20), default="inactive")  # "inactive" | "active" | "expired"
+    data_source: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "analytics_token" | "oauth_token"
+    trading_status: Mapped[str] = mapped_column(String(20), default="inactive")  # "inactive" | "active" | "expired"
+    trading_static_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)  # per-user static IP for trading
 
     # Per-user broker credentials (encrypted — AD-2, AD-3)
     broker_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -486,14 +497,20 @@ def store_analytics_token(
 ) -> BrokerConnection:
     """Store an encrypted Analytics Token on the user's default connection.
 
+    Phase 10.2B-6: Supports both data-only and full OAuth connections.
+    If no connected connection exists, creates a data-only connection
+    with broker_account_id='data-only' and status='connected'.
+
     The Analytics Token is encrypted at rest via Fernet (app.crypto).
     Only one Analytics Token per (user, broker) — overwrites existing.
 
-    Raises ValueError if no connected broker connection exists.
+    Returns the BrokerConnection row.
     """
     from app.crypto import encrypt
 
     broker_upper = broker.upper()
+
+    # Try to find an existing connected default connection
     conn = (
         db.query(BrokerConnection)
         .filter(
@@ -504,12 +521,27 @@ def store_analytics_token(
         )
         .first()
     )
+
+    # If no connected connection exists, create a data-only connection
+    # This allows users to connect market data without completing OAuth
     if conn is None:
-        raise ValueError(
-            f"No connected {broker_upper} connection found for this user. "
-            "Connect your broker first."
+        conn = BrokerConnection(
+            id=str(uuid4()),
+            user_id=user_id,
+            broker=broker_upper,
+            broker_account_id="data-only",
+            status="connected",
+            data_status="active",
+            data_source="analytics_token",
+            display_label=f"{broker_upper} (Data Only)",
+            connected_at=_utcnow(),
         )
+        db.add(conn)
+        db.flush()
+
     conn.broker_analytics_token_encrypted = encrypt(analytics_token)
+    conn.data_status = "active"
+    conn.data_source = "analytics_token"
     conn.updated_at = _utcnow()
     db.flush()
     return conn
@@ -522,6 +554,7 @@ def get_analytics_token(
 ) -> str | None:
     """Retrieve and decrypt the Analytics Token for a user's broker connection.
 
+    Phase 10.2B-6: Works with both data-only and full OAuth connections.
     Returns None if no Analytics Token is stored.
     """
     from app.crypto import decrypt
@@ -534,10 +567,11 @@ def get_analytics_token(
             BrokerConnection.broker == broker_upper,
             BrokerConnection.status == "connected",
             BrokerConnection.is_default == True,
+            BrokerConnection.broker_analytics_token_encrypted.isnot(None),
         )
         .first()
     )
-    if conn is None or conn.broker_analytics_token_encrypted is None:
+    if conn is None:
         return None
     return decrypt(conn.broker_analytics_token_encrypted)
 
@@ -548,6 +582,9 @@ def remove_analytics_token(
     broker: str,
 ) -> bool:
     """Remove the Analytics Token from a user's broker connection.
+
+    Phase 10.2B-6: If this was a data-only connection (broker_account_id='data-only'),
+    also update data_status to 'inactive'.
 
     Returns True if a token was removed, False if none existed.
     """
@@ -565,6 +602,8 @@ def remove_analytics_token(
     if conn is None or conn.broker_analytics_token_encrypted is None:
         return False
     conn.broker_analytics_token_encrypted = None
+    conn.data_status = "inactive"
+    conn.data_source = None
     conn.updated_at = _utcnow()
     db.flush()
     return True
