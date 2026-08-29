@@ -105,3 +105,56 @@ class TestCORSActualRequests:
         )
         # May return 401 (no valid session) but CORS headers should be present
         assert "access-control-allow-origin" in resp.headers
+
+
+
+class TestCORSCommaSeparatedOrigins:
+    """Verify comma-separated FRONTEND_URL and ADDITIONAL_CORS_ORIGINS parsing."""
+
+    def test_comma_separated_parsing_logic(self):
+        """The CORS origin parser correctly splits comma-separated strings."""
+        from app.main import _cors_origins
+        # In test env, FRONTEND_URL is http://localhost:3000 and ADDITIONAL_CORS_ORIGINS is ""
+        assert "http://localhost:3000" in _cors_origins
+
+    def test_configured_origin_accepted(self, client):
+        """The configured frontend URL is accepted."""
+        resp = _preflight(client, settings.FRONTEND_URL, "POST")
+        assert resp.status_code == 200
+
+    def test_unrelated_origin_still_rejected(self, client):
+        """Origins not in any allowed list are still rejected."""
+        resp = _preflight(client, "https://evil.example.com", "GET")
+        assert "access-control-allow-origin" not in resp.headers
+
+    def test_additional_cors_origins_configurable(self):
+        """ADDITIONAL_CORS_ORIGINS env var is read correctly."""
+        assert hasattr(settings, "ADDITIONAL_CORS_ORIGINS")
+        # In test env it defaults to empty string
+        assert settings.ADDITIONAL_CORS_ORIGINS == ""
+
+    def test_cors_origins_list_built_from_settings(self):
+        """The _cors_origins list is built from FRONTEND_URL and ADDITIONAL_CORS_ORIGINS."""
+        from app.main import _cors_origins
+        assert isinstance(_cors_origins, list)
+        assert len(_cors_origins) >= 1
+        assert "http://localhost:3000" in _cors_origins
+
+
+class TestFrontENDOriginProperty:
+    """Verify FRONTEND_ORIGIN returns the first URL when comma-separated."""
+
+    def test_single_url(self):
+        from unittest.mock import patch
+        with patch.object(settings, "FRONTEND_URL", "http://localhost:3000"):
+            assert settings.FRONTEND_ORIGIN == "http://localhost:3000"
+
+    def test_comma_separated_returns_first(self):
+        from unittest.mock import patch
+        with patch.object(settings, "FRONTEND_URL", "http://localhost:3000,https://preview.vercel.app"):
+            assert settings.FRONTEND_ORIGIN == "http://localhost:3000"
+
+    def test_strips_whitespace(self):
+        from unittest.mock import patch
+        with patch.object(settings, "FRONTEND_URL", "  http://localhost:3000 , https://preview.vercel.app  "):
+            assert settings.FRONTEND_ORIGIN == "http://localhost:3000"

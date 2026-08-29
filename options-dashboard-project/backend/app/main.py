@@ -287,9 +287,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Options Dashboard API", lifespan=lifespan, docs_url="/docs" if getattr(settings, "DEBUG", False) else None)
 
 # CORS: production uses explicitly configured origins; development allows localhost
-_cors_origins = [settings.FRONTEND_URL]
+# FRONTEND_URL supports comma-separated origins for Vercel preview deployments.
+# ADDITIONAL_CORS_ORIGINS provides extra origins (e.g. preview branches).
+_cors_origins: list[str] = []
+for _origin_source in [
+    getattr(settings, "FRONTEND_URL", ""),
+    getattr(settings, "ADDITIONAL_CORS_ORIGINS", ""),
+]:
+    if _origin_source:
+        _cors_origins.extend(
+            o.strip() for o in _origin_source.split(",") if o.strip()
+        )
 if getattr(settings, "ALLOW_LOCALHOST_CORS", False):
     _cors_origins.append("http://localhost:3000")
+# Deduplicate while preserving order
+_cors_origins = list(dict.fromkeys(_cors_origins))
 
 app.add_middleware(
     CORSMiddleware,
