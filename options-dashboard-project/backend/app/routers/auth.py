@@ -505,25 +505,21 @@ def _verify_google_token(credential: str) -> dict | None:
         with urlopen(req, timeout=10) as resp:
             jwks = json.loads(resp.read())
 
-        # Find the matching key
-        public_key = None
+        # Find the matching key and build RSA public key directly
+        from jwt import decode as jwt_decode
+        from jwt.algorithms import RSAAlgorithm
+
+        rsa_key = None
         for key in jwks.get("keys", []):
             if key.get("kid") == kid:
-                public_key = key
+                rsa_key = RSAAlgorithm.from_jwk(key)
                 break
-        if public_key is None:
+        if rsa_key is None:
             return None
-
-        # Verify using PyJWT (already in requirements)
-        from jwt import decode as jwt_decode
-        from jwt import PyJWKSet
-
-        jwk_set = PyJWKSet(jwks)
-        signing_key = jwk_set.key_by_kid(kid)
 
         payload = jwt_decode(
             credential,
-            signing_key.key,
+            rsa_key,
             algorithms=["RS256"],
             audience=client_id,
             options={"verify_exp": True},
