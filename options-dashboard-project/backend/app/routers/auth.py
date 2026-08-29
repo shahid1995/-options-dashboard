@@ -441,17 +441,21 @@ def google_auth(
     if not credential:
         raise HTTPException(status_code=422, detail="Google credential is required")
 
-    # Phase A security: Validate nonce binding via signed state.
-    # If state is provided, extract the expected nonce and pass it to
-    # token verification for comparison against the JWT nonce claim.
-    expected_nonce: str | None = None
-    if state:
-        expected_nonce = token_store.consume_google_oauth_state(state)
-        if expected_nonce is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or expired Google OAuth state",
-            )
+    # Phase A security: state is MANDATORY for nonce binding.
+    # The HMAC-signed state carries a nonce that must match the JWT nonce.
+    # Without state, an attacker could replay a stolen Google ID token.
+    if not state:
+        raise HTTPException(
+            status_code=401,
+            detail="Google OAuth state is required. Please restart the sign-in flow.",
+        )
+
+    expected_nonce = token_store.consume_google_oauth_state(state)
+    if expected_nonce is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired Google OAuth state",
+        )
 
     # Verify the Google ID token
     google_user = _verify_google_token(credential, expected_nonce=expected_nonce)
@@ -497,7 +501,7 @@ def google_auth(
     }
 
 
-def _verify_google_token(credential: str, expected_nonce: str | None = None) -> dict | None:
+def _verify_google_token(credential: str, expected_nonce: str) -> dict | None:
     """Verify a Google ID token (JWT) and return the payload.
 
     Uses Google's public JWKS endpoint to verify the token signature.
@@ -555,18 +559,19 @@ def _verify_google_token(credential: str, expected_nonce: str | None = None) -> 
             )
             return None
 
-        # Nonce validation.
-        # If expected_nonce is provided (from HMAC-signed state), compare it
-        # against the JWT nonce to cryptographically bind the token to this
-        # specific authentication attempt.  This prevents replay of tokens
-        # from unrelated auth attempts.
-        # If expected_nonce is None (state not provided — backward compat),
-        # fall back to presence-only check.
+        # Nonce validation — MANDATORY.
+        # The expected_nonce comes from the HMAC-signed state (required by
+        # POST /auth/google).  The JWT nonce MUST match exactly.
+        # This cryptographically binds the token to this specific auth attempt.
         jwt_nonce = payload_pre.get("nonce")
         if not jwt_nonce:
             logger.warning("Google token rejected: missing nonce claim")
             return None
-        if expected_nonce is not None and jwt_nonce != expected_nonce:
+        if expected_nonce is None:
+            # Defensive: should never reach here (state is required upstream)
+            logger.warning("Google token rejected: no expected nonce (state missing)")
+            return None
+        if jwt_nonce != expected_nonce:
             logger.warning(
                 "Google token rejected: nonce mismatch (expected from state, got from JWT)",
             )
