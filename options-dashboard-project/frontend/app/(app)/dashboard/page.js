@@ -6,6 +6,7 @@ import { useChainFeed } from "@/lib/useChainFeed";
 import { putCallRatio, maxPainStrike, maxOI, oiTotals } from "@/lib/analytics";
 import { makeAlert, evaluateAlerts, describeAlert } from "@/lib/alerts";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, fmtIN, fmtChg, useIsMobile } from "@/lib/ui";
+import { useRouter } from "next/navigation";
 import { MetricCard } from "@/components/app/styles";
 import { loadJSON, saveJSON } from "@/lib/storage";
 import { useGexCapture } from "@/lib/useGexCapture";
@@ -24,6 +25,7 @@ export default function Dashboard() {
   const [firedToasts, setFiredToasts] = useState([]);
   const [compact, setCompact] = useState(false);
   const isMobile = useIsMobile();
+  const router = useRouter();
 
   useEffect(() => {
     setWatchlist(loadJSON(WATCHLIST_KEY, []));
@@ -51,6 +53,7 @@ export default function Dashboard() {
 
   const [expiryError, setExpiryError] = useState(null);
   const [expirySessionExpired, setExpirySessionExpired] = useState(false);
+  const [expiryNoBrokerToken, setExpiryNoBrokerToken] = useState(false);
   useEffect(() => {
     if (!loggedIn) return;
     setExpiry(null);
@@ -62,11 +65,12 @@ export default function Dashboard() {
       })
       .catch((e) => {
         if (isAuthError(e)) setExpirySessionExpired(true);
+        else if (e?.response?.status === 403) setExpiryNoBrokerToken(true);
         else setExpiryError(e.message);
       });
   }, [loggedIn, symbol]);
 
-  const { chain, lastUpdated, error, mode, sessionExpired } = useChainFeed(symbol, expiry, !!loggedIn);
+  const { chain, lastUpdated, error, mode, sessionExpired, noBrokerToken } = useChainFeed(symbol, expiry, !!loggedIn);
 
   // Phase 7.6: GEX snapshot capture with sweep enrichment for gamma flip / walls
   const { analytics: gexAnalytics, captureCount: gexCaptureCount, latestSnapshot: gexSnapshot } = useGexCapture(chain, {
@@ -160,6 +164,40 @@ export default function Dashboard() {
         .
       </Centered>
     );
+  // Phase A fix: Distinguish StrikeNova session expiry from broker token absence.
+  // - noBrokerToken/expiryNoBrokerToken: valid session, no broker → show Connect Broker
+  // - sessionExpired/expirySessionExpired: StrikeNova session invalid → show SessionExpired
+  if (noBrokerToken || expiryNoBrokerToken) {
+    return (
+      <Centered>
+        <div style={{ textAlign: "center", maxWidth: 400 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 12 }}>
+            No Broker Connected
+          </div>
+          <div style={{ fontSize: 14, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>
+            You’re signed in to StrikeNova, but market data requires a broker connection.
+            Connect your Upstox account to view the option chain.
+          </div>
+          <button
+            onClick={() => router.push("/settings")}
+            style={{
+              padding: "10px 24px",
+              borderRadius: 8,
+              border: "none",
+              background: C.gold,
+              color: "#0B0E14",
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Connect Broker
+          </button>
+        </div>
+      </Centered>
+    );
+  }
   if (sessionExpired || expirySessionExpired) return <SessionExpired />;
   if ((error || expiryError) && !chain) return <Centered>Something went wrong: {error || expiryError}</Centered>;
   if (!chain) return <Centered>Loading chain…</Centered>;

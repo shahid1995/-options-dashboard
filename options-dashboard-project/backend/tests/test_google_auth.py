@@ -464,3 +464,72 @@ class TestGoogleAuthEdgeCases:
 
         user = db.query(User).filter(User.google_sub == "sub-upper").first()
         assert user.email == "upper@gmail.com"  # Normalized
+
+
+# ---------------------------------------------------------------------------
+# Phase A: Google nonce/issuer validation + security
+# ---------------------------------------------------------------------------
+
+
+class TestGoogleNonceValidation:
+    """Nonce and issuer validation for Google ID tokens."""
+
+    def test_missing_nonce_rejected(self, client):
+        """Token without nonce claim is rejected (pre-JWKS check)."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            # No nonce
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token)
+            assert result is None  # Rejected before JWKS fetch
+
+    def test_invalid_issuer_rejected(self, client):
+        """Token with wrong issuer is rejected (pre-JWKS check)."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://evil.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "valid-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token)
+            assert result is None  # Rejected before JWKS fetch
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_valid_google_session_no_db_persist(self, mock_verify, client, db):
+        """Google sessions should not persist broker tokens to DB."""
+        mock_verify.return_value = {
+            "sub": "google-no-persist",
+            "email": "nopersist@gmail.com",
+            "name": "No Persist",
+        }
+        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+
+        # Session works via in-memory cache
+        me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
+        assert me_resp.status_code == 200

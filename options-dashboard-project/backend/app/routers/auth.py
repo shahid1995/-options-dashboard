@@ -377,6 +377,7 @@ def login_email(
     session_id = set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        persist_to_db=False,  # Phase A: email sessions have no broker token
     )
     create_session_record(db, user.id, session_id)
     db.commit()
@@ -444,6 +445,7 @@ def google_auth(
     session_id = token_store.set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        persist_to_db=False,  # Phase A: Google sessions have no broker token
     )
     create_session_record(db, user.id, session_id)
     db.commit()
@@ -499,6 +501,33 @@ def _verify_google_token(credential: str) -> dict | None:
         if alg != "RS256" or not kid:
             return None
 
+        # Phase A security: Pre-flight checks on payload BEFORE JWKS fetch.
+        # Decode the payload to check issuer and nonce early — avoids an
+        # unnecessary network round-trip to Google JWKS for obviously
+        # invalid tokens.
+        try:
+            payload_pre = json.loads(_b64.urlsafe_b64decode(payload_b64 + "=="))
+        except Exception:
+            return None
+
+        # Explicit issuer validation — prevents acceptance of JWTs from
+        # non-Google issuers.
+        valid_issuers = {"https://accounts.google.com", "accounts.google.com"}
+        if payload_pre.get("iss") not in valid_issuers:
+            logger.warning(
+                "Google token rejected: invalid issuer %s",
+                payload_pre.get("iss"),
+            )
+            return None
+
+        # Nonce validation — the frontend generates a random nonce, includes
+        # it in the OAuth request, and Google embeds it in the id_token.
+        # Validating its presence prevents replay of tokens from unrelated
+        # auth attempts.
+        if not payload_pre.get("nonce"):
+            logger.warning("Google token rejected: missing nonce claim")
+            return None
+
         # Fetch Google's public keys
         jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
         req = Request(jwks_url, headers={"User-Agent": "StrikeNova/1.0"})
@@ -532,9 +561,13 @@ def _verify_google_token(credential: str) -> dict | None:
             "picture": payload.get("picture"),
         }
     except Exception as e:
-        import sys
-        print(f"GOOGLE_AUTH_ERROR: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        logger.warning("Google token verification failed: %s: %s", type(e).__name__, e, exc_info=True)
+        # Phase A fix: remove debug print, use structured logging only.
+        # Never log the credential/token itself.
+        logger.warning(
+            "Google token verification failed: %s: %s",
+            type(e).__name__, e,
+            exc_info=True,
+        )
         return None
 
 

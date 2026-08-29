@@ -47,6 +47,14 @@ def require_token(session_id: str | None) -> str:
     token = token_store.get_token(session_id)
     if not token:
         raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
+    # Phase A fix: identity tokens (email/google sessions) contain ':'
+    # and are NOT broker access tokens.  Return 403 so the frontend can
+    # distinguish "logged in but no broker" from "session expired".
+    if ":" in token:
+        raise HTTPException(
+            status_code=403,
+            detail="No broker token available. Connect your broker to view market data.",
+        )
     return token
 
 
@@ -138,6 +146,11 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
     # Get the broker token
     token = token_store.get_token(session_id)
     if not token:
+        await websocket.close(code=4401)
+        return
+
+    # Phase A fix: identity tokens are not broker access tokens
+    if ":" in token:
         await websocket.close(code=4401)
         return
 

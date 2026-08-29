@@ -68,8 +68,8 @@ def _get_state_hmac_key() -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def set_token(token: str, *, connection_id: str | None = None, expires_at=None) -> str:
-    """Store a broker token in both memory and DB.
+def set_token(token: str, *, connection_id: str | None = None, expires_at=None, persist_to_db: bool = True) -> str:
+    """Store a broker token in memory (and optionally DB).
 
     Returns a new session ID bound to the token.
 
@@ -81,6 +81,10 @@ def set_token(token: str, *, connection_id: str | None = None, expires_at=None) 
         The broker connection ID to link this token to.
     expires_at : datetime, optional
         When the token expires (provider-specific).
+    persist_to_db : bool, optional
+        Whether to persist to DB (default True).  Set to False for
+        non-broker sessions (email/password, Google) that don't need
+        DB-backed token recovery after restart.
     """
     session_id = secrets.token_urlsafe(32)
     _sessions[session_id] = {
@@ -92,14 +96,18 @@ def set_token(token: str, *, connection_id: str | None = None, expires_at=None) 
         extra={"event": "auth.session.created", "session_prefix": session_id[:8]},
     )
 
-    # Persist to DB (best-effort — don't fail the login if DB write fails)
-    try:
-        _persist_token_to_db(session_id, token, connection_id, expires_at)
-    except Exception:
-        logger.warning(
-            "Failed to persist token to DB (non-critical)",
-            extra={"event": "auth.token.persist_failed", "session_prefix": session_id[:8]},
-        )
+    # Phase A fix: only persist to DB when explicitly requested (broker sessions).
+    # Email/password and Google sessions store identity tokens that are not
+    # broker access tokens — persisting them to DB is unnecessary and causes
+    # a misleading warning.
+    if persist_to_db:
+        try:
+            _persist_token_to_db(session_id, token, connection_id, expires_at)
+        except Exception:
+            logger.warning(
+                "Failed to persist token to DB (non-critical)",
+                extra={"event": "auth.token.persist_failed", "session_prefix": session_id[:8]},
+            )
 
     return session_id
 

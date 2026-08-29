@@ -12,7 +12,10 @@ export function useChainFeed(symbol, expiry, enabled) {
   const [error, setError] = useState(null);
   const [mode, setMode] = useState(null); // "live" | "polling"
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [noBrokerToken, setNoBrokerToken] = useState(false);
   const chainRef = useRef(null);
+  // Track whether HTTP endpoint already determined the auth state
+  const authStateDetermined = useRef(false);
 
   useEffect(() => {
     setChain(null);
@@ -40,6 +43,12 @@ export function useChainFeed(symbol, expiry, enabled) {
           if (cancelled) return;
           if (isAuthError(e)) {
             setSessionExpired(true);
+            authStateDetermined.current = true;
+            clearInterval(pollTimer);
+          } else if (e?.response?.status === 403) {
+            // Phase A fix: 403 = valid StrikeNova session but no broker token
+            setNoBrokerToken(true);
+            authStateDetermined.current = true;
             clearInterval(pollTimer);
           } else {
             setError(e.message);
@@ -66,7 +75,11 @@ export function useChainFeed(symbol, expiry, enabled) {
       ws.onclose = (event) => {
         if (cancelled) return;
         if (event.code === 4401) {
-          setSessionExpired(true);
+          // Phase A fix: If HTTP endpoint already determined the auth state,
+          // respect it.  Otherwise default to sessionExpired (backward compat).
+          if (!authStateDetermined.current) {
+            setSessionExpired(true);
+          }
         } else {
           startPolling();
         }
@@ -85,5 +98,5 @@ export function useChainFeed(symbol, expiry, enabled) {
     };
   }, [symbol, expiry, enabled]);
 
-  return { chain, lastUpdated, error, mode, sessionExpired };
+  return { chain, lastUpdated, error, mode, sessionExpired, noBrokerToken };
 }
