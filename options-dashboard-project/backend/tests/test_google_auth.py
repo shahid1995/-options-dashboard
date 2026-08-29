@@ -533,3 +533,114 @@ class TestGoogleNonceValidation:
         # Session works via in-memory cache
         me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
         assert me_resp.status_code == 200
+
+    def test_google_state_endpoint_returns_signed_state(self, client):
+        """POST /auth/google/state returns HMAC-signed state with nonce."""
+        resp = client.post("/auth/google/state")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "state" in data
+        assert "." in data["state"]  # HMAC-signed format
+        assert "nonce" in data
+        assert len(data["nonce"]) > 0
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_with_valid_nonce_state(self, mock_verify, client, db):
+        """POST /auth/google with valid signed state and matching nonce succeeds."""
+        from app.services import token_store
+        state = token_store.create_google_oauth_state()
+        nonce = token_store.peek_google_oauth_nonce(state)
+
+        mock_verify.return_value = {
+            "sub": "google-nonce-test",
+            "email": "nonce@gmail.com",
+            "name": "Nonce Test",
+        }
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": state,
+        })
+        assert resp.status_code == 200
+        call_args = mock_verify.call_args
+        assert call_args[1]["expected_nonce"] == nonce
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_rejects_invalid_state(self, mock_verify, client, db):
+        """POST /auth/google with invalid/tampered state is rejected."""
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": "tampered-state.signature",
+        })
+        assert resp.status_code == 401
+        assert "OAuth state" in resp.json()["detail"]
+        mock_verify.assert_not_called()
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_rejects_expired_state(self, mock_verify, client, db):
+        """POST /auth/google with expired state is rejected."""
+        from app.services import token_store
+        import base64 as _b64
+        import hmac as _hmac
+
+        old_ts = int(time.time()) - 700
+        payload = json.dumps({"nonce": "old-nonce", "ts": old_ts}, separators=(",", ":"))
+        b64 = _b64.urlsafe_b64encode(payload.encode()).decode()
+        sig = _hmac.new(
+            token_store._get_state_hmac_key(), b64.encode(), token_store.hashlib.sha256
+        ).hexdigest()[:32]
+        expired_state = f"{b64}.{sig}"
+
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": expired_state,
+        })
+        assert resp.status_code == 401
+        mock_verify.assert_not_called()
+
+    def test_google_auth_without_state_uses_presence_check(self, client):
+        """POST /auth/google without state falls back to nonce presence check."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "some-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce=None)
+            assert result is None  # Fails at JWKS, not nonce check
+
+    def test_google_auth_rejects_nonce_mismatch(self, client):
+        """POST /auth/google rejects token when JWT nonce doesn't match state."""
+        from app.services import token_store
+        from app.routers.auth import _verify_google_token
+        import base64
+
+        state = token_store.create_google_oauth_state()
+        nonce_a = token_store.peek_google_oauth_nonce(state)
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "different-nonce-B",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce=nonce_a)
+            assert result is None  # Rejected: nonce mismatch

@@ -20,8 +20,8 @@ function GoogleRedirectHandler() {
   useEffect(() => {
     const result = captureGoogleIdTokenFromUrl();
     if (result) {
-      const { idToken, redirectPath } = result;
-      loginGoogle(idToken)
+      const { idToken, redirectPath, state } = result;
+      loginGoogle(idToken, state)
         .then((data) => {
           if (data?.session_id) {
             setSessionId(data.session_id);

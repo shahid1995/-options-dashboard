@@ -394,12 +394,35 @@ def login_email(
 
 
 # ---------------------------------------------------------------------------
+# POST /auth/google/state — Generate HMAC-signed state for nonce binding
+# ---------------------------------------------------------------------------
+
+@router.post("/google/state")
+def google_oauth_state():
+    """Generate an HMAC-signed state value for Google OAuth nonce binding.
+
+    The frontend calls this before redirecting to Google.  It stores a
+    random nonce in HMAC-signed state and returns the state string.
+    The frontend includes this state in the Google OAuth URL.
+    When Google redirects back, the frontend sends the state alongside
+    the id_token to POST /auth/google.
+    """
+    state = token_store.create_google_oauth_state()
+    # Return both state and nonce.  The frontend must use the nonce value
+    # (not generate its own) as the Google OAuth nonce parameter, so the
+    # backend can later compare it against the JWT nonce claim.
+    nonce = token_store.peek_google_oauth_nonce(state)
+    return {"state": state, "nonce": nonce}
+
+
+# ---------------------------------------------------------------------------
 # POST /auth/google — Google One Tap / Sign-In
 # ---------------------------------------------------------------------------
 
 @router.post("/google")
 def google_auth(
     credential: str = Body(..., embed=True),
+    state: str | None = Body(default=None, embed=True),
     db: Session = Depends(get_db),
 ):
     """Authenticate via Google Sign-In (One Tap / GIS).
@@ -418,8 +441,20 @@ def google_auth(
     if not credential:
         raise HTTPException(status_code=422, detail="Google credential is required")
 
+    # Phase A security: Validate nonce binding via signed state.
+    # If state is provided, extract the expected nonce and pass it to
+    # token verification for comparison against the JWT nonce claim.
+    expected_nonce: str | None = None
+    if state:
+        expected_nonce = token_store.consume_google_oauth_state(state)
+        if expected_nonce is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired Google OAuth state",
+            )
+
     # Verify the Google ID token
-    google_user = _verify_google_token(credential)
+    google_user = _verify_google_token(credential, expected_nonce=expected_nonce)
     if google_user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired Google credential")
 
@@ -462,7 +497,7 @@ def google_auth(
     }
 
 
-def _verify_google_token(credential: str) -> dict | None:
+def _verify_google_token(credential: str, expected_nonce: str | None = None) -> dict | None:
     """Verify a Google ID token (JWT) and return the payload.
 
     Uses Google's public JWKS endpoint to verify the token signature.
@@ -520,12 +555,21 @@ def _verify_google_token(credential: str) -> dict | None:
             )
             return None
 
-        # Nonce validation — the frontend generates a random nonce, includes
-        # it in the OAuth request, and Google embeds it in the id_token.
-        # Validating its presence prevents replay of tokens from unrelated
-        # auth attempts.
-        if not payload_pre.get("nonce"):
+        # Nonce validation.
+        # If expected_nonce is provided (from HMAC-signed state), compare it
+        # against the JWT nonce to cryptographically bind the token to this
+        # specific authentication attempt.  This prevents replay of tokens
+        # from unrelated auth attempts.
+        # If expected_nonce is None (state not provided — backward compat),
+        # fall back to presence-only check.
+        jwt_nonce = payload_pre.get("nonce")
+        if not jwt_nonce:
             logger.warning("Google token rejected: missing nonce claim")
+            return None
+        if expected_nonce is not None and jwt_nonce != expected_nonce:
+            logger.warning(
+                "Google token rejected: nonce mismatch (expected from state, got from JWT)",
+            )
             return None
 
         # Fetch Google's public keys

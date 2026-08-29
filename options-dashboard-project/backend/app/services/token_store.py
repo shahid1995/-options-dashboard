@@ -352,6 +352,90 @@ _pending_states: dict[str, float] = {}
 
 
 # ---------------------------------------------------------------------------
+# Google OAuth nonce binding — HMAC-signed state carrying the nonce
+# ---------------------------------------------------------------------------
+#
+# Phase A security fix: The frontend generates a nonce and sends it to
+# Google, but the backend never sees it.  To cryptographically bind the
+# nonce to the authentication attempt, the backend generates its own
+# nonce, embeds it in an HMAC-signed state, and returns it to the
+# frontend.  The frontend includes this state in the Google OAuth URL.
+# When Google redirects back, the frontend sends both the id_token AND
+# the state to POST /auth/google.  The backend validates the HMAC,
+# extracts the expected nonce, and compares it against the JWT nonce.
+#
+# This prevents replay of Google ID tokens from unrelated auth attempts.
+
+def peek_google_oauth_nonce(state: str) -> str | None:
+    """Read the nonce from a signed Google OAuth state WITHOUT consuming it.
+
+    Used by POST /auth/google/state to return the nonce to the frontend.
+    The state remains in _pending_states for later consumption.
+    """
+    if not state or "." not in state:
+        return None
+    b64, sig = state.rsplit(".", 1)
+    try:
+        expected_sig = hmac.new(
+            _get_state_hmac_key(), b64.encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(b64))
+        return payload.get("nonce")
+    except Exception:
+        return None
+
+
+def create_google_oauth_state(nonce: str | None = None) -> str:
+    """Create an HMAC-signed state for Google OAuth nonce binding.
+
+    Generates a random nonce if not provided.  The state carries
+    {nonce, ts} and is HMAC-signed with the same key as broker OAuth state.
+
+    Returns the signed state string (base64.signature format).
+    """
+    now = time.time()
+    if nonce is None:
+        nonce = secrets.token_urlsafe(32)
+    payload = json.dumps(
+        {"nonce": nonce, "ts": int(now)},
+        separators=(",", ":"),
+    )
+    b64 = base64.urlsafe_b64encode(payload.encode()).decode()
+    sig = hmac.new(_get_state_hmac_key(), b64.encode(), hashlib.sha256).hexdigest()[:32]
+    state = f"{b64}.{sig}"
+    _pending_states[state] = now
+    return state
+
+
+def consume_google_oauth_state(state: str | None) -> str | None:
+    """Validate and extract the expected nonce from a signed Google OAuth state.
+
+    Returns the nonce string on success.
+    Returns None if state is invalid, expired, or already consumed.
+    """
+    if not state or "." not in state:
+        return None
+    b64, sig = state.rsplit(".", 1)
+    try:
+        expected_sig = hmac.new(
+            _get_state_hmac_key(), b64.encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(b64))
+        if time.time() - payload.get("ts", 0) > _STATE_TTL_SECONDS:
+            return None
+        created_at = _pending_states.pop(state, None)
+        if created_at is None:
+            return None  # Already consumed or not from us
+        return payload.get("nonce")
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # DB persistence helpers — best-effort, never block the request
 # ---------------------------------------------------------------------------
 
