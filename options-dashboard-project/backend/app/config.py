@@ -5,15 +5,17 @@ class Settings(BaseSettings):
     # DEPRECATED in Phase 10.2B-2: per-user credentials in broker_connections.
     # Kept for backward compatibility during migration.  Remove in 10.2B-6.
     # New code MUST use resolve_user_credentials() instead.
-    # DEPRECATED in Phase 10.2B-2: per-user credentials in broker_connections.
-    # Kept for backward compatibility during migration.  Remove in 10.2B-6.
-    # New code MUST use resolve_user_credentials() instead.
     UPSTOX_API_KEY: str = ""
     UPSTOX_API_SECRET: str = ""
     # Phase 10.2B-6: UPSTOX_REDIRECT_URI is now optional.
     # If empty, auto-derived from RAILWAY_PUBLIC_DOMAIN or BACKEND_URL.
     UPSTOX_REDIRECT_URI: str = ""
+    # Primary frontend URL used for OAuth redirects and CORS.
+    # Supports comma-separated origins for multiple Vercel preview deployments.
     FRONTEND_URL: str = "http://localhost:3000"
+    # Additional CORS origins (comma-separated) for Vercel preview branches.
+    # Example: "https://options-dashboard-git-branch.vercel.app,https://options-dashboard-ruddy.vercel.app"
+    ADDITIONAL_CORS_ORIGINS: str = ""
     # Phase 9C: CORS — set ALLOW_LOCALHOST_CORS=True only in development
     ALLOW_LOCALHOST_CORS: bool = False
     DEBUG: bool = False
@@ -48,6 +50,16 @@ class Settings(BaseSettings):
 
     # Phase 10.2B-6: Optional backend URL for auto-deriving UPSTOX_REDIRECT_URI
     BACKEND_URL: str = ""
+
+    @property
+    def FRONTEND_ORIGIN(self) -> str:
+        """Primary frontend URL for OAuth redirects.
+        Returns the first URL when FRONTEND_URL is comma-separated.
+        """
+        url = self.FRONTEND_URL.strip()
+        if "," in url:
+            url = url.split(",")[0].strip()
+        return url
 
     class Config:
         env_file = ".env"

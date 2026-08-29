@@ -109,7 +109,7 @@ async def callback(
     SAME user's API key/secret.  No shared platform credentials in BYOB path.
     """
     if error:
-        return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(error)}")
+        return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(error)}")
     # Phase 10.2B-3: Extract session_id + broker from signed OAuth state.
     # This eliminates the race condition — we know EXACTLY which user initiated OAuth.
     state_data = token_store.consume_oauth_state(state)
@@ -151,7 +151,7 @@ async def callback(
         ).get_profile()
     except BrokerError as e:
         logger.error("Token/profile exchange failed: %s", e)
-        return RedirectResponse(f"{settings.FRONTEND_URL}?login_error={quote(e.message)}")
+        return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(e.message)}")
 
     # Phase 10.1: persist StrikeNova identity and durable session ownership.
     db = SessionLocal()
@@ -194,7 +194,7 @@ async def callback(
             token_store.clear_token(session_id)
         logger.exception("Failed to persist StrikeNova identity/session")
         return RedirectResponse(
-            f"{settings.FRONTEND_URL}?login_error=account_setup_failed"
+            f"{settings.FRONTEND_ORIGIN}?login_error=account_setup_failed"
         )
     finally:
         db.close()
@@ -211,7 +211,7 @@ async def callback(
     # Send the user back to the dashboard. The session ID is passed in the
     # URL fragment because it is not sent to servers as a query parameter.
     response = RedirectResponse(
-        f"{settings.FRONTEND_URL}/dashboard#session_id={session_id}"
+        f"{settings.FRONTEND_ORIGIN}/dashboard#session_id={session_id}"
     )
     response.set_cookie(
         SESSION_COOKIE,
