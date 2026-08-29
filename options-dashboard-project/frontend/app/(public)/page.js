@@ -3,6 +3,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { C, SYMBOLS, LOT_SIZES, fmtIN, useIsMobile } from "@/lib/ui";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
+import { useAuthModal } from "@/components/public/AuthModalContext";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Mock data (clearly decorative — not live)
@@ -212,6 +213,7 @@ function LoginErrorBanner() {
 
 export default function HomePage() {
   const isMobile = useIsMobile();
+  const { open: openAuth } = useAuthModal();
 
   return (
     <>
@@ -263,9 +265,9 @@ export default function HomePage() {
               <a className="od-btn-gold" href="/features">
                 Explore the Platform <span aria-hidden>&rarr;</span>
               </a>
-              <a className="od-btn-ghost" href="/paper-trading">
+              <button onClick={openAuth} className="od-btn-ghost" data-testid="hero-get-started-btn">
                 Start Paper Trading
-              </a>
+              </button>
             </div>
           </div>
 
@@ -472,7 +474,7 @@ export default function HomePage() {
         headline={<>Build a more <span style={{ color: C.gold }}>structured trading workflow.</span></>}
         body="Explore the platform, understand the workflow and practice your strategies before putting capital at risk."
         primaryLabel="Get Started"
-        primaryHref="/settings"
+        primaryOnClick={openAuth}
         secondaryLabel="Explore the Platform"
         secondaryHref="/features"
       />

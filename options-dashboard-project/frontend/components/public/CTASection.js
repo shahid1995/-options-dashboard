@@ -2,8 +2,22 @@
 import { C, useIsMobile } from "@/lib/ui";
 import { PAGE_MAX } from "./styles";
 
-export default function CTASection({ headline, body, primaryLabel, primaryHref, secondaryLabel, secondaryHref }) {
+export default function CTASection({ headline, body, primaryLabel, primaryHref, primaryOnClick, secondaryLabel, secondaryHref, secondaryOnClick }) {
   const isMobile = useIsMobile();
+
+  const primaryStyle = {
+    fontSize: 15,
+    padding: "14px 30px",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    borderRadius: 8,
+    fontWeight: 700,
+    textDecoration: "none",
+    border: "none",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  };
 
   return (
     <section style={{ padding: isMobile ? "16px 20px 80px" : "24px 20px 100px" }}>
@@ -38,16 +52,34 @@ export default function CTASection({ headline, body, primaryLabel, primaryHref, 
           </p>
         )}
         <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-          {primaryLabel && (
-            <a className="od-btn-gold" href={primaryHref || "/"} style={{ fontSize: 15, padding: "14px 30px" }}>
+          {primaryLabel && primaryOnClick ? (
+            <button
+              data-testid="cta-primary-button"
+              onClick={primaryOnClick}
+              className="od-btn-gold"
+              style={primaryStyle}
+            >
+              {primaryLabel} <span aria-hidden>&rarr;</span>
+            </button>
+          ) : primaryLabel ? (
+            <a className="od-btn-gold" href={primaryHref || "/"} style={primaryStyle}>
               {primaryLabel} <span aria-hidden>&rarr;</span>
             </a>
-          )}
-          {secondaryLabel && (
-            <a className="od-btn-ghost" href={secondaryHref || "/"} style={{ fontSize: 15, padding: "14px 30px" }}>
+          ) : null}
+          {secondaryLabel && secondaryOnClick ? (
+            <button
+              data-testid="cta-secondary-button"
+              onClick={secondaryOnClick}
+              className="od-btn-ghost"
+              style={{ ...primaryStyle, background: "transparent", color: C.text, border: `1px solid ${C.border}` }}
+            >
+              {secondaryLabel}
+            </button>
+          ) : secondaryLabel ? (
+            <a className="od-btn-ghost" href={secondaryHref || "/"} style={primaryStyle}>
               {secondaryLabel}
             </a>
-          )}
+          ) : null}
         </div>
       </div>
     </section>

@@ -1,6 +1,7 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
+import { useAuthModal } from "@/components/public/AuthModalContext";
 
 const PRINCIPLES = [
   {
@@ -31,6 +32,7 @@ const PRINCIPLES = [
 
 export default function AboutClientPage() {
   const isMobile = useIsMobile();
+  const { open: openAuth } = useAuthModal();
 
   return (
     <>
@@ -120,7 +122,7 @@ export default function AboutClientPage() {
       <CTASection
         headline={<>Explore the <span style={{ color: C.gold }}>platform</span></>}
         primaryLabel="Get Started"
-        primaryHref="/settings"
+        primaryOnClick={openAuth}
         secondaryLabel="How It Works"
         secondaryHref="/how-it-works"
       />

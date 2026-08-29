@@ -1,6 +1,7 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
+import { useAuthModal } from "@/components/public/AuthModalContext";
 
 const STEPS = [
   {
@@ -43,6 +44,7 @@ const STEPS = [
 
 export default function HowItWorksClientPage() {
   const isMobile = useIsMobile();
+  const { open: openAuth } = useAuthModal();
 
   return (
     <>
@@ -133,7 +135,7 @@ export default function HowItWorksClientPage() {
       <CTASection
         headline={<>Ready to put it into practice?</>}
         primaryLabel="Get Started"
-        primaryHref="/settings"
+        primaryOnClick={openAuth}
         secondaryLabel="Explore the Platform"
         secondaryHref="/features"
       />

@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { C, useIsMobile } from "@/lib/ui";
 import { PAGE_MAX } from "./styles";
+import { useAuthModal } from "./AuthModalContext";
 
 const NAV_LINKS = [
   { label: "Product", children: [
@@ -21,6 +22,7 @@ export default function PublicHeader() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedGroup, setExpandedGroup] = useState(null);
   const navRef = useRef(null);
+  const { open: openAuth } = useAuthModal();
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -171,8 +173,9 @@ export default function PublicHeader() {
 
           {/* Right side */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-            <a
-              href="/settings"
+            <button
+              onClick={openAuth}
+              data-testid="header-login-btn"
               style={{
                 fontSize: 14,
                 color: C.muted,
@@ -180,19 +183,24 @@ export default function PublicHeader() {
                 padding: "6px 12px",
                 borderRadius: 6,
                 transition: "color 0.15s",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                fontFamily: "inherit",
               }}
               onMouseEnter={(e) => { e.currentTarget.style.color = C.gold; }}
               onMouseLeave={(e) => { e.currentTarget.style.color = C.muted; }}
             >
               Log in
-            </a>
-            <a
+            </button>
+            <button
+              onClick={openAuth}
+              data-testid="header-get-started-btn"
               className="od-btn-gold"
-              href="/settings"
-              style={{ padding: "7px 16px", fontSize: 14 }}
+              style={{ padding: "7px 16px", fontSize: 14, cursor: "pointer" }}
             >
               Get Started
-            </a>
+            </button>
 
             {/* Mobile hamburger */}
             <button
@@ -284,12 +292,22 @@ export default function PublicHeader() {
               </div>
             ))}
             <div style={{ display: "flex", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
-              <a href="/settings" className="od-btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
+              <button
+                onClick={() => { setMobileOpen(false); openAuth(); }}
+                data-testid="mobile-login-btn"
+                className="od-btn-ghost"
+                style={{ flex: 1, justifyContent: "center", cursor: "pointer" }}
+              >
                 Log in
-              </a>
-              <a href="/settings" className="od-btn-gold" style={{ flex: 1, justifyContent: "center" }}>
+              </button>
+              <button
+                onClick={() => { setMobileOpen(false); openAuth(); }}
+                data-testid="mobile-get-started-btn"
+                className="od-btn-gold"
+                style={{ flex: 1, justifyContent: "center", cursor: "pointer" }}
+              >
                 Get Started
-              </a>
+              </button>
             </div>
           </div>
         </div>
