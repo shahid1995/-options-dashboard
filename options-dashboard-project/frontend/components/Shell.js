@@ -187,27 +187,37 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
       </div>
 
       {/* Auth indicator */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {authUser ? (
           <>
             <a
               href="/settings"
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
                 fontSize: 11,
+                fontWeight: 600,
                 color: C.muted,
                 textDecoration: "none",
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
+                padding: "3px 10px",
+                borderRadius: 6,
+                border: `1px solid ${C.border}`,
+                background: "rgba(76,175,125,0.06)",
+                transition: "border-color 0.15s",
               }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.green; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; }}
             >
-              <span style={{
-                display: "inline-block",
-                width: 6,
-                height: 6,
-                borderRadius: 3,
-                background: C.green,
-              }} />
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: 3,
+                  background: C.green,
+                  flexShrink: 0,
+                }}
+              />
               {authUser.display_name || authUser.email || "Account"}
             </a>
             <button
@@ -218,12 +228,16 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
                 color: C.muted,
                 background: "none",
                 border: `1px solid ${C.border}`,
-                borderRadius: 4,
-                padding: "2px 8px",
+                borderRadius: 6,
+                padding: "4px 10px",
                 cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "color 0.15s, border-color 0.15s",
               }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = C.red; e.currentTarget.style.borderColor = C.red; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = C.border; }}
             >
-              Logout
+              Sign Out
             </button>
           </>
         ) : (
@@ -234,7 +248,13 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
               fontWeight: 700,
               color: C.gold,
               textDecoration: "none",
+              padding: "3px 10px",
+              borderRadius: 6,
+              border: `1px solid ${C.gold}44`,
+              transition: "border-color 0.15s",
             }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.gold; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${C.gold}44`; }}
           >
             Sign In
           </a>
