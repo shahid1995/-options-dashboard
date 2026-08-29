@@ -1,125 +1,230 @@
-"""Tests for the ``init_db`` / ``ensure_column`` startup migration path.
+"""Tests for the init_db startup path after Phase 10.1B (Alembic cutover).
 
-Regression guard for the Railway startup crash: ``db.py`` used the
-SQLAlchemy 1.4 ``engine.execute()`` API (removed in 2.0) and the
-``ensure_column`` ALTER statement omitted the column name
-(``ADD COLUMN VARCHAR(40) NULL``). Both only fire when a *pre-existing*
-``trades`` table lacks the Phase 5.0 columns — exactly what a production
-database upgrade hits, and what fresh-DB unit tests never exercised.
+Phase 10.1B removes create_all() and ensure_column() from production startup.
+Alembic is now the sole authoritative schema management mechanism.
+
+These tests verify:
+- Alembic upgrade creates all 24 application tables
+- init_db() does NOT call create_all()
+- init_db() does NOT call ensure_column()
+- init_db() is idempotent
+- init_db() preserves existing data
+- The backfill session uses the correct engine
 """
+
+import os
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.pool import StaticPool
-
-from app.db import _existing_columns, ensure_column, init_db
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
-def engine():
-    return create_engine(
-        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+def temp_engine(tmp_path):
+    """File-based SQLite engine for migration tests.
+
+    In-memory SQLite gives each engine its own database, so Alembic's
+    internal engine would be separate from the test engine. File-based
+    databases ensure both point to the same file.
+    """
+    db_path = tmp_path / "test_migration.db"
+    db_url = f"sqlite:///{db_path}"
+    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    yield engine
+    engine.dispose()
+
+
+def _existing_columns(engine, table: str) -> set[str]:
+    """Helper to check columns on a table."""
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        return {r[1] for r in rows}
+
+
+def test_init_db_uses_alembic_not_create_all(monkeypatch, temp_engine):
+    """init_db() must NOT call Base.metadata.create_all().
+
+    Phase 10.1B: Alembic is the sole schema management mechanism.
+    """
+    import inspect
+    import app.db as db_module
+    source = inspect.getsource(db_module.init_db)
+    assert "create_all" not in source, (
+        "init_db() must not call create_all() after Phase 10.1B. "
+        "Alembic is the sole schema management mechanism."
     )
 
 
-def _create_legacy_trades(engine):
-    """A pre-Phase 5.0 ``trades`` table without the new columns."""
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "CREATE TABLE trades ("
-                "id INTEGER PRIMARY KEY, "
-                "user_id VARCHAR(64), "
-                "status VARCHAR(20))"
-            )
-        )
+def test_init_db_uses_alembic_not_ensure_column(monkeypatch, temp_engine):
+    """init_db() must NOT call ensure_column().
+
+    Phase 10.1B: all legacy ensure_column columns are in the Alembic baseline.
+    """
+    import inspect
+    import app.db as db_module
+    source = inspect.getsource(db_module.init_db)
+    assert "ensure_column" not in source, (
+        "init_db() must not call ensure_column() after Phase 10.1B. "
+        "All legacy columns are in the Alembic baseline."
+    )
 
 
-def test_existing_columns_uses_2_0_connection_api(engine):
-    """engine.execute() was removed in SQLAlchemy 2.0; this must not crash."""
-    _create_legacy_trades(engine)
-    cols = _existing_columns(engine, "trades")
-    assert cols == {"id", "user_id", "status"}
+def test_ensure_column_function_removed():
+    """The ensure_column() and _existing_columns() functions should be removed."""
+    import app.db as db_module
+    assert not hasattr(db_module, "ensure_column"), (
+        "ensure_column() must be removed from db.py after Phase 10.1B"
+    )
+    assert not hasattr(db_module, "_existing_columns"), (
+        "_existing_columns() must be removed from db.py after Phase 10.1B"
+    )
 
 
-def test_ensure_column_adds_named_column(engine):
-    _create_legacy_trades(engine)
-    ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
-    cols = _existing_columns(engine, "trades")
-    assert "strategy_execution_id" in cols
+def test_init_db_uses_alembic(monkeypatch, temp_engine):
+    """init_db() must run Alembic migrations to create all tables."""
+    monkeypatch.setattr("app.db.engine", temp_engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=temp_engine))
 
-
-def test_ensure_column_is_idempotent(engine):
-    _create_legacy_trades(engine)
-    ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
-    first = _existing_columns(engine, "trades")
-    ensure_column(engine, "trades", "client_order_id", "VARCHAR(64) NULL")
-    assert _existing_columns(engine, "trades") == first
-
-
-def test_ensure_column_skips_missing_tables(engine):
-    # Table absent: create_all owns it; ensure_column must not crash.
-    ensure_column(engine, "trades", "strategy_execution_id", "VARCHAR(40) NULL")
-    assert _existing_columns(engine, "trades") == set()
-
-
-def test_init_db_migrates_preexisting_trades_table(monkeypatch, engine):
-    """The Railway production path: old schema on disk, then startup."""
-    _create_legacy_trades(engine)
-    monkeypatch.setattr("app.db.engine", engine)
-
+    from app.db import init_db
     init_db()
 
-    cols = _existing_columns(engine, "trades")
-    assert "strategy_execution_id" in cols
-    assert "client_order_id" in cols
-    # Every other model table was created alongside the migration.
-    with engine.connect() as conn:
+    with temp_engine.connect() as conn:
         tables = {
             r[0]
-            for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
         }
+
+    # All 24 application tables + alembic_version
+    assert "users" in tables
+    assert "user_sessions" in tables
+    assert "trades" in tables
     assert "positions" in tables
     assert "paper_orders" in tables
+    assert "alembic_version" in tables
+    assert len(tables) == 27  # 26 app tables + alembic_version (10.2B-1 added broker_connections, broker_tokens)
 
 
-def test_init_db_is_idempotent_on_migrated_schema(monkeypatch, engine):
-    _create_legacy_trades(engine)
-    monkeypatch.setattr("app.db.engine", engine)
+def test_init_db_creates_legacy_columns_via_baseline(monkeypatch, temp_engine):
+    """Columns previously managed by ensure_column() must exist after Alembic.
+
+    These 15 columns were the ones ensure_column() used to add. They are
+    now in the Alembic baseline and created by alembic upgrade head.
+    """
+    monkeypatch.setattr("app.db.engine", temp_engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=temp_engine))
+
+    from app.db import init_db
     init_db()
-    init_db()  # must not raise or duplicate columns
-    cols = _existing_columns(engine, "trades")
+
+    # Phase 5.0 columns on trades
+    cols = _existing_columns(temp_engine, "trades")
     assert "strategy_execution_id" in cols
     assert "client_order_id" in cols
 
+    # Phase 6.10/7.0 columns on strategy_executions
+    cols = _existing_columns(temp_engine, "strategy_executions")
+    assert "execution_metadata" in cols
+    assert "tags" in cols
+    assert "notes" in cols
 
-def test_init_db_session_uses_same_engine_as_create_all(monkeypatch, engine):
-    """Regression: init_db must create its backfill session from the current
-    engine variable so the session queries the same database that create_all
-    just migrated — even when engine is monkeypatched in tests.
-    """
-    _create_legacy_trades(engine)
-    monkeypatch.setattr("app.db.engine", engine)
+    # Phase 6.8B columns on strategy_template_legs
+    cols = _existing_columns(temp_engine, "strategy_template_legs")
+    assert "strike_mode" in cols
+    assert "strike_offset" in cols
+    assert "expiry_mode" in cols
+    assert "formula_version" in cols
 
-    # init_db must not raise — the backfill session must see the positions
-    # table that create_all just created on the test engine.
+    # Phase 7.6/8F columns on gex_snapshots
+    cols = _existing_columns(temp_engine, "gex_snapshots")
+    assert "sweep_data" in cols
+    assert "owner_id" in cols
+
+
+def test_init_db_is_idempotent(monkeypatch, temp_engine):
+    """Running init_db() twice must not raise or corrupt schema."""
+    monkeypatch.setattr("app.db.engine", temp_engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=temp_engine))
+
+    from app.db import init_db
     init_db()
+    init_db()  # Second call must not raise
 
-    # Verify the positions table exists on our test engine (created by
-    # create_all inside init_db).
-    with engine.connect() as conn:
+    with temp_engine.connect() as conn:
         tables = {
             r[0]
-            for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+    assert "users" in tables
+    assert "alembic_version" in tables
+
+
+def test_init_db_preserves_existing_data(monkeypatch, temp_engine):
+    """init_db() must not delete existing rows."""
+    monkeypatch.setattr("app.db.engine", temp_engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=temp_engine))
+
+    from app.db import init_db
+
+    # First init to create schema
+    init_db()
+
+    # Insert test data
+    with temp_engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO users (id, status, identity_source, created_at, updated_at) "
+                "VALUES (:id, :status, :source, :created, :updated)"
+            ),
+            {
+                "id": "test-preservation-user",
+                "status": "active",
+                "source": "upstox",
+                "created": "2026-01-01 00:00:00",
+                "updated": "2026-01-01 00:00:00",
+            },
+        )
+
+    # Second init — must preserve data
+    init_db()
+
+    with temp_engine.connect() as conn:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM users WHERE id = :id"),
+            {"id": "test-preservation-user"},
+        ).scalar()
+    assert count == 1, "init_db() must not delete existing data"
+
+
+def test_init_db_session_uses_same_engine(monkeypatch, temp_engine):
+    """The backfill session in init_db() must use the current engine variable.
+
+    This is critical for tests that monkeypatch the engine.
+    """
+    monkeypatch.setattr("app.db.engine", temp_engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=temp_engine))
+
+    from app.db import init_db
+
+    # Must not raise — the backfill session must see the tables
+    init_db()
+
+    with temp_engine.connect() as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
         }
     assert "positions" in tables
 
-    # Verify the backfill session could query positions without error
-    # by checking that the engine can resolve the table.
+    # Verify the backfill session could query without error
     from app.models import Position
     from sqlalchemy import select
 
-    with engine.connect() as conn:
+    with temp_engine.connect() as conn:
         result = conn.execute(select(Position.user_id).distinct())
-        # Should execute without OperationalError; result can be empty
         assert result.fetchall() == []

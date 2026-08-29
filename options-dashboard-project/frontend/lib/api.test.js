@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, getBrokerProfile, api, getStrategyTemplates, createStrategyTemplate, updateStrategyTemplate, duplicateStrategyTemplate, deleteStrategyTemplate } from "./api";
+import { isAuthError, chainWsUrl, submitPaperFill, closePaperLeg, getPaperJournal, getMarketStatus, getPaperAnalytics, getBrokerProfile, api, getStrategyTemplates, createStrategyTemplate, updateStrategyTemplate, duplicateStrategyTemplate, deleteStrategyTemplate, registerEmail, loginEmail, getMe, logoutUser, connectBroker, connectAnalyticsToken, getAnalyticsTokenStatus, removeAnalyticsToken } from "./api";
 
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_API_URL", "http://localhost:8000");
@@ -139,6 +139,72 @@ describe("strategy template API (Phase 6.7)", () => {
     const spy = vi.spyOn(api, "delete").mockResolvedValue({ data: { ok: true } });
     const result = await deleteStrategyTemplate(5);
     expect(spy).toHaveBeenCalledWith("/paper/templates/5");
+    expect(result.ok).toBe(true);
+    spy.mockRestore();
+  });
+});
+
+describe("auth API (Phase 10.2B-5)", () => {
+  it("registers via POST /auth/register", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, user_id: "u1" } });
+    const result = await registerEmail("test@example.com", "password123", "Test User");
+    expect(spy).toHaveBeenCalledWith("/auth/register", { email: "test@example.com", password: "password123", display_name: "Test User" });
+    expect(result.ok).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("logs in via POST /auth/login-email", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, session_id: "sess-123" } });
+    const result = await loginEmail("test@example.com", "password123");
+    expect(spy).toHaveBeenCalledWith("/auth/login-email", { email: "test@example.com", password: "password123" });
+    expect(result.session_id).toBe("sess-123");
+    spy.mockRestore();
+  });
+
+  it("gets current user via GET /auth/me", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { user_id: "u1", email: "test@example.com" } });
+    const result = await getMe();
+    expect(spy).toHaveBeenCalledWith("/auth/me");
+    expect(result.user_id).toBe("u1");
+    spy.mockRestore();
+  });
+
+  it("logs out via POST /auth/logout", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    const result = await logoutUser();
+    expect(spy).toHaveBeenCalledWith("/auth/logout");
+    expect(result.ok).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("stores broker credentials via POST /auth/connect", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, status: "pending" } });
+    const result = await connectBroker("UPSTOX", "key123", "secret456");
+    expect(spy).toHaveBeenCalledWith("/auth/connect", { broker: "UPSTOX", api_key: "key123", api_secret: "secret456", redirect_uri: undefined, display_label: undefined });
+    expect(result.status).toBe("pending");
+    spy.mockRestore();
+  });
+
+  it("stores analytics token via POST /auth/connect-analytics-token", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, broker: "UPSTOX" } });
+    const result = await connectAnalyticsToken("atoken123");
+    expect(spy).toHaveBeenCalledWith("/auth/connect-analytics-token", { broker: "UPSTOX", analytics_token: "atoken123" });
+    expect(result.ok).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("gets analytics token status via GET /auth/analytics-token/status", async () => {
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { has_analytics_token: true, broker: "UPSTOX" } });
+    const result = await getAnalyticsTokenStatus();
+    expect(spy).toHaveBeenCalledWith("/auth/analytics-token/status", { params: { broker: "UPSTOX" } });
+    expect(result.has_analytics_token).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("removes analytics token via DELETE /auth/analytics-token", async () => {
+    const spy = vi.spyOn(api, "delete").mockResolvedValue({ data: { ok: true } });
+    const result = await removeAnalyticsToken();
+    expect(spy).toHaveBeenCalledWith("/auth/analytics-token", { params: { broker: "UPSTOX" } });
     expect(result.ok).toBe(true);
     spy.mockRestore();
   });

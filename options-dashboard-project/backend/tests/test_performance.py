@@ -24,6 +24,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.performance import (
     average_loser,
     average_winner,
@@ -119,8 +120,9 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-phase51")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-phase51")
+    return session_id
 
 
 def headers(session_id):
@@ -698,11 +700,11 @@ def test_data_quality_inconsistent_warning(client, logged_in, db_session):
 
 
 def test_user_isolation(client, db_session):
-    session_a = token_store.set_token("tok-user-a")
+    session_a, user_a = create_test_identity(db_session, "tok-user-a")
     execute(client, session_a, single_leg_payload(strategy_tag="UserA"))
     close_all_positions(client, session_a, db_session)
 
-    session_b = token_store.set_token("tok-user-b")
+    session_b, user_b = create_test_identity(db_session, "tok-user-b")
     body = get_analytics(client, session_b).json()
     assert body["performance"]["total_completed_trades"] == 0
     assert body["journal"] == []

@@ -97,8 +97,10 @@ def client(db_session):
 
 
 @pytest.fixture()
-def logged_in(client):
-    return token_store.set_token("tok-phase70")
+def logged_in(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-phase70")
+    return session_id
 
 
 # ---- Migration tests ----
@@ -130,7 +132,7 @@ def sample_execution(db_session, logged_in):
     from app.models import Position
     from datetime import datetime, timezone
 
-    user_id = logged_in  # logged_in fixture returns the session_id which is the user key
+    user_id = db_session._test_user_id
     exec_id = "ann-test-001"
     ex = StrategyExecution(
         user_id=user_id,
@@ -254,7 +256,8 @@ class TestAnnotationsAPI:
 
     def test_another_user_cannot_modify(self, client, db_session, sample_execution):
         """User B cannot modify user A's execution."""
-        other_session = token_store.set_token("other-user-token-annotations")
+        from tests.test_helpers import create_test_identity
+        other_session, _ = create_test_identity(db_session, "other-user-token-annotations")
         resp = client.put(
             f"/paper/analytics/trades/{sample_execution}/annotations",
             json={"tags": ["test"]},

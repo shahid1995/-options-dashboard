@@ -66,6 +66,9 @@ class UpstoxAdapter:
         self,
         access_token: str | None = None,
         *,
+        api_key: str | None = None,           # Phase 10.2B-2: user's API key
+        api_secret: str | None = None,        # Phase 10.2B-2: user's API secret
+        redirect_uri: str | None = None,      # Phase 10.2B-2: user's redirect URI
         connection_context: BrokerConnectionContext | None = None,
         login_url_builder=None,
         token_exchanger=None,
@@ -78,6 +81,9 @@ class UpstoxAdapter:
         now=None,
     ):
         self._access_token = access_token
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._redirect_uri = redirect_uri
         self._connection_context = connection_context
         # Fetcher defaults resolve at CALL time via the module attribute so
         # runtime monkeypatching (tests, tooling) always intercepts.
@@ -174,12 +180,29 @@ class UpstoxAdapter:
     # ---- AUTHENTICATION ---------------------------------------------------
 
     def get_authorization_url(self, state: str) -> str:
-        builder = self._login_url_builder or upstox.get_login_url
-        return builder(state)
+        if self._login_url_builder:
+            return self._login_url_builder(state)
+        if self._api_key:
+            return upstox.get_login_url(
+                state,
+                client_id=self._api_key,
+                redirect_uri=self._redirect_uri,
+            )
+        return upstox.get_login_url(state)
 
     async def exchange_authorization_code(self, code: str) -> str:
-        exchanger = self._token_exchanger or upstox.exchange_code_for_token
+        if self._token_exchanger:
+            exchanger = self._token_exchanger
+        else:
+            exchanger = upstox.exchange_code_for_token
         try:
+            if self._api_key and self._api_secret:
+                return await exchanger(
+                    code,
+                    client_id=self._api_key,
+                    client_secret=self._api_secret,
+                    redirect_uri=self._redirect_uri,
+                )
             return await exchanger(code)
         except UpstoxError as exc:
             raise self._map_error(exc) from exc
@@ -191,6 +214,18 @@ class UpstoxAdapter:
         token store) — the adapter only forgets its own copy.
         """
         self._access_token = None
+
+    # ---- BROKER-SPECIFIC PROFILE EXTRACTION (AD-6) ----------------------
+
+    @staticmethod
+    def extract_account_id(profile: dict) -> str | None:
+        """Extract Upstox-specific account ID from profile.
+
+        Broker-specific logic lives in the adapter layer, never in
+        identity.py (AD-6).
+        """
+        from app.brokers.adapters.upstox.profile import extract_account_id
+        return extract_account_id(profile)
 
     # ---- ACCOUNT ----------------------------------------------------------
 

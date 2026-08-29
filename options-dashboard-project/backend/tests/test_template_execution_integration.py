@@ -73,8 +73,10 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-exec-integration")
+def logged_in(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-exec-integration")
+    return session_id
 
 
 def headers(session_id):
@@ -540,7 +542,8 @@ class TestExecuteEndpoint:
         tid = _create_template(client, logged_in, name="My Template")
 
         # Switch to user B
-        other_sid = token_store.set_token("tok-exec-other-user")
+        from tests.test_helpers import create_test_identity
+        other_sid, _ = create_test_identity(db_session, "tok-exec-other-user")
         with patch("app.routers.paper.require_market_open", new_callable=AsyncMock):
             resp = client.post(
                 f"/paper/templates/{tid}/execute",

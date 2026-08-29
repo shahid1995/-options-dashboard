@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.routers.deps import get_session_id
+from app.routers.deps import AuthenticatedUser, CurrentUser
 from app.routers.paper import require_session
 from app.schemas import (
     ResolutionInlineRequestIn,
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.post("/resolve", response_model=ResolutionOut)
 async def resolve_inline(
     request: ResolutionInlineRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
 ):
     """POST /paper/resolve — Resolve inline legs against live broker chain.
 
@@ -37,7 +37,7 @@ async def resolve_inline(
     """
     from app.services.template_resolution import resolve_legs
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
 
     # Convert schema legs to dicts
     legs = []

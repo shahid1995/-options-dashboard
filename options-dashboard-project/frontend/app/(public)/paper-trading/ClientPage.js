@@ -1,7 +1,7 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { SectionHeading, FeatureCard, CTASection, PAGE_MAX, sectionPad, DEMO_LABEL_STYLE } from "@/components/public";
+import { useAuthModal } from "@/components/public/AuthModalContext";
 
 const CAPABILITIES = [
   { icon: "\u229E", title: "Simulated Orders", desc: "Place paper orders that are filled at market prices without touching a real broker." },
@@ -14,6 +14,7 @@ const CAPABILITIES = [
 
 export default function PaperTradingClientPage() {
   const isMobile = useIsMobile();
+  const { open: openAuth } = useAuthModal();
 
   return (
     <>
@@ -196,7 +197,7 @@ export default function PaperTradingClientPage() {
         headline={<>Start <span style={{ color: C.gold }}>paper trading</span> today</>}
         body="Test your strategies with simulated capital before committing real money."
         primaryLabel="Get Started"
-        primaryHref={loginUrl()}
+        primaryOnClick={openAuth}
         secondaryLabel="Build a Strategy"
         secondaryHref="/strategy-lab"
       />

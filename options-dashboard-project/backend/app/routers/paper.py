@@ -6,7 +6,7 @@ from app.db import get_db
 from app.brokers.domain.enums import BROKER_ID_UPSTOX
 from app.brokers.domain.errors import BrokerError
 from app.brokers.gateway import gateway
-from app.routers.deps import get_session_id
+from app.routers.deps import AuthenticatedUser, CurrentUser
 from app.schemas import (
     AnalyticsOut,
     BrokerProfileOut,
@@ -61,12 +61,13 @@ MARKET_CLOSED_MSG = "Market is closed. Paper order was not executed."
 MARKET_UNKNOWN_MSG = "Unable to verify market status. Order was not executed."
 
 
-def require_session(session_id: str | None) -> tuple[str, str]:
-    """Validates the Upstox session and returns (journal user key, access token)."""
-    token = token_store.get_token(session_id) if session_id else None
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-    return session_id, token
+def require_session(user: AuthenticatedUser) -> tuple[str, str]:
+    """Validates the Upstox session and returns (user.id, access token).
+
+    Phase 10.2A: user_id is now the canonical ``users.id`` (UUID), not the
+    session_id.  Session IDs are transport-only and never used for data
+    isolation."""
+    return user.user_id, user.access_token
 
 
 async def require_market_open(access_token: str) -> None:
@@ -86,7 +87,7 @@ async def require_market_open(access_token: str) -> None:
 
 @router.get("/broker/profile", response_model=BrokerProfileOut)
 async def broker_profile(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     refresh: bool = False,
 ):
     """GET /paper/broker/profile — broker connection diagnostics (Phase 6.4.1).
@@ -103,13 +104,13 @@ async def broker_profile(
     """
     from app.services.broker_profile import get_broker_profile_summary
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     return await get_broker_profile_summary(user_id, access_token, refresh=refresh)
 
 
 @router.get("/market-status", response_model=MarketStatusOut)
 async def market_status(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     segment: str = "INDEX_DERIVATIVES",
 ):
     """Current market status for the paper-trading UI badge (segment-aware).
@@ -120,7 +121,7 @@ async def market_status(
     trading. The badge is informational; the execution gate re-resolves the
     same segment at the exact moment of execution.
     """
-    _, access_token = require_session(session_id)
+    _, access_token = require_session(user)
     status = await get_market_status(access_token, segment=segment)
     return MarketStatusOut(
         status=status.status,
@@ -139,7 +140,7 @@ async def market_status(
 @router.post("/fills", status_code=201, response_model=TradeOut)
 async def submit_fill(
     order: OrderFillIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """LEGACY journal path: auto-logs an executed paper order into trades+legs.
@@ -149,7 +150,7 @@ async def submit_fill(
     backward compatibility with existing clients and tests; it writes only
     the journal tables, never the authoritative orders/positions/ledger.
     """
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     trade = handlePaperOrderFill(user_id, order, db)
     return trade
@@ -160,13 +161,13 @@ async def submit_leg_close(
     trade_id: int,
     leg_id: int,
     body: LegCloseIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """LEGACY journal path: records a leg's exit; closes the trade once every
     leg has exited. Phase 5.0 positions exit via ``POST /paper/positions/{id}/exit``.
     """
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     try:
         trade = close_leg(user_id, trade_id, leg_id, body.exit_price, db)
@@ -290,7 +291,7 @@ def _paper_error(exc: PaperExecutionError) -> HTTPException:
 @router.post("/executions", response_model=ExecutionOut)
 async def submit_execution(
     request: ExecutionRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Execute a strategy as a group of paper orders (idempotent).
@@ -300,7 +301,7 @@ async def submit_execution(
     orders + positions + ledger + journal record. Replays of the same
     ``client_order_id`` return the original execution without new writes.
     """
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     try:
         prices = await resolve_market_prices(access_token, request.symbol, request.legs)
@@ -313,7 +314,7 @@ async def submit_execution(
 async def submit_position_exit(
     position_id: int,
     request: ExitRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Exit a paper position (full or partial) at the authoritative market price.
@@ -324,7 +325,7 @@ async def submit_position_exit(
     open-position check, required chain data, current market price, then an
     atomic position/order/ledger/journal update.
     """
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     try:
         from app.models import Position as PositionModel
@@ -359,7 +360,7 @@ async def submit_position_exit(
 async def submit_execution_exit_all(
     strategy_execution_id: str,
     request: BulkExitRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """EXIT STRATEGY — close every open position of ONE strategy execution.
@@ -373,7 +374,7 @@ async def submit_execution_exit_all(
     from app.models import Position as PositionModel
     from app.models import StrategyExecution as StrategyExecutionModel
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     execution = db.scalar(
         select(StrategyExecutionModel).where(
@@ -402,7 +403,7 @@ async def submit_execution_exit_all(
 @router.post("/positions/exit-all", response_model=BulkExitOut)
 async def submit_exit_all(
     request: BulkExitRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """EXIT ALL — close every open paper position of the authenticated user.
@@ -415,7 +416,7 @@ async def submit_exit_all(
     """
     from app.models import Position as PositionModel
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
     positions = db.scalars(
         select(PositionModel)
@@ -431,7 +432,7 @@ async def submit_exit_all(
 
 @router.get("/positions", response_model=list[PositionOut])
 def positions(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
     status: str | None = Query(default=None, description="Filter: open, closed, or omit for all"),
     symbol: str | None = Query(default=None, description="Filter by symbol (case-insensitive)"),
@@ -448,7 +449,7 @@ def positions(
     ``all=true`` activates the enriched path without a status filter,
     returning both open and closed positions.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     use_enriched = _all or any([status, symbol, option_type, strategy_execution_id])
     if use_enriched:
         from app.services.paper_execution import get_positions_enriched
@@ -464,7 +465,7 @@ def positions(
 
 @router.get("/orders")
 def orders(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
     status: str | None = Query(default=None, description="Filter by status (PENDING, FILLED, REJECTED, etc.)"),
     symbol: str | None = Query(default=None, description="Filter by symbol (case-insensitive)"),
@@ -486,7 +487,7 @@ def orders(
     ``strategy_execution_id`` filters to one strategy execution.
     ``limit`` / ``offset`` bound the result set.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return get_order_history(
         user_id,
         db,
@@ -503,37 +504,37 @@ def orders(
 
 @router.get("/portfolio", response_model=PortfolioOut)
 def portfolio(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Portfolio summary + strategy-grouped view (server-authoritative)."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return get_portfolio(user_id, db)
 
 
 @router.post("/portfolio/reset", response_model=PortfolioOut)
 def portfolio_reset(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Clear the user's paper portfolio (executions, orders, positions, ledger)."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return reset_portfolio(user_id, db)
 
 
 @router.get("/reconcile", response_model=ReconcileOut)
 def portfolio_reconcile(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Verify orders, positions, cash and executions agree; report discrepancies."""
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return reconcile(user_id, db)
 
 
 @router.get("/analytics", response_model=AnalyticsOut)
 def analytics(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
     date_from: str | None = None,
     date_to: str | None = None,
@@ -548,7 +549,7 @@ def analytics(
     curve, drawdown, strategy groups and journal; the canonical summary
     always reflects the full portfolio.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return get_analytics(
         user_id, db, date_from=date_from, date_to=date_to, strategy=strategy
     )
@@ -556,7 +557,7 @@ def analytics(
 
 @router.get("/journal")
 def journal(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """Account, performance stats, and the full trade log for the journal UI.
@@ -564,13 +565,13 @@ def journal(
     Read-only: always available, regardless of market status, so users can
     review positions, P&L and history after the market closes.
     """
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
     return get_journal(user_id, db)
 
 
 @router.get("/capital", response_model=CapitalOut)
 async def capital(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/capital — server-authoritative capital summary (Phase 6.0/6.1).
@@ -585,7 +586,7 @@ async def capital(
     exposed as paper values, never renamed as broker funds. No Return-on-
     Capital metric is computed; only its future inputs are returned.
     """
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     return await get_capital_summary(user_id, db, access_token=access_token)
 
 
@@ -595,7 +596,7 @@ async def capital(
 @router.post("/exit-intent/preview", response_model=ExitIntentPreviewOut)
 def preview_exit_intent(
     request: ExitIntentRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/exit-intent/preview — Server-authoritative exit preview (Phase 6.6.5).
@@ -614,7 +615,7 @@ def preview_exit_intent(
     """
     from app.services.exit_selector import ExitSelectorError, resolve_server_exit_targets
 
-    user_id, _access_token = require_session(session_id)
+    user_id, _access_token = require_session(user)
 
     try:
         targets = resolve_server_exit_targets(
@@ -661,7 +662,7 @@ def preview_exit_intent(
 @router.post("/exit-intent", response_model=ExitIntentOut)
 async def submit_exit_intent(
     request: ExitIntentRequestIn,
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """POST /paper/exit-intent — Server-authoritative exit intent (Phase 6.5.0.4).
@@ -697,7 +698,7 @@ async def submit_exit_intent(
         ExecutionStatus,
     )
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     await require_market_open(access_token)
 
     try:
@@ -835,7 +836,7 @@ async def submit_exit_intent(
 
 @router.get("/positions/valuation", response_model=PositionValuationResponseOut)
 async def positions_valuation(
-    session_id: str | None = Depends(get_session_id),
+    user: AuthenticatedUser = Depends(CurrentUser()),
     db: Session = Depends(get_db),
 ):
     """GET /paper/positions/valuation — server-authoritative live valuation.
@@ -850,7 +851,7 @@ async def positions_valuation(
     """
     from app.services.valuation import resolve_live_valuation
 
-    user_id, access_token = require_session(session_id)
+    user_id, access_token = require_session(user)
     positions, summary = await resolve_live_valuation(db, user_id, access_token)
 
     from app.services.valuation import (

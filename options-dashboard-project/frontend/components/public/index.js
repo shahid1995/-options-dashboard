@@ -5,4 +5,6 @@ export { default as SectionHeading } from "./SectionHeading";
 export { default as FeatureCard } from "./FeatureCard";
 export { default as CTASection } from "./CTASection";
 export { default as DemoMetric } from "./DemoMetric";
+export { default as AuthModal } from "./AuthModal";
+export { default as AuthModalProvider, useAuthModal } from "./AuthModalContext";
 export { PUBLIC_CSS, PAGE_MAX, sectionPad, DEMO_LABEL_STYLE } from "./styles";

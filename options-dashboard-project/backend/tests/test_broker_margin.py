@@ -31,6 +31,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.broker_margin import (
     BROKER_BAD_RESPONSE,
     BROKER_FUNDS_UNAVAILABLE,
@@ -686,8 +687,9 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-broker61")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-broker61")
+    return session_id
 
 
 def headers(session_id):

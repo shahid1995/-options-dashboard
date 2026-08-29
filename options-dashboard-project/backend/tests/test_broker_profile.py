@@ -32,6 +32,7 @@ from app.services.broker_profile import (
     get_broker_profile_summary,
     normalize_profile,
 )
+from tests.test_helpers import create_test_identity
 
 
 # ---- Fixtures -----------------------------------------------------------------
@@ -47,15 +48,45 @@ def clear_profile_cache():
 
 
 @pytest.fixture
-def client():
+def db_session():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.db import Base, get_db
     from app.main import app
 
-    yield TestClient(app)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    TestSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = TestSession()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-xyz")
+def client(db_session):
+    from app.main import app
+    from app.db import get_db
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-xyz")
+    return session_id
 
 
 def headers(session_id):
@@ -394,7 +425,7 @@ def test_endpoint_never_returns_secrets(client, logged_in):
         assert field not in payload
 
 
-def test_endpoint_user_isolation(client, logged_in):
+def test_endpoint_user_isolation(client, logged_in, db_session):
     session_a = logged_in
 
     with patch(
@@ -404,7 +435,7 @@ def test_endpoint_user_isolation(client, logged_in):
         body_a = client.get("/paper/broker/profile", headers=headers(session_a)).json()
         # The token store is single-session: switching the active session
         # must NOT leak user A's cached profile to user B.
-        session_b = token_store.set_token("tok-other")
+        session_b, user_b = create_test_identity(db_session, "tok-other")
         body_b = client.get("/paper/broker/profile", headers=headers(session_b)).json()
 
     assert body_a["profile"]["user_id"] == "UCC-tok-xyz"

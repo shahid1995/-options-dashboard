@@ -1,6 +1,7 @@
+"use client";
 import { C } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { PAGE_MAX } from "./styles";
+import { useAuthModal } from "./AuthModalContext";
 
 const FOOTER_COLS = [
   {
@@ -19,16 +20,11 @@ const FOOTER_COLS = [
       { label: "About", href: "/about" },
     ],
   },
-  {
-    heading: "Account",
-    links: [
-      { label: "Log in", href: loginUrl() },
-      { label: "Get Started", href: loginUrl() },
-    ],
-  },
 ];
 
 export default function PublicFooter() {
+  const { open: openAuth } = useAuthModal();
+
   return (
     <footer style={{ borderTop: `1px solid ${C.border}`, background: "rgba(18, 22, 31, 0.4)" }}>
       <div
@@ -85,6 +81,29 @@ export default function PublicFooter() {
               ))}
             </div>
           ))}
+
+          {/* Account column — buttons that open the modal */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 120 }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, fontWeight: 600, marginBottom: 4 }}>
+              ACCOUNT
+            </div>
+            <button
+              onClick={openAuth}
+              data-testid="footer-login-btn"
+              className="od-link"
+              style={{ background: "none", border: "none", textAlign: "left", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+            >
+              Log in
+            </button>
+            <button
+              onClick={openAuth}
+              data-testid="footer-get-started-btn"
+              className="od-link"
+              style={{ background: "none", border: "none", textAlign: "left", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+            >
+              Get Started
+            </button>
+          </div>
         </div>
       </div>
 

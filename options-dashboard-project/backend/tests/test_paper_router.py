@@ -71,8 +71,10 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-xyz")
+def logged_in(client, db_session):
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-xyz")
+    return session_id
 
 
 def headers(session_id):
@@ -308,11 +310,13 @@ def test_close_unknown_trade_returns_404(client, logged_in):
     assert resp.status_code == 404
 
 
-def test_close_leg_of_another_session_returns_404(client):
-    session_a = token_store.set_token("tok-a")
+def test_close_leg_of_another_session_returns_404(client, db_session):
+    from tests.test_helpers import create_test_identity
+
+    session_a, _ = create_test_identity(db_session, "tok-a")
     trade = fill(client, session_a, single_leg_order()).json()
 
-    session_b = token_store.set_token("tok-b")  # replaces the active session
+    session_b, _ = create_test_identity(db_session, "tok-b")
     resp = close_leg(client, session_b, trade["id"], trade["legs"][0]["id"], 50.0)
     assert resp.status_code == 404
 

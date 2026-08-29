@@ -26,6 +26,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.services import token_store
+from tests.test_helpers import create_test_identity
 from app.services.upstox import UpstoxError
 from app.services.capital import (
     BASIS_PREMIUM,
@@ -133,8 +134,9 @@ def client(db_session):
 
 
 @pytest.fixture
-def logged_in(client):
-    return token_store.set_token("tok-phase60")
+def logged_in(client, db_session):
+    session_id, _ = create_test_identity(db_session, "tok-phase60")
+    return session_id
 
 
 def headers(session_id):
@@ -482,10 +484,10 @@ def test_paper_cash_reflects_ledger_and_is_labeled_paper(client, logged_in):
 
 
 def test_user_isolation(client, db_session):
-    session_a = token_store.set_token("tok-cap-a")
+    session_a, user_a = create_test_identity(db_session, "tok-cap-a")
     assert execute(client, session_a, bull_call_spread_payload()).status_code == 200
 
-    session_b = token_store.set_token("tok-cap-b")
+    session_b, user_b = create_test_identity(db_session, "tok-cap-b")
     body = get_capital(client, session_b).json()
 
     assert body["strategies"] == []  # user B never sees user A's strategies
