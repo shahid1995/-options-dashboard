@@ -4,7 +4,6 @@ import { C } from "@/lib/ui";
 import { loginUrl, registerEmail, loginEmail, loginGoogle } from "@/lib/api";
 import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
-import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 
 const INPUT_STYLE = {
   width: "100%",
@@ -48,6 +47,95 @@ const GHOST_BTN = {
   fontFamily: "inherit",
   transition: "border-color 0.15s, background 0.15s",
 };
+
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+
+/**
+ * Native Google Sign-In button using Google Identity Services directly.
+ * More reliable than @react-oauth/google because it manages its own
+ * script loading and renders the Google button natively.
+ */
+function GoogleSignInButton({ onSuccess, onError }) {
+  const buttonRef = useRef(null);
+  const googleInitialized = useRef(false);
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || !buttonRef.current) return;
+
+    // Load the GIS script if not already loaded
+    const loadGIS = () => {
+      if (window.google?.accounts?.id) {
+        initializeGoogle();
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = () => initializeGoogle();
+      script.onerror = () => onError("Failed to load Google Sign-In. Please try again.");
+      document.body.appendChild(script);
+    };
+
+    const initializeGoogle = () => {
+      if (googleInitialized.current) return;
+      googleInitialized.current = true;
+
+      try {
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (response) => {
+            if (response.credential) {
+              onSuccess(response.credential);
+            } else {
+              onError("Google sign-in was cancelled.");
+            }
+          },
+          auto_select: false,
+          cancel_on_tap_outside: true,
+        });
+
+        // Render the Google button into the ref
+        window.google.accounts.id.renderButton(buttonRef.current, {
+          type: "standard",
+          theme: "outline",
+          size: "large",
+          width: buttonRef.current.offsetWidth || 340,
+          text: "continue_with",
+          shape: "rectangular",
+        });
+      } catch (err) {
+        onError("Google Sign-In initialization failed.");
+      }
+    };
+
+    loadGIS();
+  }, [onSuccess, onError]);
+
+  if (!GOOGLE_CLIENT_ID) {
+    return (
+      <div data-testid="auth-google-btn" style={{ marginBottom: 12 }}>
+        <div style={{
+          padding: "12px",
+          textAlign: "center",
+          border: `1px solid ${C.border}`,
+          borderRadius: 8,
+          color: C.faint,
+          fontSize: 13,
+        }}>
+          Google Sign-In not configured
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="auth-google-btn" style={{ marginBottom: 12 }}>
+      <div ref={buttonRef} style={{ width: "100%" }} />
+    </div>
+  );
+}
 
 export default function AuthModal({ open, onClose, onAuth }) {
   const router = useRouter();
@@ -350,29 +438,20 @@ export default function AuthModal({ open, onClose, onAuth }) {
         </div>
 
         {/* Google Sign-In */}
-        <div data-testid="auth-google-btn" style={{ marginBottom: 12 }}>
-          <GoogleLogin
-            onSuccess={async (credentialResponse) => {
-              setLoading(true);
-              setError("");
-              try {
-                const data = await loginGoogle(credentialResponse.credential);
-                handleAuthSuccess(data);
-              } catch (err) {
-                setError(err.message || "Google login failed. Please try again.");
-                setLoading(false);
-              }
-            }}
-            onError={() => {
-              setError("Google sign-in was cancelled or failed.");
-            }}
-            theme="outline"
-            size="large"
-            width="100%"
-            text="continue_with"
-            shape="rectangular"
-          />
-        </div>
+        <GoogleSignInButton
+          onSuccess={async (credential) => {
+            setLoading(true);
+            setError("");
+            try {
+              const data = await loginGoogle(credential);
+              handleAuthSuccess(data);
+            } catch (err) {
+              setError(err.message || "Google login failed. Please try again.");
+              setLoading(false);
+            }
+          }}
+          onError={(msg) => setError(msg)}
+        />
 
         {/* Upstox OAuth */}
         <a

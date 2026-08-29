@@ -12,17 +12,9 @@ vi.mock("next/link", () => ({
   default: ({ children, ...props }) => React.createElement("a", props, children),
 }));
 
-// Mock @react-oauth/google to avoid needing GoogleOAuthProvider in tests
-vi.mock("@react-oauth/google", () => ({
-  GoogleOAuthProvider: ({ children }) => children,
-  GoogleLogin: (props) => {
-    // Simulate the Google button as a simple div with testid
-    return React.createElement("div", {
-      "data-testid": "auth-google-btn",
-      "data-on-success": props.onSuccess,
-      "data-on-error": props.onError,
-    }, "Google Sign-In");
-  },
+// Mock next/script (used by some Next.js features)
+vi.mock("next/script", () => ({
+  default: ({ children, ...props }) => React.createElement("script", props, children),
 }));
 
 import AuthModal from "./AuthModal";
