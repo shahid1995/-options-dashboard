@@ -6,3 +6,4 @@ python-dotenv==1.2.2
 sqlalchemy==2.0.43
 alembic==1.15.2
 cryptography>=44.0.0
+PyJWT>=2.8.0

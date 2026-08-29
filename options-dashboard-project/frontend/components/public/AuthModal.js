@@ -1,9 +1,10 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { C } from "@/lib/ui";
-import { loginUrl, registerEmail, loginEmail } from "@/lib/api";
+import { loginUrl, registerEmail, loginEmail, loginGoogle } from "@/lib/api";
 import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
+import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 
 const INPUT_STYLE = {
   width: "100%",
@@ -344,8 +345,33 @@ export default function AuthModal({ open, onClose, onAuth }) {
         {/* Divider */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "20px 0" }}>
           <div style={{ flex: 1, height: 1, background: C.border }} />
-          <span style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap" }}>or connect with</span>
+          <span style={{ fontSize: 12, color: C.faint, whiteSpace: "nowrap" }}>or continue with</span>
           <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+
+        {/* Google Sign-In */}
+        <div data-testid="auth-google-btn" style={{ marginBottom: 12 }}>
+          <GoogleLogin
+            onSuccess={async (credentialResponse) => {
+              setLoading(true);
+              setError("");
+              try {
+                const data = await loginGoogle(credentialResponse.credential);
+                handleAuthSuccess(data);
+              } catch (err) {
+                setError(err.message || "Google login failed. Please try again.");
+                setLoading(false);
+              }
+            }}
+            onError={() => {
+              setError("Google sign-in was cancelled or failed.");
+            }}
+            theme="outline"
+            size="large"
+            width="100%"
+            text="continue_with"
+            shape="rectangular"
+          />
         </div>
 
         {/* Upstox OAuth */}
@@ -363,7 +389,7 @@ export default function AuthModal({ open, onClose, onAuth }) {
           onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.gold; e.currentTarget.style.background = "rgba(201,161,90,0.06)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = "transparent"; }}
         >
-          <span style={{ fontWeight: 800, color: "#4FACFE", fontSize: 15 }}>↑</span>
+          <span style={{ fontWeight: 800, color: "#4FACFE", fontSize: 15 }}>&#8593;</span>
           Connect with Upstox
         </a>
 

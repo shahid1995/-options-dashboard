@@ -12,6 +12,19 @@ vi.mock("next/link", () => ({
   default: ({ children, ...props }) => React.createElement("a", props, children),
 }));
 
+// Mock @react-oauth/google to avoid needing GoogleOAuthProvider in tests
+vi.mock("@react-oauth/google", () => ({
+  GoogleOAuthProvider: ({ children }) => children,
+  GoogleLogin: (props) => {
+    // Simulate the Google button as a simple div with testid
+    return React.createElement("div", {
+      "data-testid": "auth-google-btn",
+      "data-on-success": props.onSuccess,
+      "data-on-error": props.onError,
+    }, "Google Sign-In");
+  },
+}));
+
 import AuthModal from "./AuthModal";
 
 /**
@@ -87,7 +100,7 @@ describe("AuthModal — rendering", () => {
 
   it("renders a divider between email form and Upstox", () => {
     const html = renderToStaticMarkup(React.createElement(AuthModal, defaultProps));
-    expect(html).toContain("or connect with");
+    expect(html).toContain("or continue with");
   });
 
   it("renders the Terms of Service note", () => {
@@ -117,5 +130,10 @@ describe("AuthModal — data attributes", () => {
     const html = renderToStaticMarkup(React.createElement(AuthModal, defaultProps));
     expect(html).toContain('data-testid="auth-tab-signin"');
     expect(html).toContain('data-testid="auth-tab-signup"');
+  });
+
+  it("has data-testid on Google Sign-In button", () => {
+    const html = renderToStaticMarkup(React.createElement(AuthModal, defaultProps));
+    expect(html).toContain('data-testid="auth-google-btn"');
   });
 });

@@ -20,6 +20,7 @@ from app.identity import (
     create_session_record,
     get_active_session,
     get_or_create_connection,
+    get_or_create_user_from_google,
     get_or_create_user_from_upstox,
     get_analytics_token,
     hash_password,
@@ -389,6 +390,154 @@ def login_email(
             "display_name": user.display_name,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/google — Google One Tap / Sign-In
+# ---------------------------------------------------------------------------
+
+@router.post("/google")
+def google_auth(
+    credential: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Authenticate via Google Sign-In (One Tap / GIS).
+
+    Accepts a Google ID token (JWT), verifies it against Google's public
+    keys, extracts the user's identity, and creates or links a StrikeNova
+    account.
+
+    Account linking:
+    - If a user with this Google sub exists → login.
+    - If a user with this email exists → link Google to existing account.
+    - Otherwise → create new account.
+
+    Returns session_id and user info (same shape as /auth/login-email).
+    """
+    if not credential:
+        raise HTTPException(status_code=422, detail="Google credential is required")
+
+    # Verify the Google ID token
+    google_user = _verify_google_token(credential)
+    if google_user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired Google credential")
+
+    # Get or create the StrikeNova user
+    try:
+        user = get_or_create_user_from_google(
+            db,
+            google_sub=google_user["sub"],
+            email=google_user.get("email"),
+            display_name=google_user.get("name"),
+        )
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create/link Google user")
+        raise HTTPException(status_code=500, detail="Account creation failed")
+
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+
+    # Create session (same pattern as email login)
+    user.last_login_at = datetime.now(timezone.utc)
+    session_token = f"google:{user.id}:{secrets.token_urlsafe(24)}"
+    session_id = token_store.set_token(
+        session_token,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+    )
+    create_session_record(db, user.id, session_id)
+    db.commit()
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "user": {
+            "user_id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "identity_source": user.identity_source,
+        },
+    }
+
+
+def _verify_google_token(credential: str) -> dict | None:
+    """Verify a Google ID token (JWT) and return the payload.
+
+    Uses Google's public JWKS endpoint to verify the token signature.
+    Returns the decoded payload with at minimum 'sub' and optionally
+    'email', 'name', 'picture'.
+
+    Returns None if verification fails.
+    """
+    import json
+    import time
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+    import base64 as _b64
+
+    client_id = settings.GOOGLE_CLIENT_ID
+    if not client_id:
+        logger.error("GOOGLE_CLIENT_ID not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="Google authentication is not configured",
+        )
+
+    try:
+        # Split the JWT
+        parts = credential.split(".")
+        if len(parts) != 3:
+            return None
+
+        header_b64, payload_b64, signature_b64 = parts
+
+        # Decode header to get kid
+        header_json = _b64.urlsafe_b64decode(header_b64 + "==")
+        header = json.loads(header_json)
+        kid = header.get("kid")
+        alg = header.get("alg")
+        if alg != "RS256" or not kid:
+            return None
+
+        # Fetch Google's public keys
+        jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
+        req = Request(jwks_url, headers={"User-Agent": "StrikeNova/1.0"})
+        with urlopen(req, timeout=10) as resp:
+            jwks = json.loads(resp.read())
+
+        # Find the matching key
+        public_key = None
+        for key in jwks.get("keys", []):
+            if key.get("kid") == kid:
+                public_key = key
+                break
+        if public_key is None:
+            return None
+
+        # Verify using PyJWT (already in requirements)
+        from jwt import decode as jwt_decode
+        from jwt import PyJWKSet
+
+        jwk_set = PyJWKSet(jwks)
+        signing_key = jwk_set.key_by_kid(kid)
+
+        payload = jwt_decode(
+            credential,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=client_id,
+            options={"verify_exp": True},
+        )
+
+        return {
+            "sub": payload["sub"],
+            "email": payload.get("email"),
+            "name": payload.get("name"),
+            "picture": payload.get("picture"),
+        }
+    except Exception:
+        logger.warning("Google token verification failed", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

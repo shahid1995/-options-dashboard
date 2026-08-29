@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # and broker_tokens before deployment.
     TOKEN_ENCRYPTION_KEY: str = ""
 
+    # Phase A: Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+
     # Phase 10.2B-6: Optional backend URL for auto-deriving UPSTOX_REDIRECT_URI
     BACKEND_URL: str = ""
 
