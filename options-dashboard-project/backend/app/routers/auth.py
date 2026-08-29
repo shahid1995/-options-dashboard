@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -13,17 +14,20 @@ from app.config import settings
 from app.db import SessionLocal, get_db
 from app.identity import (
     BrokerConnection,
+    User,
     UserSession,
     create_session_record,
     get_active_session,
     get_or_create_connection,
     get_or_create_user_from_upstox,
     get_analytics_token,
+    hash_password,
     remove_analytics_token,
     resolve_user_credentials,
     revoke_session,
     store_analytics_token,
     store_credentials,
+    verify_password,
 )
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
 from app.services import token_store
@@ -275,6 +279,110 @@ def connect_broker(
         "connection_id": conn.id,
         "broker": conn.broker,
         "status": conn.status,
+    }
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/register — Email/password registration (minimal)
+# ---------------------------------------------------------------------------
+
+@router.post("/register")
+def register(
+    email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    display_name: str | None = Body(default=None, embed=True),
+    db: Session = Depends(get_db),
+):
+    """Register a new StrikeNova account with email/password.
+
+    This is a minimal registration endpoint for manual verification.
+    The primary auth flow remains Upstox OAuth.
+    """
+    email = email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="A valid email address is required")
+    if len(email) > 320:
+        raise HTTPException(status_code=422, detail="Email must be 320 characters or fewer")
+    if not password:
+        raise HTTPException(status_code=422, detail="Password must not be empty")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if len(password) > 128:
+        raise HTTPException(status_code=422, detail="Password must be 128 characters or fewer")
+
+    # Check if email already exists
+    existing = db.query(User).filter(User.email == email).one_or_none()
+    if existing is not None:
+        if existing.identity_source == "email" and existing.password_hash:
+            raise HTTPException(status_code=409, detail="An account with this email already exists")
+        # OAuth-created account with same email — link the password
+        existing.password_hash = hash_password(password)
+        if display_name:
+            existing.display_name = display_name
+        db.commit()
+        return {"ok": True, "message": "Password set for existing account", "user_id": existing.id}
+
+    user = User(
+        id=str(uuid4()),
+        email=email,
+        password_hash=hash_password(password),
+        display_name=display_name or email.split("@")[0],
+        status="active",
+        identity_source="email",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {"ok": True, "message": "Account created", "user_id": user.id}
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/login-email — Email/password login
+# ---------------------------------------------------------------------------
+
+@router.post("/login-email")
+def login_email(
+    email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Authenticate with email/password and return a session.
+
+    Returns session_id in the response body (not in a cookie) so the
+    frontend can store it in localStorage and send as X-Session-Id.
+    """
+    email = email.strip().lower()
+    if not email or not password:
+        raise HTTPException(status_code=422, detail="Email and password are required")
+
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if user is None or not user.password_hash:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+    if not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    # Create session
+    from app.services.token_store import set_token
+
+    user.last_login_at = datetime.now(timezone.utc)
+    session_id = set_token(
+        "email-session",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+    )
+    create_session_record(db, user.id, session_id)
+    db.commit()
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "user": {
+            "user_id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+        },
     }
 
 

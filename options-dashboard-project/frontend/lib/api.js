@@ -36,6 +36,44 @@ export const isAuthError = (e) => e?.response?.status === 401;
 
 export const getStatus = () => api.get("/auth/status").then((r) => r.data);
 
+// ---- Phase 10.2B-5: email/password auth (manual verification) ----
+
+export const registerEmail = (email, password, displayName) =>
+  api
+    .post("/auth/register", { email, password, display_name: displayName })
+    .then((r) => r.data);
+
+export const loginEmail = (email, password) =>
+  api.post("/auth/login-email", { email, password }).then((r) => r.data);
+
+export const getMe = () => api.get("/auth/me").then((r) => r.data);
+
+export const logoutUser = () => api.post("/auth/logout").then((r) => r.data);
+
+// ---- Analytics Token (Phase 10.2B-4 frontend integration) ----
+
+export const connectBroker = (broker, apiKey, apiSecret, redirectUri, displayLabel) =>
+  api
+    .post("/auth/connect", {
+      broker,
+      api_key: apiKey,
+      api_secret: apiSecret,
+      redirect_uri: redirectUri,
+      display_label: displayLabel,
+    })
+    .then((r) => r.data);
+
+export const connectAnalyticsToken = (analyticsToken, broker = "UPSTOX") =>
+  api
+    .post("/auth/connect-analytics-token", { broker, analytics_token: analyticsToken })
+    .then((r) => r.data);
+
+export const getAnalyticsTokenStatus = (broker = "UPSTOX") =>
+  api.get("/auth/analytics-token/status", { params: { broker } }).then((r) => r.data);
+
+export const removeAnalyticsToken = (broker = "UPSTOX") =>
+  api.delete("/auth/analytics-token", { params: { broker } }).then((r) => r.data);
+
 export const getExpiries = (symbol) =>
   api.get(`/chains/${symbol}/expiries`).then((r) => r.data);
 

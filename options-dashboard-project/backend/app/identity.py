@@ -9,6 +9,8 @@ broker tokens remain in the existing token store.
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac
+import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -25,11 +27,40 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def hash_password(password: str) -> str:
+    """Hash a password using PBKDF2-HMAC-SHA256 with a random salt.
+
+    Returns a string in the format ``iterations$salt$digest``.
+    """
+    iterations = 480_000
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return f"{iterations}${salt.hex()}${dk.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Verify a password against a stored PBKDF2 hash.
+
+    Returns True if the password matches, False otherwise.
+    """
+    try:
+        parts = stored_hash.split("$")
+        if len(parts) != 3:
+            return False
+        iterations, salt_hex, expected_hex = int(parts[0]), parts[1], parts[2]
+        salt = bytes.fromhex(salt_hex)
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+        return _hmac.compare_digest(dk.hex(), expected_hex)
+    except Exception:
+        return False
+
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     email: Mapped[str | None] = mapped_column(String(320), unique=True, index=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     identity_source: Mapped[str] = mapped_column(String(32), default="upstox")

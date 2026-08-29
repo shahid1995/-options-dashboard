@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { C, useIsMobile } from "@/lib/ui";
 
@@ -68,7 +68,7 @@ function getActiveKey(pathname) {
 
 /* ---------- Top Bar ---------- */
 
-function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar }) {
+function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, authUser, onLogout }) {
   return (
     <div
       style={{
@@ -185,6 +185,61 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar }) {
               : "MARKET UNKNOWN"}
         </span>
       </div>
+
+      {/* Auth indicator */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {authUser ? (
+          <>
+            <a
+              href="/settings"
+              style={{
+                fontSize: 11,
+                color: C.muted,
+                textDecoration: "none",
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+              }}
+            >
+              <span style={{
+                display: "inline-block",
+                width: 6,
+                height: 6,
+                borderRadius: 3,
+                background: C.green,
+              }} />
+              {authUser.display_name || authUser.email || "Account"}
+            </a>
+            <button
+              onClick={onLogout}
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                color: C.muted,
+                background: "none",
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                padding: "2px 8px",
+                cursor: "pointer",
+              }}
+            >
+              Logout
+            </button>
+          </>
+        ) : (
+          <a
+            href="/settings"
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: C.gold,
+              textDecoration: "none",
+            }}
+          >
+            Sign In
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -277,6 +332,38 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
   const pathname = usePathname();
   const isMobile = useIsMobile(900);
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
+  const [authUser, setAuthUser] = useState(null);
+
+  // Lightweight auth check — reads session from localStorage and checks status
+  useEffect(() => {
+    (async () => {
+      try {
+        const { getSessionId } = await import("@/lib/session");
+        const { getStatus, getMe } = await import("@/lib/api");
+        const session = getSessionId();
+        if (!session) return;
+        const status = await getStatus();
+        if (status.logged_in) {
+          const me = await getMe();
+          setAuthUser(me);
+        }
+      } catch {
+        // Not logged in or session expired — silently ignore
+      }
+    })();
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      const { logoutUser } = await import("@/lib/api");
+      const { clearSessionId } = await import("@/lib/session");
+      await logoutUser();
+      clearSessionId();
+    } catch {
+      // Ignore
+    }
+    setAuthUser(null);
+  }, []);
 
   const activeKey = getActiveKey(pathname);
 
@@ -308,6 +395,8 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
         marketStatus={marketStatus}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        authUser={authUser}
+        onLogout={handleLogout}
       />
 
       <Sidebar
