@@ -535,8 +535,8 @@ def _verify_google_token(credential: str) -> dict | None:
             "name": payload.get("name"),
             "picture": payload.get("picture"),
         }
-    except Exception:
-        logger.warning("Google token verification failed", exc_info=True)
+    except Exception as e:
+        logger.warning("Google token verification failed: %s: %s", type(e).__name__, e, exc_info=True)
         return None
 
 
