@@ -18,14 +18,15 @@ function GoogleRedirectHandler() {
   const router = useRouter();
 
   useEffect(() => {
-    const idToken = captureGoogleIdTokenFromUrl();
-    if (idToken) {
+    const result = captureGoogleIdTokenFromUrl();
+    if (result) {
+      const { idToken, redirectPath } = result;
       loginGoogle(idToken)
         .then((data) => {
           if (data?.session_id) {
             setSessionId(data.session_id);
           }
-          router.push("/dashboard");
+          router.push(redirectPath || "/dashboard");
         })
         .catch((err) => {
           console.error("Google login failed:", err);

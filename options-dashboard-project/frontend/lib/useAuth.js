@@ -27,10 +27,10 @@ export function useAuth() {
     captureSessionFromUrl();
 
     // Handle Google OAuth redirect callback
-    const googleIdToken = captureGoogleIdTokenFromUrl();
-    if (googleIdToken) {
+    const googleResult = captureGoogleIdTokenFromUrl();
+    if (googleResult) {
       // Send the Google id_token to our backend
-      loginWithGoogle(googleIdToken).catch(() => {
+      loginWithGoogle(googleResult.idToken).catch(() => {
         // Error is already handled by loginWithGoogle
       });
     }
