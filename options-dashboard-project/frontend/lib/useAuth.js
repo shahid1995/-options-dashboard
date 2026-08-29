@@ -5,6 +5,7 @@ import {
   setSessionId,
   clearSessionId,
   captureSessionFromUrl,
+  captureGoogleIdTokenFromUrl,
 } from "./session";
 import { getStatus, getMe, logoutUser, loginEmail, registerEmail, loginGoogle } from "./api";
 
@@ -24,6 +25,15 @@ export function useAuth() {
   // Capture session from OAuth callback URL fragment on mount
   useEffect(() => {
     captureSessionFromUrl();
+
+    // Handle Google OAuth redirect callback
+    const googleIdToken = captureGoogleIdTokenFromUrl();
+    if (googleIdToken) {
+      // Send the Google id_token to our backend
+      loginWithGoogle(googleIdToken).catch(() => {
+        // Error is already handled by loginWithGoogle
+      });
+    }
   }, []);
 
   // Check auth status on mount and when session changes

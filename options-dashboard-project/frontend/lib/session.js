@@ -35,3 +35,17 @@ export const captureSessionFromUrl = () => {
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
 };
+
+// Reads #id_token=... left by Google OAuth redirect flow.
+// Returns the id_token if present, then scrubs it from the URL.
+// The caller must send this token to POST /auth/google.
+export const captureGoogleIdTokenFromUrl = () => {
+  if (typeof window === "undefined") return null;
+  const match = window.location.hash.match(/id_token=([^&]+)/);
+  if (match) {
+    const idToken = match[1];
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    return idToken;
+  }
+  return null;
+};
