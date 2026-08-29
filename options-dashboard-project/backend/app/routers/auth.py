@@ -1,4 +1,5 @@
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from uuid import uuid4
@@ -364,12 +365,16 @@ def login_email(
     if not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Create session
+    # Create session — generate a unique session-bound token (not a broker
+    # access token; email login has no broker token).  Each login gets a
+    # distinct, non-guessable value so two users cannot share a session
+    # and DB fallback after restart returns the correct per-session value.
     from app.services.token_store import set_token
 
     user.last_login_at = datetime.now(timezone.utc)
+    session_token = f"email:{user.id}:{secrets.token_urlsafe(24)}"
     session_id = set_token(
-        "email-session",
+        session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
     )
     create_session_record(db, user.id, session_id)
