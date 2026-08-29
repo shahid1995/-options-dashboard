@@ -1,6 +1,5 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { SectionHeading, FeatureCard, CTASection, PAGE_MAX, sectionPad, DEMO_LABEL_STYLE } from "@/components/public";
 
 const CAPABILITIES = [
@@ -196,7 +195,7 @@ export default function PaperTradingClientPage() {
         headline={<>Start <span style={{ color: C.gold }}>paper trading</span> today</>}
         body="Test your strategies with simulated capital before committing real money."
         primaryLabel="Get Started"
-        primaryHref={loginUrl()}
+        primaryHref="/settings"
         secondaryLabel="Build a Strategy"
         secondaryHref="/strategy-lab"
       />

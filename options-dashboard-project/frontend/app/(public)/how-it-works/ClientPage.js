@@ -1,6 +1,5 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
 
 const STEPS = [
@@ -134,7 +133,7 @@ export default function HowItWorksClientPage() {
       <CTASection
         headline={<>Ready to put it into practice?</>}
         primaryLabel="Get Started"
-        primaryHref={loginUrl()}
+        primaryHref="/settings"
         secondaryLabel="Explore the Platform"
         secondaryHref="/features"
       />

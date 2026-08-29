@@ -1,7 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { C, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { PAGE_MAX } from "./styles";
 
 const NAV_LINKS = [
@@ -173,7 +172,7 @@ export default function PublicHeader() {
           {/* Right side */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
             <a
-              href={loginUrl()}
+              href="/settings"
               style={{
                 fontSize: 14,
                 color: C.muted,
@@ -189,7 +188,7 @@ export default function PublicHeader() {
             </a>
             <a
               className="od-btn-gold"
-              href={loginUrl()}
+              href="/settings"
               style={{ padding: "7px 16px", fontSize: 14 }}
             >
               Get Started
@@ -285,10 +284,10 @@ export default function PublicHeader() {
               </div>
             ))}
             <div style={{ display: "flex", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
-              <a href={loginUrl()} className="od-btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
+              <a href="/settings" className="od-btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
                 Log in
               </a>
-              <a href={loginUrl()} className="od-btn-gold" style={{ flex: 1, justifyContent: "center" }}>
+              <a href="/settings" className="od-btn-gold" style={{ flex: 1, justifyContent: "center" }}>
                 Get Started
               </a>
             </div>

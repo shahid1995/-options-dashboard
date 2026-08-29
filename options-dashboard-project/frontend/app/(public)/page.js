@@ -2,7 +2,6 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { C, SYMBOLS, LOT_SIZES, fmtIN, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -473,7 +472,7 @@ export default function HomePage() {
         headline={<>Build a more <span style={{ color: C.gold }}>structured trading workflow.</span></>}
         body="Explore the platform, understand the workflow and practice your strategies before putting capital at risk."
         primaryLabel="Get Started"
-        primaryHref={loginUrl()}
+        primaryHref="/settings"
         secondaryLabel="Explore the Platform"
         secondaryHref="/features"
       />

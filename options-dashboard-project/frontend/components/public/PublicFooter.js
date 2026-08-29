@@ -1,5 +1,4 @@
 import { C } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { PAGE_MAX } from "./styles";
 
 const FOOTER_COLS = [
@@ -22,8 +21,8 @@ const FOOTER_COLS = [
   {
     heading: "Account",
     links: [
-      { label: "Log in", href: loginUrl() },
-      { label: "Get Started", href: loginUrl() },
+      { label: "Log in", href: "/settings" },
+      { label: "Get Started", href: "/settings" },
     ],
   },
 ];

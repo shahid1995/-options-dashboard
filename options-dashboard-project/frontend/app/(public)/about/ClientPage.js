@@ -1,6 +1,5 @@
 "use client";
 import { C, useIsMobile } from "@/lib/ui";
-import { loginUrl } from "@/lib/api";
 import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
 
 const PRINCIPLES = [
@@ -121,7 +120,7 @@ export default function AboutClientPage() {
       <CTASection
         headline={<>Explore the <span style={{ color: C.gold }}>platform</span></>}
         primaryLabel="Get Started"
-        primaryHref={loginUrl()}
+        primaryHref="/settings"
         secondaryLabel="How It Works"
         secondaryHref="/how-it-works"
       />
