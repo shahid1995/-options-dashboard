@@ -66,6 +66,7 @@ class User(Base):
     identity_source: Mapped[str] = mapped_column(String(32), default="upstox")
     broker_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     broker_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    google_sub: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -482,6 +483,76 @@ def get_or_create_connection(
     conn.updated_at = _utcnow()
     db.flush()
     return conn
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth identity (Phase A)
+# ---------------------------------------------------------------------------
+
+
+def get_or_create_user_from_google(
+    db: Session,
+    google_sub: str,
+    email: str | None,
+    display_name: str | None,
+) -> User:
+    """Map a Google-authenticated identity to a durable StrikeNova user.
+
+    Account linking rules:
+    1. If a user with this google_sub exists → update and return.
+    2. If a user with this email exists (email/password or Upstox) → link Google.
+    3. Otherwise → create a new user.
+
+    This prevents duplicate accounts when the same person uses multiple
+    sign-in methods.
+    """
+    email = (email or "").strip().lower() or None
+    display_name = (display_name or "").strip() or None
+
+    # 1. Existing Google user
+    existing = (
+        db.query(User)
+        .filter(User.google_sub == google_sub)
+        .one_or_none()
+    )
+    if existing is not None:
+        existing.email = email or existing.email
+        existing.display_name = display_name or existing.display_name
+        existing.last_login_at = _utcnow()
+        db.flush()
+        return existing
+
+    # 2. Existing user with same email — link Google to existing account
+    if email:
+        existing = (
+            db.query(User)
+            .filter(User.email == email)
+            .one_or_none()
+        )
+        if existing is not None:
+            existing.google_sub = google_sub
+            existing.display_name = display_name or existing.display_name
+            existing.last_login_at = _utcnow()
+            # Update identity_source to reflect multi-provider
+            if existing.identity_source == "email":
+                existing.identity_source = "google"
+            db.flush()
+            return existing
+
+    # 3. New user
+    user = User(
+        id=str(uuid4()),
+        email=email,
+        google_sub=google_sub,
+        display_name=display_name,
+        status="active",
+        identity_source="google",
+        last_login_at=_utcnow(),
+    )
+    db.add(user)
+    db.flush()
+    db.refresh(user)
+    return user
 
 
 # ---------------------------------------------------------------------------

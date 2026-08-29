@@ -50,6 +50,11 @@ export const getMe = () => api.get("/auth/me").then((r) => r.data);
 
 export const logoutUser = () => api.post("/auth/logout").then((r) => r.data);
 
+// ---- Phase A: Google OAuth ----
+
+export const loginGoogle = (credential) =>
+  api.post("/auth/google", { credential }).then((r) => r.data);
+
 // ---- Analytics Token (Phase 10.2B-4 frontend integration) ----
 
 export const connectBroker = (broker, apiKey, apiSecret, redirectUri, displayLabel) =>

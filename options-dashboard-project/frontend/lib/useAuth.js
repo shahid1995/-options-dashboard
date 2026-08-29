@@ -6,7 +6,7 @@ import {
   clearSessionId,
   captureSessionFromUrl,
 } from "./session";
-import { getStatus, getMe, logoutUser, loginEmail, registerEmail } from "./api";
+import { getStatus, getMe, logoutUser, loginEmail, registerEmail, loginGoogle } from "./api";
 
 /**
  * Central auth hook for the StrikeNova frontend.
@@ -88,6 +88,22 @@ export function useAuth() {
     }
   }, []);
 
+  const loginWithGoogle = useCallback(async (credential) => {
+    setError(null);
+    try {
+      const result = await loginGoogle(credential);
+      if (result.session_id) {
+        setSessionId(result.session_id);
+      }
+      setUser(result.user || null);
+      return result;
+    } catch (e) {
+      const msg = e?.response?.data?.detail || e.message || "Google login failed";
+      setError(msg);
+      throw new Error(msg);
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await logoutUser();
@@ -104,6 +120,7 @@ export function useAuth() {
     error,
     isLoggedIn: !!user,
     login,
+    loginWithGoogle,
     register,
     logout,
     refresh: checkAuth,
