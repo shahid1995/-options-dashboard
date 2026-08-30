@@ -25,6 +25,21 @@ from app.models import GexSnapshot
 VALID_STATUSES = {"available", "partial", "unavailable", "invalid"}
 DEFAULT_SOURCE = "upstox"
 
+# Canonical GEX provenance source values. Keep this set small and explicit so
+# downstream analytics can rely on stable values.
+DATA_SOURCE_ANALYTICS_TOKEN = "analytics_token"
+DATA_SOURCE_BROKER_OAUTH = "broker_oauth"
+DATA_SOURCE_API_UPLOAD = "api_upload"
+VALID_DATA_SOURCES = frozenset({
+    DATA_SOURCE_ANALYTICS_TOKEN,
+    DATA_SOURCE_BROKER_OAUTH,
+    DATA_SOURCE_API_UPLOAD,
+})
+_CONNECTION_REQUIRED_SOURCES = frozenset({
+    DATA_SOURCE_ANALYTICS_TOKEN,
+    DATA_SOURCE_BROKER_OAUTH,
+})
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -45,7 +60,11 @@ def record_gex_snapshot(
     Phase 8F/10.2B-6: Provenance fields:
       - owner_id: StrikeNova user ID that owns this snapshot
       - connection_id: BrokerConnection ID that authorized the capture
-      - data_source: "analytics_token" or "broker_oauth"
+      - data_source: "analytics_token", "broker_oauth", or "api_upload"
+
+    User-authorized GEX sources (Analytics Token / Broker OAuth) require an
+    owning user and exact broker connection. API uploads are the explicit
+    provenance case where connection_id is not applicable.
 
     Expected shape::
 
@@ -82,6 +101,17 @@ def record_gex_snapshot(
         return 0
     if spot is None or not isinstance(spot, (int, float)) or spot <= 0:
         return 0
+
+    if data_source is not None:
+        data_source = str(data_source).strip().lower()
+        if data_source not in VALID_DATA_SOURCES:
+            return 0
+        if data_source in _CONNECTION_REQUIRED_SOURCES:
+            if not owner_id or not connection_id:
+                return 0
+        elif data_source == DATA_SOURCE_API_UPLOAD and connection_id is not None:
+            return 0
+
     if status not in VALID_STATUSES:
         return 0
 
