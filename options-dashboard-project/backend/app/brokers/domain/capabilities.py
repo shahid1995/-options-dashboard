@@ -88,12 +88,44 @@ class BrokerCapabilities:
     def names(self) -> tuple[str, ...]:
         return tuple(self._items)
 
+    # Capabilities that represent market-data (read-only) access.
+    # These can be satisfied by an Analytics Token even without broker OAuth.
+    _DATA_CAPS_FOR_ANALYTICS = frozenset({
+        "option_chain", "option_contracts", "quotes",
+        "profile", "funds", "margin", "market_status",
+        "holdings",
+    })
+
+    # Capabilities that always require broker OAuth session (never data-only).
+    _BROKER_AUTH_REQUIRED = frozenset({
+        "orders", "market_orders", "limit_orders",
+        "stop_loss", "stop_loss_market",
+        "modify_order", "cancel_order", "multi_order",
+        "order_tags", "native_slicing",
+        "market_protection", "after_market_orders",
+        "positions", "trades",
+
+    })
+
     def with_session_state(
-        self, session_active: bool, profile: dict | None = None
+        self,
+        session_active: bool,
+        profile: dict | None = None,
+        *,
+        data_authorized: bool = False,
     ) -> "BrokerCapabilities":
         """Derive the session/account-aware capability view.
 
-        Data capabilities require an active session (else AUTH_REQUIRED).
+        Three independent dimensions determine capability state:
+          1. session_active  — broker OAuth session is active
+          2. data_authorized — Analytics Token provides market-data access
+          3. profile signals — account active, F&O segment enabled
+
+        Data capabilities (read-only market data) can be AVAILABLE when
+        either session_active OR data_authorized is True.
+
+        Broker/trading capabilities require session_active=True.
+        Analytics Token alone never enables trading.
         When the broker profile is available, account-level signals are
         applied: an inactive account disables account data, and a profile
         whose exchange list omits the F&O segment (NFO) disables the
@@ -151,6 +183,9 @@ class BrokerCapabilities:
         for item in self._items.values():
             state = item.state
             detail = item.detail
+            # When broker session is active, data capabilities become AVAILABLE
+            if session_active and item.name in data_names and state == CapabilityState.SUPPORTED:
+                state = CapabilityState.AVAILABLE
             if account_inactive and item.name in data_names and state in (
                 CapabilityState.SUPPORTED,
                 CapabilityState.AVAILABLE,
@@ -161,10 +196,21 @@ class BrokerCapabilities:
                 CapabilityState.AVAILABLE,
             ):
                 state, detail = CapabilityState.ACCOUNT_DISABLED, "F&O segment (NFO) is not enabled for this account."
-            elif not session_active and item.name in data_names and state in (
+            elif not session_active and not data_authorized and item.name in data_names and state in (
                 CapabilityState.SUPPORTED,
                 CapabilityState.AVAILABLE,
             ):
                 state, detail = CapabilityState.AUTH_REQUIRED, "Authenticate with the broker to use this capability."
+            elif data_authorized and item.name in self._DATA_CAPS_FOR_ANALYTICS and state in (
+                CapabilityState.SUPPORTED,
+                CapabilityState.AUTH_REQUIRED,
+            ):
+                # Analytics Token satisfies read-only data access
+                state, detail = CapabilityState.AVAILABLE, "Authorized via Analytics Token (read-only)."
+            elif not session_active and item.name in self._BROKER_AUTH_REQUIRED and state in (
+                CapabilityState.SUPPORTED,
+                CapabilityState.AVAILABLE,
+            ):
+                state, detail = CapabilityState.AUTH_REQUIRED, "Broker authentication required for this capability."
             items.append(item.with_state(state, detail))
         return BrokerCapabilities(items)

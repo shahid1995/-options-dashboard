@@ -376,13 +376,15 @@ def store_credentials(
 
     broker_upper = broker.upper()
 
-    # Check for existing pending connection for this (user, broker)
+    # Check for existing pending OR data-only connection for this (user, broker).
+    # A data-only connection (created by store_analytics_token) can be upgraded
+    # to hold broker credentials without creating a duplicate row.
     conn = (
         db.query(BrokerConnection)
         .filter(
             BrokerConnection.user_id == user_id,
             BrokerConnection.broker == broker_upper,
-            BrokerConnection.broker_account_id == "pending",
+            BrokerConnection.broker_account_id.in_(["pending", "data-only"]),
         )
         .first()
     )
@@ -626,7 +628,8 @@ def get_analytics_token(
     """Retrieve and decrypt the Analytics Token for a user's broker connection.
 
     Phase 10.2B-6: Works with both data-only and full OAuth connections.
-    Returns None if no Analytics Token is stored.
+    Requires data_status == 'active' for explicit data authorization.
+    Returns None if no Analytics Token is stored or data is inactive.
     """
     from app.crypto import decrypt
 
@@ -637,7 +640,7 @@ def get_analytics_token(
             BrokerConnection.user_id == user_id,
             BrokerConnection.broker == broker_upper,
             BrokerConnection.status == "connected",
-            BrokerConnection.is_default == True,
+            BrokerConnection.data_status == "active",
             BrokerConnection.broker_analytics_token_encrypted.isnot(None),
         )
         .first()
