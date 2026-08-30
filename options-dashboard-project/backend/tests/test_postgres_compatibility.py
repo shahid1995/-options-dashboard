@@ -9,7 +9,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base, normalize_database_url
 from app.identity import BrokerConnection, User
@@ -24,18 +24,14 @@ def _postgres_test_url() -> str:
         pytest.skip("TEST_DATABASE_URL is not configured")
     url = normalize_database_url(raw)
     if not url.startswith("postgresql+psycopg://"):
-        pytest.fail(f"TEST_DATABASE_URL must resolve to postgresql+psycopg://, got: {url.split('@', 1)[0]}@...")
+        pytest.fail("TEST_DATABASE_URL must resolve to the psycopg 3 SQLAlchemy dialect")
     return url
 
 
 @pytest.fixture(scope="session")
 def postgres_engine():
     url = _postgres_test_url()
-    engine = create_engine(
-        url,
-        pool_pre_ping=True,
-        poolclass=None,
-    )
+    engine = create_engine(url, pool_pre_ping=True)
 
     with engine.connect() as connection:
         assert connection.execute(text("SELECT 1")).scalar_one() == 1
@@ -75,26 +71,31 @@ def test_full_alembic_schema_exists_on_postgres(postgres_engine):
 
 
 def test_postgres_schema_supports_identity_and_gex_provenance(postgres_engine):
-    SessionLocal = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker
-    session = SessionLocal(bind=postgres_engine, autoflush=False, autocommit=False)
-
+    session = sessionmaker(bind=postgres_engine, autoflush=False, autocommit=False)()
     user_id = "postgres-compat-user"
     connection_id = "postgres-compat-connection"
 
     try:
-        user = User(id=user_id, email="postgres-compat@example.com", identity_source="email")
-        connection = BrokerConnection(
-            id=connection_id,
-            user_id=user_id,
-            broker="UPSTOX",
-            broker_account_id="pending",
-            is_default=True,
-            status="pending",
-            capability_mode="data",
-            data_status="active",
-            trading_status="inactive",
+        session.add(
+            User(
+                id=user_id,
+                email="postgres-compat@example.com",
+                identity_source="email",
+            )
         )
-        session.add_all([user, connection])
+        session.add(
+            BrokerConnection(
+                id=connection_id,
+                user_id=user_id,
+                broker="UPSTOX",
+                broker_account_id="pending",
+                is_default=True,
+                status="pending",
+                capability_mode="data",
+                data_status="active",
+                trading_status="inactive",
+            )
+        )
         session.flush()
 
         snapshot = GexSnapshot(
@@ -110,9 +111,9 @@ def test_postgres_schema_supports_identity_and_gex_provenance(postgres_engine):
             valid_strike_count=2,
             total_strike_count=2,
             captured_at=datetime.now(timezone.utc),
-            strike_data='[]',
-            expiry_data='[]',
-            methodology_metadata='{}',
+            strike_data="[]",
+            expiry_data="[]",
+            methodology_metadata="{}",
         )
         session.add(snapshot)
         session.commit()
@@ -129,12 +130,17 @@ def test_postgres_schema_supports_identity_and_gex_provenance(postgres_engine):
 
 
 def test_postgres_partial_unique_default_connection_is_enforced(postgres_engine):
-    SessionLocal = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker
-    session = SessionLocal(bind=postgres_engine, autoflush=False, autocommit=False)
+    session: Session = sessionmaker(bind=postgres_engine, autoflush=False, autocommit=False)()
     user_id = "postgres-default-index-user"
 
     try:
-        session.add(User(id=user_id, email="postgres-default@example.com", identity_source="email"))
+        session.add(
+            User(
+                id=user_id,
+                email="postgres-default@example.com",
+                identity_source="email",
+            )
+        )
         session.flush()
         session.add(
             BrokerConnection(
@@ -168,12 +174,17 @@ def test_postgres_partial_unique_default_connection_is_enforced(postgres_engine)
 
 
 def test_postgres_unique_constraint_allows_multiple_non_default_connections(postgres_engine):
-    SessionLocal = __import__("sqlalchemy.orm", fromlist=["sessionmaker"]).sessionmaker
-    session: Session = SessionLocal(bind=postgres_engine, autoflush=False, autocommit=False)
+    session: Session = sessionmaker(bind=postgres_engine, autoflush=False, autocommit=False)()
     user_id = "postgres-multi-connection-user"
 
     try:
-        session.add(User(id=user_id, email="postgres-multi@example.com", identity_source="email"))
+        session.add(
+            User(
+                id=user_id,
+                email="postgres-multi@example.com",
+                identity_source="email",
+            )
+        )
         session.flush()
         session.add_all(
             [
@@ -198,7 +209,11 @@ def test_postgres_unique_constraint_allows_multiple_non_default_connections(post
             ]
         )
         session.commit()
-        count = session.query(BrokerConnection).filter(BrokerConnection.user_id == user_id).count()
+        count = (
+            session.query(BrokerConnection)
+            .filter(BrokerConnection.user_id == user_id)
+            .count()
+        )
         assert count == 2
     finally:
         session.rollback()
