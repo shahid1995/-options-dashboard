@@ -713,11 +713,13 @@ def get_analytics_token(
 
     Phase 10.2B-6: Works with both data-only and full OAuth connections.
     Requires data_status == 'active' for explicit data authorization.
+    Prefers the default connection (is_default=True) for deterministic resolution.
     Returns None if no Analytics Token is stored or data is inactive.
     """
     from app.crypto import decrypt
 
     broker_upper = broker.upper()
+    # Prefer default connection for deterministic resolution
     conn = (
         db.query(BrokerConnection)
         .filter(
@@ -726,9 +728,24 @@ def get_analytics_token(
             BrokerConnection.status == "connected",
             BrokerConnection.data_status == "active",
             BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            BrokerConnection.is_default == True,
         )
         .first()
     )
+    if conn is None:
+        # Fallback: any connected connection with active data
+        conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.status == "connected",
+                BrokerConnection.data_status == "active",
+                BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            )
+            .order_by(BrokerConnection.is_default.desc(), BrokerConnection.created_at.asc())
+            .first()
+        )
     if conn is None:
         return None
     return decrypt(conn.broker_analytics_token_encrypted)

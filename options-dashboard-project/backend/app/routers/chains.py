@@ -153,13 +153,10 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
         return
 
     # Get the broker token
+    # get_token() returns None for platform-only sessions (Google/email)
+    # and real broker tokens for broker sessions.
     token = token_store.get_token(session_id)
     if not token:
-        await websocket.close(code=4401)
-        return
-
-    # Phase A fix: identity tokens are not broker access tokens
-    if ":" in token:
         await websocket.close(code=4401)
         return
 

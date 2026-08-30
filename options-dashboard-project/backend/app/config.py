@@ -49,7 +49,13 @@ class Settings(BaseSettings):
     TOKEN_ENCRYPTION_KEY: str = ""
 
     # Phase A: Google OAuth
-    # Phase 10.2B-6: User ID for background GEX capture (required if GEX_HISTORY_ENABLED=True).
+
+    # GEX capture configuration:
+    # - GEX_HISTORY_ENABLED: controls UI display of historical GEX data
+    # - GEX_CAPTURE_ENABLED: controls background capture loop (requires GEX_USER_ID)
+    # Customer Analytics Tokens must NEVER be used as implicit platform credentials.
+    # GEX_CAPTURE_ENABLED=True + GEX_USER_ID enables capture for that specific user.
+    GEX_CAPTURE_ENABLED: bool = False
     GEX_USER_ID: str = ""
 
     GOOGLE_CLIENT_ID: str = ""
