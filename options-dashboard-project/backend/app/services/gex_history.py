@@ -106,8 +106,10 @@ def record_gex_snapshot(
         data_source = str(data_source).strip().lower()
         if data_source not in VALID_DATA_SOURCES:
             return 0
+        if not owner_id:
+            return 0
         if data_source in _CONNECTION_REQUIRED_SOURCES:
-            if not owner_id or not connection_id:
+            if not connection_id:
                 return 0
         elif data_source == DATA_SOURCE_API_UPLOAD and connection_id is not None:
             return 0
