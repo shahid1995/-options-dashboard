@@ -339,10 +339,25 @@ def test_ws_streams_transformed_chain(client, logged_in, monkeypatch):
 
 def test_expiries_returns_403_for_email_session(client):
     """Email session (identity token, no broker token) gets 403, not 401."""
-    session_id = token_store.set_token(
-        "email:user-123:random-value",
-        persist_to_db=False,
-    )
+    import secrets
+    from uuid import uuid4
+    from app.db import Base, SessionLocal
+    from app.identity import User, create_session_record
+
+    # Ensure tables exist (TestClient may not run init_db/Alembic)
+    Base.metadata.create_all(bind=SessionLocal().get_bind())
+
+    db = SessionLocal()
+    try:
+        user_id = str(uuid4())
+        db.add(User(id=user_id, status="active", identity_source="email", broker_provider=None))
+        db.flush()
+        session_id = secrets.token_urlsafe(32)
+        create_session_record(db, user_id, session_id)
+        db.commit()
+    finally:
+        db.close()
+
     resp = client.get(
         "/chains/NIFTY/expiries",
         headers={"X-Session-Id": session_id},
@@ -353,10 +368,24 @@ def test_expiries_returns_403_for_email_session(client):
 
 def test_expiries_returns_403_for_google_session(client):
     """Google session (identity token, no broker token) gets 403, not 401."""
-    session_id = token_store.set_token(
-        "google:user-456:random-value",
-        persist_to_db=False,
-    )
+    import secrets
+    from uuid import uuid4
+    from app.db import Base, SessionLocal
+    from app.identity import User, create_session_record
+
+    Base.metadata.create_all(bind=SessionLocal().get_bind())
+
+    db = SessionLocal()
+    try:
+        user_id = str(uuid4())
+        db.add(User(id=user_id, status="active", identity_source="google", broker_provider=None))
+        db.flush()
+        session_id = secrets.token_urlsafe(32)
+        create_session_record(db, user_id, session_id)
+        db.commit()
+    finally:
+        db.close()
+
     resp = client.get(
         "/chains/NIFTY/expiries",
         headers={"X-Session-Id": session_id},
@@ -374,10 +403,24 @@ def test_expiries_returns_401_for_no_session(client):
 
 def test_chain_returns_403_for_email_session(client):
     """Chain endpoint returns 403 for email session."""
-    session_id = token_store.set_token(
-        "email:user-789:random-value",
-        persist_to_db=False,
-    )
+    import secrets
+    from uuid import uuid4
+    from app.db import Base, SessionLocal
+    from app.identity import User, create_session_record
+
+    Base.metadata.create_all(bind=SessionLocal().get_bind())
+
+    db = SessionLocal()
+    try:
+        user_id = str(uuid4())
+        db.add(User(id=user_id, status="active", identity_source="email", broker_provider=None))
+        db.flush()
+        session_id = secrets.token_urlsafe(32)
+        create_session_record(db, user_id, session_id)
+        db.commit()
+    finally:
+        db.close()
+
     resp = client.get(
         "/chains/NIFTY",
         params={"expiry_date": "2026-09-24"},

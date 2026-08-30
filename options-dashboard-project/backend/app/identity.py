@@ -294,6 +294,90 @@ def get_active_session(db: Session, session_id: str | None) -> UserSession | Non
 
 
 # ---------------------------------------------------------------------------
+# Platform session / broker token resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_platform_session(session_id: str | None) -> str | None:
+    """Resolve session_id → user_id for a valid platform session.
+
+    Returns the user_id if the session exists, is not expired, and is not
+    revoked.  Returns None otherwise.
+
+    This is the canonical platform-identity resolver — it NEVER returns a
+    broker token.  Use resolve_broker_token_by_session_hash() for broker
+    authorization.
+    """
+    if not session_id:
+        return None
+    try:
+        from app.db import SessionLocal
+
+        now = _utcnow()
+        db = SessionLocal()
+        try:
+            us = (
+                db.query(UserSession)
+                .filter(
+                    UserSession.session_hash == hash_session_id(session_id),
+                    UserSession.revoked_at.is_(None),
+                    UserSession.expires_at > now,
+                )
+                .first()
+            )
+            return us.user_id if us is not None else None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def resolve_broker_token_by_session_hash(session_hash: str | None) -> str | None:
+    """Resolve session_hash → decrypted broker access token.
+
+    Queries BrokerToken joined with UserSession by session_hash.
+    Returns the decrypted broker token if:
+      - BrokerToken exists with non-null encrypted token
+      - UserSession is not expired and not revoked
+    Returns None otherwise.
+
+    This avoids the double-hashing bug of passing session_hash to
+    get_token() which expects plaintext session_id.
+    """
+    if not session_hash:
+        return None
+    try:
+        from app.db import SessionLocal
+        from app.crypto import decrypt
+
+        now = _utcnow()
+        db = SessionLocal()
+        try:
+            row = (
+                db.query(BrokerToken, UserSession)
+                .join(
+                    UserSession,
+                    BrokerToken.session_hash == UserSession.session_hash,
+                )
+                .filter(
+                    BrokerToken.session_hash == session_hash,
+                    BrokerToken.broker_token_encrypted.isnot(None),
+                    UserSession.revoked_at.is_(None),
+                    UserSession.expires_at > now,
+                )
+                .first()
+            )
+            if row is not None:
+                bt, _us = row
+                return decrypt(bt.broker_token_encrypted)
+            return None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Phase 10.2B-2 — BYOB Credential Management
 # ---------------------------------------------------------------------------
 
@@ -376,13 +460,15 @@ def store_credentials(
 
     broker_upper = broker.upper()
 
-    # Check for existing pending connection for this (user, broker)
+    # Check for existing pending OR data-only connection for this (user, broker).
+    # A data-only connection (created by store_analytics_token) can be upgraded
+    # to hold broker credentials without creating a duplicate row.
     conn = (
         db.query(BrokerConnection)
         .filter(
             BrokerConnection.user_id == user_id,
             BrokerConnection.broker == broker_upper,
-            BrokerConnection.broker_account_id == "pending",
+            BrokerConnection.broker_account_id.in_(["pending", "data-only"]),
         )
         .first()
     )
@@ -622,26 +708,71 @@ def get_analytics_token(
     db: Session,
     user_id: str,
     broker: str,
+    *,
+    connection_id: str | None = None,
 ) -> str | None:
     """Retrieve and decrypt the Analytics Token for a user's broker connection.
 
     Phase 10.2B-6: Works with both data-only and full OAuth connections.
-    Returns None if no Analytics Token is stored.
+    Requires data_status == 'active' for explicit data authorization.
+
+    Resolution:
+      1. If connection_id is provided, resolve exactly that connection
+         (verifies user ownership and data authorization).
+      2. Otherwise, prefer is_default=True connection.
+      3. Fallback: first connected connection with active data.
+
+    Returns None if no Analytics Token is stored or data is inactive.
     """
     from app.crypto import decrypt
 
     broker_upper = broker.upper()
+
+    # Path 1: Exact connection_id — deterministic, user-scoped
+    if connection_id is not None:
+        conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.id == connection_id,
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.status == "connected",
+                BrokerConnection.data_status == "active",
+                BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            )
+            .first()
+        )
+        if conn is None:
+            return None
+        return decrypt(conn.broker_analytics_token_encrypted)
+
+    # Path 2: No connection_id — prefer default, fallback to first active
     conn = (
         db.query(BrokerConnection)
         .filter(
             BrokerConnection.user_id == user_id,
             BrokerConnection.broker == broker_upper,
             BrokerConnection.status == "connected",
-            BrokerConnection.is_default == True,
+            BrokerConnection.data_status == "active",
             BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            BrokerConnection.is_default == True,
         )
         .first()
     )
+    if conn is None:
+        # Fallback: any connected connection with active data
+        conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.status == "connected",
+                BrokerConnection.data_status == "active",
+                BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            )
+            .order_by(BrokerConnection.is_default.desc(), BrokerConnection.created_at.asc())
+            .first()
+        )
     if conn is None:
         return None
     return decrypt(conn.broker_analytics_token_encrypted)

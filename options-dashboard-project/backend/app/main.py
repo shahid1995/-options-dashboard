@@ -15,13 +15,18 @@ logger = logging.getLogger(__name__)
 # Background GEX capture loop (Phase 8B)
 # ---------------------------------------------------------------------------
 #
-# When GEX_HISTORY_ENABLED is True, a background asyncio task periodically:
-#   1. Fetches the option chain from the customer's authorized Upstox session
+# When GEX_CAPTURE_ENABLED is True and GEX_USER_ID is configured, a background
+# asyncio task periodically:
+#   1. Fetches the option chain from the specified user's authorized Upstox session
 #   2. Computes GEX via LiveGexService
 #   3. Persists a snapshot to gex_snapshots
 #   4. Prunes snapshots older than the retention period
 #
-# The loop is designed for the current single-user architecture:
+# Architecture: customer Analytics Tokens are user-scoped, not platform credentials.
+# GEX_CAPTURE_ENABLED + GEX_USER_ID explicitly enables capture for one user.
+# GEX_HISTORY_ENABLED controls UI display of historical GEX (separate concern).
+#
+# The loop:
 #   - One background task, started on app startup
 #   - Cleanly cancelled on shutdown
 #   - Exceptions are logged and do not kill the loop
@@ -32,7 +37,7 @@ _capture_task = None
 _stop_event = asyncio.Event()
 
 
-async def _gex_capture_loop():
+async def _gex_capture_loop(user_id: str | None = None):
     """Background loop: capture GEX snapshots at the configured interval.
 
     Resilience features:
@@ -45,6 +50,10 @@ async def _gex_capture_loop():
     import time as _time
     from app.services.token_store import get_token, get_all_session_ids
     from app.services.gex_capture import GexCaptureService, run_retention_cleanup
+    from app.services.gex_history import (
+        DATA_SOURCE_ANALYTICS_TOKEN,
+        DATA_SOURCE_BROKER_OAUTH,
+    )
     from app.services.live_gex import LiveGexService
 
     interval = getattr(settings, "GEX_HISTORY_SAMPLE_SECONDS", 60)
@@ -74,19 +83,21 @@ async def _gex_capture_loop():
             from app.brokers.domain.enums import BROKER_ID_UPSTOX
             from app.brokers.gateway import gateway
 
-            # Phase 10.2B-4: Token priority
-            # 1. Analytics Token (1-year validity, read-only, most reliable)
+            # Token priority (user-scoped — never platform-wide):
+            # 1. Analytics Token via explicit connection (1-year, read-only)
             # 2. OAuth session token (daily expiry, fallback)
-            # 3. Skip capture if no token available
-            token = _get_analytics_token_for_gex()
-            token_source = "analytics"
-            current_session_id = None
+            # 3. Skip if no token available
+            connection_id = _find_default_connection_id(user_id) if user_id else None
+            token = _get_analytics_token_for_gex(user_id, connection_id=connection_id) if user_id and connection_id else None
+            token_source = DATA_SOURCE_ANALYTICS_TOKEN
+            oauth_connection_id = None
             if not token:
-                token, current_session_id = _get_oauth_token_for_gex()
-                token_source = "oauth"
+                token, oauth_connection_id = _get_oauth_token_for_gex(user_id) if user_id else (None, None)
+                token_source = DATA_SOURCE_BROKER_OAUTH
+                connection_id = oauth_connection_id
 
-            if not token:
-                logger.debug("GEX capture skipped: no available token")
+            if not token or not connection_id:
+                logger.debug("GEX capture skipped: no available token or broker connection")
                 await _interruptible_sleep(interval)
                 continue
 
@@ -130,11 +141,14 @@ async def _gex_capture_loop():
             # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
-                # owner_id tracks which session owns this snapshot.
-                # Analytics Token captures have no session (direct DB lookup),
-                # so owner_id is None.  OAuth captures use the session ID.
-                owner_id = current_session_id if token_source == "oauth" else None
-                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=owner_id)
+                # owner_id is always the StrikeNova user ID (user-scoped GEX).
+                # Both Analytics Token and OAuth captures are owned by the user.
+                owner_id = user_id
+                result = capture_service.capture_once(
+                    db, chain, expiry=expiry_date, symbol=symbol,
+                    owner_id=owner_id, connection_id=connection_id,
+                    data_source=token_source,
+                )
                 status = result.get("status")
 
                 if status == "captured":
@@ -187,36 +201,51 @@ async def _gex_capture_loop():
     logger.info("GEX capture loop stopped")
 
 
-def _get_analytics_token_for_gex() -> str | None:
-    """Find an Analytics Token from any connected user for background GEX.
+def _find_default_connection_id(user_id: str) -> str | None:
+    """Find the user's default UPSTOX connection with active data.
 
-    Phase 10.2B-4: Uses per-user Analytics Tokens (1-year validity) instead
-    of daily-expiring OAuth tokens.  Returns the first available Analytics
-    Token, or None.
-
-    Phase 10.2B-6: Also works with data-only connections (no OAuth required).
-    Queries data_status='active' for explicit data authorization.
+    Returns the connection_id for the user's explicitly-default connection,
+    or None if no default connection exists. Does NOT fall back to
+    arbitrary connection selection — GEX requires explicit authorization.
     """
     try:
         from app.db import SessionLocal
         from app.identity import BrokerConnection
-        from app.crypto import decrypt
 
         db = SessionLocal()
         try:
             conn = (
                 db.query(BrokerConnection)
                 .filter(
+                    BrokerConnection.user_id == user_id,
                     BrokerConnection.status == "connected",
                     BrokerConnection.broker == "UPSTOX",
-                    BrokerConnection.broker_analytics_token_encrypted.isnot(None),
                     BrokerConnection.data_status == "active",
+                    BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+                    BrokerConnection.is_default == True,
                 )
                 .first()
             )
-            if conn is None:
-                return None
-            return decrypt(conn.broker_analytics_token_encrypted)
+            return conn.id if conn else None
+        finally:
+            db.close()
+    except Exception:
+        return None
+
+
+def _get_analytics_token_for_gex(user_id: str, *, connection_id: str) -> str | None:
+    """Find an Analytics Token for a specific user's connection for GEX.
+
+    Requires explicit connection_id — GEX never silently selects a connection.
+    Resolves exactly the specified user-owned BrokerConnection.
+    """
+    try:
+        from app.db import SessionLocal
+        from app.identity import get_analytics_token
+
+        db = SessionLocal()
+        try:
+            return get_analytics_token(db, user_id, "UPSTOX", connection_id=connection_id)
         finally:
             db.close()
     except Exception:
@@ -224,19 +253,43 @@ def _get_analytics_token_for_gex() -> str | None:
         return None
 
 
-def _get_oauth_token_for_gex() -> tuple[str | None, str | None]:
-    """Fallback: find any active OAuth session token for background GEX.
+def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
+    """Find an active OAuth session token for a specific user.
 
     OAuth tokens expire daily at 3:30 AM IST.
-    Returns (token, session_id) or (None, None).
-    """
-    from app.services.token_store import get_token, get_all_session_ids
+    Returns (token, connection_id) or (None, None).
+    Only resolves tokens belonging to the specified user and broker
+    connection. No session identifier is returned as provenance.
 
-    active_sessions = get_all_session_ids()
-    if not active_sessions:
-        return None, None
-    session_id = active_sessions[-1]
-    return get_token(session_id), session_id
+    Uses resolve_broker_token_by_session_hash() to avoid the double-hashing
+    bug of passing session_hash to get_token() which expects plaintext.
+    """
+    from app.db import SessionLocal
+    from app.identity import UserSession, resolve_broker_token_by_session_hash
+    from datetime import datetime, timezone
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        session = (
+            db.query(UserSession)
+            .filter(
+                UserSession.user_id == user_id,
+                UserSession.expires_at > now,
+                UserSession.revoked_at.is_(None),
+                UserSession.broker_connection_id.isnot(None),
+            )
+            .order_by(UserSession.created_at.desc())
+            .first()
+        )
+        if session is None or not session.broker_connection_id:
+            return None, None
+        token = resolve_broker_token_by_session_hash(session.session_hash)
+        if not token:
+            return None, None
+        return token, session.broker_connection_id
+    finally:
+        db.close()
 
 
 async def _interruptible_sleep(seconds: float):
@@ -262,11 +315,17 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("DB token health check failed (non-critical)")
 
-    # Start background GEX capture if enabled
-    if getattr(settings, "GEX_HISTORY_ENABLED", False):
+    # Start background GEX capture if explicitly enabled.
+    # GEX_CAPTURE_ENABLED controls the background loop (separate from GEX_HISTORY_ENABLED which controls UI).
+    # GEX_USER_ID must be configured when capture is enabled.
+    gex_capture_enabled = getattr(settings, "GEX_CAPTURE_ENABLED", False)
+    gex_user_id = getattr(settings, "GEX_USER_ID", "") or None
+    if gex_capture_enabled and gex_user_id:
         _stop_event.clear()
-        _capture_task = asyncio.create_task(_gex_capture_loop())
-        logger.info("Background GEX capture task started")
+        _capture_task = asyncio.create_task(_gex_capture_loop(gex_user_id))
+        logger.info("Background GEX capture task started", extra={"user_id": bool(gex_user_id)})
+    elif gex_capture_enabled and not gex_user_id:
+        logger.warning("GEX_CAPTURE_ENABLED but GEX_USER_ID not set — capture disabled")
 
     yield
 

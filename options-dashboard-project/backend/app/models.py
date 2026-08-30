@@ -446,8 +446,10 @@ class GexSnapshot(Base):
     __tablename__ = "gex_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # Ownership — Phase 8F: every snapshot belongs to one authenticated session
+    # Ownership — Phase 8F: every snapshot belongs to one user-scoped capture
     owner_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    connection_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    data_source: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "analytics_token" | "broker_oauth"
     # Identity
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     expiry: Mapped[str] = mapped_column(String(10))

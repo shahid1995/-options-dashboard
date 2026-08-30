@@ -151,7 +151,10 @@ def create_snapshot(
                     except (ValueError, TypeError):
                         pass
 
-    result = record_gex_snapshot(db, snapshot_dict, owner_id=user_id)
+    result = record_gex_snapshot(
+        db, snapshot_dict, owner_id=user_id,
+        data_source="api_upload",
+    )
     if result == 0:
         raise HTTPException(status_code=400, detail="Invalid snapshot data")
 
