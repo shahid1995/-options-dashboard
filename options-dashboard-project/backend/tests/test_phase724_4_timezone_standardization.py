@@ -238,7 +238,7 @@ class TestPostCloseAlignment:
     @pytest.fixture()
     def sample_data(self, db_session):
         """Create NIFTY and option candles with post-close data."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Contract
         db_session.add(ContractSpec(
@@ -338,7 +338,7 @@ class TestNoFutureSpotLeakage:
 
     def test_option_at_1000_uses_candle_at_1000(self, db_session):
         """Option at 10:00 IST should use NIFTY candle at 10:00, not 10:03."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(ContractSpec(
             instrument_key="T|24000|28-07-2026",
             underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",
@@ -391,7 +391,7 @@ class TestGreeksEngineDirectComparison:
 
     def test_alignment_without_ist_offset(self, db_session):
         """Option and NIFTY at the same IST time produce matching spot."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(ContractSpec(
             instrument_key="X|24000|28-07-2026",
             underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",
@@ -440,7 +440,7 @@ class TestRawDataImmutability:
 
     def test_ohlcv_unchanged(self, db_session):
         """OHLCV values are preserved after Greeks calculation."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         t = datetime(2026, 7, 28, 10, 0)
 
         db_session.add(ContractSpec(

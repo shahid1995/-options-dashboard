@@ -210,7 +210,7 @@ def _row_to_dict(row: NiftyCandle) -> dict:
         "id": row.id,
         "symbol": row.symbol,
         "interval": row.interval,
-        "openTime": (row.open_time.isoformat() + "Z") if row.open_time else None,
+        "openTime": row.open_time.isoformat() if row.open_time else None,
         "open": row.open,
         "high": row.high,
         "low": row.low,

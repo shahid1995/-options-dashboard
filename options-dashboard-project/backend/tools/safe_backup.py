@@ -12,7 +12,7 @@ import os
 import shutil
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -56,7 +56,7 @@ def safe_backup(source_path: str, prefix: str = "backup") -> dict:
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_name = f"{source.stem}_{prefix}_{timestamp}.db"
     backup_path = BACKUP_DIR / backup_name
 

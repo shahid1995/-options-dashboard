@@ -6,7 +6,7 @@ All tests use isolated in-memory databases. No production DB writes.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -61,7 +61,7 @@ def _insert_gex(db, timestamp, strike, option_type, signed_gex, spot, expiry="20
         raw_gex=abs(signed_gex),
         signed_gex=signed_gex,
         calc_version=calc_version,
-        calculated_at=datetime.now(),
+        calculated_at=datetime.now(timezone.utc),
         status="SUCCESS",
     ))
     db.commit()

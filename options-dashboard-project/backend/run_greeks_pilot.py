@@ -24,7 +24,7 @@ import os
 import shutil
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Ensure we can import app modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -104,7 +104,7 @@ def cmd_backup(_args):
         print(f"ERROR: Database not found at {db_path}")
         sys.exit(1)
 
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     backup_name = f"paper_journal_backup_{ts}.db"
     backup_path = os.path.join(os.path.dirname(db_path), backup_name)
 
@@ -275,7 +275,7 @@ def cmd_missing(args):
         print("No missing instruments. Reconstruction is complete.")
         return
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     print(f"Run ID: {run_id}")
     print(f"Missing instruments: {len(missing)}")
     print(f"Limit: {'all' if args.limit is None else args.limit}")
@@ -300,7 +300,7 @@ def cmd_instrument(args):
     if not _check_integrity():
         sys.exit(1)
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     stats = {"completed": 0, "failed": 0, "skipped": 0, "total_persisted": 0}
     _process_one_instrument(args.instrument, 1, 1, run_id, stats)
     elapsed = 0  # individual instrument
@@ -323,7 +323,7 @@ def cmd_retry_failed(_args):
         print("No failed instruments to retry.")
         return
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     print(f"Run ID: {run_id}")
     print(f"Retrying {len(failed_keys)} failed instruments\n")
 
@@ -459,7 +459,7 @@ def _process_one_instrument(
         """INSERT OR REPLACE INTO greeks_checkpoint
            (instrument_key, status, run_id, started_at)
            VALUES (?, 'RUNNING', ?, ?)""",
-        (instrument_key, run_id, datetime.now().isoformat()),
+        (instrument_key, run_id, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
     conn.close()
@@ -519,7 +519,7 @@ def _process_one_instrument(
                    WHERE instrument_key = ?""",
                 ("Persistence verification failed: 0 rows after persist",
                  candle_count, success, failed, persisted,
-                 datetime.now().isoformat(), instrument_key),
+                 datetime.now(timezone.utc).isoformat(), instrument_key),
             )
             conn.commit()
             conn.close()
@@ -540,7 +540,7 @@ def _process_one_instrument(
                    completed_at = ?
                WHERE instrument_key = ?""",
             (candle_count, success, failed, persisted,
-             datetime.now().isoformat(), instrument_key),
+             datetime.now(timezone.utc).isoformat(), instrument_key),
         )
         conn.commit()
         conn.close()
@@ -561,7 +561,7 @@ def _process_one_instrument(
                    error_message = ?,
                    completed_at = ?
                WHERE instrument_key = ?""",
-            (str(e), datetime.now().isoformat(), instrument_key),
+            (str(e), datetime.now(timezone.utc).isoformat(), instrument_key),
         )
         conn.commit()
         conn.close()

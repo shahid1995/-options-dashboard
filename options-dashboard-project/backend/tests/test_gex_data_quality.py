@@ -6,7 +6,7 @@ All tests use isolated in-memory databases to ensure zero production impact.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 import pytest
 from sqlalchemy import create_engine, func, text
@@ -60,14 +60,14 @@ def _insert_option_candle(db, instrument_key, open_time, oi=100.0, close=100.0, 
         open_time=_to_dt(open_time),
         open=close, high=close + 1, low=close - 1, close=close,
         volume=vol, open_interest=oi, source="TEST",
-        fetched_at=datetime.utcnow(),
+        fetched_at=datetime.now(timezone.utc),
     )
     db.add(candle)
 
 
 def _insert_contract_spec(db, instrument_key, strike=24000.0, opt_type="CE", expiry="2024-10-03"):
     """Insert a minimal contract spec."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     spec = ContractSpec(
         instrument_key=instrument_key,
         underlying="NIFTY",
@@ -109,7 +109,7 @@ def _insert_historical_gex(db, instrument_key, open_time, status="SUCCESS",
         raw_gex=raw_gex,
         signed_gex=signed_gex,
         calc_version="h_gex_v1",
-        calculated_at=datetime.utcnow(),
+        calculated_at=datetime.now(timezone.utc),
         status=status,
         exclusion_reason=exclusion_reason,
     )
@@ -151,7 +151,7 @@ def _insert_option_greeks(db, instrument_key, open_time, spot=24000.0, gamma=0.0
         theta=-5.0,
         calc_model="BLACK_SCHOLES_EUROPEAN",
         calc_version="1.0.0",
-        calculated_at=datetime.utcnow(),
+        calculated_at=datetime.now(timezone.utc),
         status="SUCCESS",
     )
     db.add(greek)

@@ -177,9 +177,10 @@ def record_option_candles(db: Session, candles: list[dict]) -> int:
         elif not isinstance(open_time, datetime):
             continue
 
-        # Strip tzinfo for SQLite storage (naive IST convention, Phase 7.24.4)
+        # Convert to naive IST for SQLite storage (Phase 7.24.4 convention)
         if open_time.tzinfo is not None:
-            open_time = open_time.replace(tzinfo=None)
+            from app.utils.market_time import to_ist_naive
+            open_time = to_ist_naive(open_time)
 
         ohlcv = {}
         for field in ("open", "high", "low", "close"):
@@ -268,7 +269,7 @@ def get_option_candles(
         {
             "instrument_key": r.instrument_key,
             "interval": r.interval,
-            "openTime": r.open_time.isoformat() + "Z" if r.open_time else None,
+            "openTime": r.open_time.isoformat() if r.open_time else None,
             "open": r.open,
             "high": r.high,
             "low": r.low,

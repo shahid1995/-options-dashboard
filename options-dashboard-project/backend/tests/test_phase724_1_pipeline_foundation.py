@@ -50,7 +50,7 @@ def db_session(engine_and_session):
 @pytest.fixture()
 def sample_raw_data(db_session):
     """Insert representative raw data to verify it is not modified."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db_session.add(ContractSpec(
         instrument_key="NSE_FO|63935|28-07-2026",
         underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",
@@ -102,7 +102,7 @@ class TestSchema:
 
     def test_ingestion_log_columns(self, db_session):
         """Verify all required columns exist on ingestion_log."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         log = IngestionLog(
             run_id="test_run_001",
             operation="option_candles",
@@ -189,7 +189,7 @@ class TestIndexes:
 class TestIngestionLogCRUD:
     def test_create_log(self, db_session):
         """Create an ingestion log entry."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         log = IngestionLog(
             run_id="run_001", operation="option_candles",
             instrument_key="NSE_FO|63935|28-07-2026",
@@ -202,7 +202,7 @@ class TestIngestionLogCRUD:
 
     def test_update_log_to_success(self, db_session):
         """Update a log from RUNNING to SUCCESS."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         log = IngestionLog(
             run_id="run_001", operation="option_candles",
             started_at=now.isoformat(), status="RUNNING",
@@ -221,7 +221,7 @@ class TestIngestionLogCRUD:
 
     def test_update_log_to_failure(self, db_session):
         """Update a log from RUNNING to FAILED with error info."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         log = IngestionLog(
             run_id="run_001", operation="option_candles",
             started_at=now.isoformat(), status="RUNNING",
@@ -241,7 +241,7 @@ class TestIngestionLogCRUD:
 
     def test_log_without_optional_fields(self, db_session):
         """Log works without instrument_key, expiry_date, etc."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         log = IngestionLog(
             run_id="run_001", operation="contract_metadata",
             started_at=now.isoformat(), status="SUCCESS",
@@ -253,7 +253,7 @@ class TestIngestionLogCRUD:
 
     def test_metadata_json_field(self, db_session):
         """metadata_json stores arbitrary JSON (no secrets)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         meta = json.dumps({"api_requests": 5, "batch_size": 100})
         log = IngestionLog(
             run_id="run_001", operation="option_candles",
@@ -300,7 +300,7 @@ class TestDataCompletenessCRUD:
         dc.status = "COMPLETE"
         dc.actual_count = 125
         dc.missing_count = 0
-        dc.last_verified_at = datetime.utcnow().isoformat()
+        dc.last_verified_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         fetched = db_session.get(DataCompleteness, dc.id)
@@ -360,7 +360,7 @@ class TestIngestionCheckpointCRUD:
             status="RUNNING",
             items_processed=50,
             items_total=100,
-            started_at=datetime.utcnow().isoformat(),
+            started_at=datetime.now(timezone.utc).isoformat(),
         )
         db_session.add(cp)
         db_session.commit()
@@ -377,7 +377,7 @@ class TestIngestionCheckpointCRUD:
 
         cp.items_processed = 100
         cp.status = "COMPLETED"
-        cp.completed_at = datetime.utcnow().isoformat()
+        cp.completed_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         fetched = db_session.get(IngestionCheckpoint, cp.id)
@@ -399,7 +399,7 @@ class TestIngestionCheckpointCRUD:
         # Simulate interruption: mark as COMPLETED at 50
         cp.status = "COMPLETED"
         cp.items_processed = 50
-        cp.completed_at = datetime.utcnow().isoformat()
+        cp.completed_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         # Second run: check checkpoint, skip completed
@@ -460,7 +460,7 @@ class TestPersistence:
         # Insert data in session1
         log = IngestionLog(
             run_id="run_001", operation="option_candles",
-            started_at=datetime.utcnow().isoformat(), status="SUCCESS",
+            started_at=datetime.now(timezone.utc).isoformat(), status="SUCCESS",
         )
         session1.add(log)
         session1.commit()
@@ -560,7 +560,7 @@ class TestExistingDataProtection:
         # Insert pipeline data
         session.add(IngestionLog(
             run_id="test", operation="test",
-            started_at=datetime.utcnow().isoformat(), status="SUCCESS",
+            started_at=datetime.now(timezone.utc).isoformat(), status="SUCCESS",
         ))
         session.add(DataCompleteness(
             instrument_key="TEST", session_date="2026-07-28",
@@ -604,7 +604,7 @@ class TestSecretProtection:
 
     def test_metadata_json_no_secrets_by_convention(self, db_session):
         """metadata_json is documented as 'no secrets' — test the convention."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # This should work — we store operational metadata, not secrets
         meta = json.dumps({"requests": 5, "batch": 100})
         log = IngestionLog(
@@ -676,7 +676,7 @@ class TestProductionDbMigration:
 class TestWorkflowSimulation:
     def test_full_ingestion_workflow(self, db_session):
         """Simulate complete ingestion workflow with logging and completeness."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 1. Start ingestion run
         log = IngestionLog(
@@ -714,19 +714,19 @@ class TestWorkflowSimulation:
         # 4. Process items (simulate)
         cp.items_processed = 125
         cp.status = "COMPLETED"
-        cp.completed_at = datetime.utcnow().isoformat()
+        cp.completed_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         # 5. Update completeness
         dc.status = "COMPLETE"
         dc.actual_count = 125
         dc.missing_count = 0
-        dc.last_verified_at = datetime.utcnow().isoformat()
+        dc.last_verified_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         # 6. Complete log
         log.status = "SUCCESS"
-        log.completed_at = datetime.utcnow().isoformat()
+        log.completed_at = datetime.now(timezone.utc).isoformat()
         log.rows_inserted = 125
         log.rows_skipped = 0
         log.api_calls = 1
@@ -753,7 +753,7 @@ class TestWorkflowSimulation:
 
     def test_failure_and_retry_workflow(self, db_session):
         """Simulate failure, then retry with checkpoint resume."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # First attempt: fails at item 50
         cp = IngestionCheckpoint(
@@ -781,13 +781,13 @@ class TestWorkflowSimulation:
         # Update for retry
         fetched.status = "RUNNING"
         fetched.error_message = None
-        fetched.started_at = datetime.utcnow().isoformat()
+        fetched.started_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         # Complete
         fetched.items_processed = 100
         fetched.status = "COMPLETED"
-        fetched.completed_at = datetime.utcnow().isoformat()
+        fetched.completed_at = datetime.now(timezone.utc).isoformat()
         db_session.commit()
 
         final = db_session.execute(

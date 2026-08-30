@@ -144,8 +144,8 @@ def generate_coverage_report(
         "interval": interval,
         "total_candles": len(rows),
         "date_range": {
-            "earliest": rows[0].open_time.isoformat() + "Z" if rows[0].open_time else None,
-            "latest": rows[-1].open_time.isoformat() + "Z" if rows[-1].open_time else None,
+            "earliest": rows[0].open_time.isoformat() if rows[0].open_time else None,
+            "latest": rows[-1].open_time.isoformat() if rows[-1].open_time else None,
             "span_days": (rows[-1].open_time - rows[0].open_time).days if rows[0].open_time and rows[-1].open_time else 0,
         },
         "daily_coverage": daily,
@@ -174,8 +174,8 @@ def _build_daily_coverage(rows: list[NiftyCandle]) -> list[dict]:
         count = len(candles)
 
         # First/last candle timestamps (UTC)
-        first_ts = candles[0].open_time.isoformat() + "Z" if candles[0].open_time else None
-        last_ts = candles[-1].open_time.isoformat() + "Z" if candles[-1].open_time else None
+        first_ts = candles[0].open_time.isoformat() if candles[0].open_time else None
+        last_ts = candles[-1].open_time.isoformat() if candles[-1].open_time else None
 
         completeness = min(100.0, (count / EXPECTED_CANDLES_PER_DAY) * 100)
 
@@ -318,7 +318,7 @@ def _detect_gaps(rows: list[NiftyCandle], interval: str = "3min") -> dict:
         if not row.open_time:
             continue
 
-        ts = row.open_time.isoformat() + "Z"
+        ts = row.open_time.isoformat()
 
         # Duplicate check
         if ts in seen_times:
@@ -342,7 +342,7 @@ def _detect_gaps(rows: list[NiftyCandle], interval: str = "3min") -> dict:
                     missing = max(0, round(delta_ms / expected_delta_ms) - 1)
                     intraday_gaps.append({
                         "gap_start": ts,
-                        "gap_end": rows[i].open_time.isoformat() + "Z",
+                        "gap_end": rows[i].open_time.isoformat(),
                         "missing_candles": missing,
                     })
 

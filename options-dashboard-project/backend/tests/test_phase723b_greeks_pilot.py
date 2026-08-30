@@ -20,7 +20,7 @@ Comprehensive tests covering:
 import math
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -64,7 +64,7 @@ def db_session():
 @pytest.fixture()
 def sample_contracts(db_session):
     """Insert sample contract specs."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     _common = dict(
         underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",
         trading_symbol="NIFTY", segment="INDICES", exchange="NSE_EQ",
@@ -122,7 +122,7 @@ def sample_option_candles(db_session):
     """Insert sample option candles (stored as naive IST, Phase 7.24.4)."""
     candles = []
     base_date = datetime(2026, 7, 28)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # CE candles during trading hours (IST, matching NIFTY candles)
     for i in range(100):
@@ -455,7 +455,7 @@ class TestLotSizePreservation:
         """Greek values per unit should be independent of lot_size."""
         # Insert option candles for the lot_size=25 contract
         base = datetime(2024, 10, 31)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(10):
             t = base.replace(hour=9, minute=15) + timedelta(minutes=3 * i)
             t_utc = t - timedelta(hours=5, minutes=30)
@@ -513,7 +513,7 @@ class TestMissingSpot:
     def test_no_spot_returns_insufficient_data(self, db_session, sample_contracts):
         """When no NIFTY candles exist for the option's date, return INSUFFICIENT_DATA."""
         # Insert option candle for a date with no NIFTY data
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(OptionCandle(
             instrument_key="NSE_FO|63935|28-07-2026",
             interval="3min", open_time=datetime(2025, 1, 1, 3, 45),  # UTC
@@ -536,7 +536,7 @@ class TestMissingSpot:
 class TestInvalidPrice:
     def test_zero_price(self, db_session, sample_contracts, sample_nifty_candles):
         """Zero option price should return INVALID_PRICE."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(OptionCandle(
             instrument_key="NSE_FO|63935|28-07-2026",
             interval="3min", open_time=datetime(2026, 7, 28, 9, 15),  # Phase 7.24.4: naive IST
@@ -552,7 +552,7 @@ class TestInvalidPrice:
 
     def test_negative_price(self, db_session, sample_contracts, sample_nifty_candles):
         """Negative option price should return INVALID_PRICE."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(OptionCandle(
             instrument_key="NSE_FO|63935|28-07-2026",
             interval="3min", open_time=datetime(2026, 7, 28, 9, 15),  # Phase 7.24.4: naive IST
@@ -608,7 +608,7 @@ class TestAuthFailureHandling:
         """If one candle causes an error, the rest should still be processed."""
         # Insert a mix of valid and problematic candles
         base = datetime(2026, 7, 28)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(20):
             t_ist = base.replace(hour=9, minute=15) + timedelta(minutes=3 * i)  # Phase 7.24.4: naive IST
             price = 100.0 if i != 10 else -1.0  # Candle 10 has negative price

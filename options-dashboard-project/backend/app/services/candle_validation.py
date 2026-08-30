@@ -20,8 +20,7 @@ from datetime import datetime, timezone, timedelta
 # Constants
 # ---------------------------------------------------------------------------
 
-IST = timezone(timedelta(hours=5, minutes=30))
-"""Indian Standard Time (UTC+5:30)."""
+from app.utils.market_time import IST
 
 # NSE trading hours (IST)
 MARKET_OPEN_MINUTE = 555   # 9:15 = 9*60+15
