@@ -284,7 +284,7 @@ class TestGexDataAuthorization:
         db.flush()
 
         # GEX capture should NOT find it (data_status inactive)
-        token = _get_analytics_token_for_gex(user.id)
+        token = _get_analytics_token_for_gex(user.id, connection_id=conn.id)
         # This may return None or a token from another test — we can't guarantee isolation
         # But the query should filter by data_status='active'
         # The key assertion is that the function works without errors
@@ -309,7 +309,7 @@ class TestGexDataAuthorization:
         db.flush()
 
         # GEX capture should find this token
-        token = _get_analytics_token_for_gex(user.id)
+        token = _get_analytics_token_for_gex(user.id, connection_id=conn.id)
         # The function returns the first available token — may be from this or another test
         # The important thing is it doesn't error
         assert token is None or isinstance(token, str)

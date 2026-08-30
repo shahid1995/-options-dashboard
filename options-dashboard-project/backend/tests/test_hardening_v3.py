@@ -192,7 +192,7 @@ class TestAnalyticsTokenDeterministic:
         db_session.add_all([conn_other, conn_default])
         db_session.flush()
 
-        token = _get_analytics_token_for_gex(uid)
+        token = _get_analytics_token_for_gex(uid, connection_id=conn_default.id)
         assert token == "gex-default", (
             f"Expected 'gex-default' but got {token!r} — "
             "_get_analytics_token_for_gex uses .first() without is_default"

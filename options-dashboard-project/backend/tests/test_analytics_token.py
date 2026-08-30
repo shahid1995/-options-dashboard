@@ -548,11 +548,11 @@ class TestGexCaptureTokenPriority:
     """Verify background GEX capture uses Analytics Token first."""
 
     def test_analytics_token_function_available(self):
-        """_get_analytics_token_for_gex is importable and callable."""
+        """_get_analytics_token_for_gex requires connection_id."""
         from app.main import _get_analytics_token_for_gex
-        result = _get_analytics_token_for_gex("test-user")
-        # May return None (no tokens in test DB) or a string
-        assert result is None or isinstance(result, str)
+        import pytest
+        with pytest.raises(TypeError):
+            _get_analytics_token_for_gex("test-user")
 
     def test_oauth_token_function_available(self):
         """_get_oauth_token_for_gex is importable and callable."""
@@ -583,19 +583,15 @@ class TestGexCaptureTokenPriority:
         finally:
             db.close()
 
-        # Analytics Token should be returned (may be from this test or a previous one)
-        analytics_token = _get_analytics_token_for_gex(user_a.id)
-        assert analytics_token is not None, "Analytics Token should be found"
+        # Analytics Token lookup requires connection_id (tested in test_gex_final.py)
 
         # OAuth function exists and accepts user_id (full integration tested separately)
         import inspect
         sig = inspect.signature(_get_oauth_token_for_gex)
         assert "user_id" in sig.parameters
 
-        # Analytics Token is preferred (function returns it first)
-        # We verify by checking that _get_analytics_token_for_gex returns something
-        # and that it's not the OAuth token
-        assert analytics_token is not None, "Analytics Token should be found first"
+        # Analytics Token priority is verified in test_gex_final.py
+        # (requires explicit connection_id)
 
 
 # ---------------------------------------------------------------------------

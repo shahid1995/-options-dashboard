@@ -224,16 +224,11 @@ def _find_default_connection_id(user_id: str) -> str | None:
         return None
 
 
-def _get_analytics_token_for_gex(user_id: str, *, connection_id: str | None = None) -> str | None:
-    """Find an Analytics Token for a specific user for background GEX.
+def _get_analytics_token_for_gex(user_id: str, *, connection_id: str) -> str | None:
+    """Find an Analytics Token for a specific user's connection for GEX.
 
-    Resolution:
-      1. If connection_id provided, resolve exactly that connection.
-      2. Otherwise, prefer is_default=True connection.
-      3. Fallback: first connected connection with active data.
-
-    The resulting token is user-scoped — it belongs to the specified user
-    and is never used as a platform-wide credential.
+    Requires explicit connection_id — GEX never silently selects a connection.
+    Resolves exactly the specified user-owned BrokerConnection.
     """
     try:
         from app.db import SessionLocal

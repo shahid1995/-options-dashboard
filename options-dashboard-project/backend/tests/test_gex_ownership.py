@@ -155,7 +155,7 @@ class TestGexUserScoped:
         conn = _create_connection(db_session, uid, analytics_token="fallback-tok")
         # Without connection_id, may or may not return a token (fallback exists)
         # But the capture loop must ALWAYS provide connection_id
-        result = _get_analytics_token_for_gex(uid)
+        result = _get_analytics_token_for_gex(uid, connection_id=conn.id)
         # This tests that the function works — the real invariant is in the capture loop
         assert result is None or isinstance(result, str)
 
