@@ -192,53 +192,24 @@ async def _gex_capture_loop(user_id: str | None = None):
     logger.info("GEX capture loop stopped")
 
 
-def _get_analytics_token_for_gex(user_id: str) -> str | None:
+def _get_analytics_token_for_gex(user_id: str, *, connection_id: str | None = None) -> str | None:
     """Find an Analytics Token for a specific user for background GEX.
 
-    Phase 10.2B-4: Uses per-user Analytics Tokens (1-year validity) instead
-    of daily-expiring OAuth tokens.
+    Resolution:
+      1. If connection_id provided, resolve exactly that connection.
+      2. Otherwise, prefer is_default=True connection.
+      3. Fallback: first connected connection with active data.
 
-    Phase 10.2B-6: Also works with data-only connections (no OAuth required).
-    Queries data_status='active' for explicit data authorization.
-    Prefers the default connection (is_default=True) for deterministic resolution.
+    The resulting token is user-scoped — it belongs to the specified user
+    and is never used as a platform-wide credential.
     """
     try:
         from app.db import SessionLocal
-        from app.identity import BrokerConnection
-        from app.crypto import decrypt
+        from app.identity import get_analytics_token
 
         db = SessionLocal()
         try:
-            # Prefer default connection for deterministic resolution
-            conn = (
-                db.query(BrokerConnection)
-                .filter(
-                    BrokerConnection.user_id == user_id,
-                    BrokerConnection.status == "connected",
-                    BrokerConnection.broker == "UPSTOX",
-                    BrokerConnection.broker_analytics_token_encrypted.isnot(None),
-                    BrokerConnection.data_status == "active",
-                    BrokerConnection.is_default == True,
-                )
-                .first()
-            )
-            if conn is None:
-                # Fallback: any connected connection with active data
-                conn = (
-                    db.query(BrokerConnection)
-                    .filter(
-                        BrokerConnection.user_id == user_id,
-                        BrokerConnection.status == "connected",
-                        BrokerConnection.broker == "UPSTOX",
-                        BrokerConnection.broker_analytics_token_encrypted.isnot(None),
-                        BrokerConnection.data_status == "active",
-                    )
-                    .order_by(BrokerConnection.is_default.desc(), BrokerConnection.created_at.asc())
-                    .first()
-                )
-            if conn is None:
-                return None
-            return decrypt(conn.broker_analytics_token_encrypted)
+            return get_analytics_token(db, user_id, "UPSTOX", connection_id=connection_id)
         finally:
             db.close()
     except Exception:

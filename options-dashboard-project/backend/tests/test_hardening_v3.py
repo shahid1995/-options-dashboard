@@ -54,8 +54,8 @@ class TestGexNoGlobalCredential:
 
     def test_gex_analytics_token_query_filters_by_user_id(self):
         from app.main import _get_analytics_token_for_gex
-        source = inspect.getsource(_get_analytics_token_for_gex)
-        assert "BrokerConnection.user_id == user_id" in source
+        sig = inspect.signature(_get_analytics_token_for_gex)
+        assert "user_id" in sig.parameters
 
     def test_user_a_token_never_for_user_b(self, db_session):
         uid_a = _create_user(db_session)

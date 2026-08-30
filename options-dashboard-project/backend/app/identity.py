@@ -708,18 +708,45 @@ def get_analytics_token(
     db: Session,
     user_id: str,
     broker: str,
+    *,
+    connection_id: str | None = None,
 ) -> str | None:
     """Retrieve and decrypt the Analytics Token for a user's broker connection.
 
     Phase 10.2B-6: Works with both data-only and full OAuth connections.
     Requires data_status == 'active' for explicit data authorization.
-    Prefers the default connection (is_default=True) for deterministic resolution.
+
+    Resolution:
+      1. If connection_id is provided, resolve exactly that connection
+         (verifies user ownership and data authorization).
+      2. Otherwise, prefer is_default=True connection.
+      3. Fallback: first connected connection with active data.
+
     Returns None if no Analytics Token is stored or data is inactive.
     """
     from app.crypto import decrypt
 
     broker_upper = broker.upper()
-    # Prefer default connection for deterministic resolution
+
+    # Path 1: Exact connection_id — deterministic, user-scoped
+    if connection_id is not None:
+        conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.id == connection_id,
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.status == "connected",
+                BrokerConnection.data_status == "active",
+                BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+            )
+            .first()
+        )
+        if conn is None:
+            return None
+        return decrypt(conn.broker_analytics_token_encrypted)
+
+    # Path 2: No connection_id — prefer default, fallback to first active
     conn = (
         db.query(BrokerConnection)
         .filter(
