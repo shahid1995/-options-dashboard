@@ -132,10 +132,9 @@ def test_oauth_gex_resolver_returns_exact_connection_id(monkeypatch):
         lambda session_hash: "REAL_BROKER_TOKEN" if session_hash == session.session_hash else None,
     )
 
-    token, session_hash, connection_id = _get_oauth_token_for_gex("user-a")
+    token, connection_id = _get_oauth_token_for_gex("user-a")
 
     assert token == "REAL_BROKER_TOKEN"
-    assert session_hash == "session-hash-a"
     assert connection_id == "connection-a"
 
 
@@ -170,4 +169,4 @@ def test_oauth_gex_requires_broker_connection(monkeypatch):
     monkeypatch.setattr(app.identity, "resolve_broker_token_by_session_hash", lambda _: "REAL_BROKER_TOKEN")
 
     result = _get_oauth_token_for_gex("user-a")
-    assert result == (None, None, None)
+    assert result == (None, None)
