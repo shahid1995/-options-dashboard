@@ -50,6 +50,10 @@ async def _gex_capture_loop(user_id: str | None = None):
     import time as _time
     from app.services.token_store import get_token, get_all_session_ids
     from app.services.gex_capture import GexCaptureService, run_retention_cleanup
+    from app.services.gex_history import (
+        DATA_SOURCE_ANALYTICS_TOKEN,
+        DATA_SOURCE_BROKER_OAUTH,
+    )
     from app.services.live_gex import LiveGexService
 
     interval = getattr(settings, "GEX_HISTORY_SAMPLE_SECONDS", 60)
@@ -85,14 +89,15 @@ async def _gex_capture_loop(user_id: str | None = None):
             # 3. Skip if no token available
             connection_id = _find_default_connection_id(user_id) if user_id else None
             token = _get_analytics_token_for_gex(user_id, connection_id=connection_id) if user_id and connection_id else None
-            token_source = "analytics"
-            current_session_id = None
+            token_source = DATA_SOURCE_ANALYTICS_TOKEN
+            oauth_connection_id = None
             if not token:
-                token, current_session_id = _get_oauth_token_for_gex(user_id) if user_id else (None, None)
-                token_source = "oauth"
+                token, oauth_connection_id = _get_oauth_token_for_gex(user_id) if user_id else (None, None)
+                token_source = DATA_SOURCE_BROKER_OAUTH
+                connection_id = oauth_connection_id
 
-            if not token:
-                logger.debug("GEX capture skipped: no available token")
+            if not token or not connection_id:
+                logger.debug("GEX capture skipped: no available token or broker connection")
                 await _interruptible_sleep(interval)
                 continue
 
@@ -249,11 +254,12 @@ def _get_analytics_token_for_gex(user_id: str, *, connection_id: str) -> str | N
 
 
 def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
-    """Fallback: find an active OAuth session token for a specific user.
+    """Find an active OAuth session token for a specific user.
 
     OAuth tokens expire daily at 3:30 AM IST.
-    Returns (token, session_hash) or (None, None).
-    Only resolves tokens belonging to the specified user.
+    Returns (token, connection_id) or (None, None).
+    Only resolves tokens belonging to the specified user and broker
+    connection. No session identifier is returned as provenance.
 
     Uses resolve_broker_token_by_session_hash() to avoid the double-hashing
     bug of passing session_hash to get_token() which expects plaintext.
@@ -271,15 +277,17 @@ def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
                 UserSession.user_id == user_id,
                 UserSession.expires_at > now,
                 UserSession.revoked_at.is_(None),
+                UserSession.broker_connection_id.isnot(None),
             )
             .order_by(UserSession.created_at.desc())
             .first()
         )
-        if session is None:
+        if session is None or not session.broker_connection_id:
             return None, None
-        # Use the dedicated hash-based resolver instead of get_token(hash)
         token = resolve_broker_token_by_session_hash(session.session_hash)
-        return token, session.session_hash
+        if not token:
+            return None, None
+        return token, session.broker_connection_id
     finally:
         db.close()
 
