@@ -229,12 +229,14 @@ def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
     """Fallback: find an active OAuth session token for a specific user.
 
     OAuth tokens expire daily at 3:30 AM IST.
-    Returns (token, session_id) or (None, None).
+    Returns (token, session_hash) or (None, None).
     Only resolves tokens belonging to the specified user.
+
+    Uses resolve_broker_token_by_session_hash() to avoid the double-hashing
+    bug of passing session_hash to get_token() which expects plaintext.
     """
-    from app.services.token_store import get_token
     from app.db import SessionLocal
-    from app.identity import UserSession
+    from app.identity import UserSession, resolve_broker_token_by_session_hash
     from datetime import datetime, timezone
 
     db = SessionLocal()
@@ -252,9 +254,8 @@ def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
         )
         if session is None:
             return None, None
-        # We have the session hash but need the plaintext session_id for get_token.
-        # The token_store DB fallback resolves by hash, so we can use that.
-        token = get_token(session.session_hash)
+        # Use the dedicated hash-based resolver instead of get_token(hash)
+        token = resolve_broker_token_by_session_hash(session.session_hash)
         return token, session.session_hash
     finally:
         db.close()
