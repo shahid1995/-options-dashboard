@@ -36,6 +36,19 @@ from app.services import token_store
 
 logger = logging.getLogger(__name__)
 
+def _serialize_utc(dt) -> str | None:
+    """Serialize a datetime to ISO 8601 with explicit UTC offset.
+
+    SQLite strips timezone info, so datetimes read back are naive UTC.
+    This re-attaches UTC and produces +00:00 offset.
+    """
+    if dt is None:
+        return None
+    if hasattr(dt, "tzinfo") and dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
 router = APIRouter()
 
 SESSION_COOKIE = "session_id"
@@ -571,8 +584,8 @@ def me(session_id: str | None = Depends(get_session_id), db: Session = Depends(g
         "status": user.status,
         "identity_source": user.identity_source,
         "broker_provider": user.broker_provider,
-        "created_at": user.created_at.isoformat() if user.created_at else None,
-        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "created_at": _serialize_utc(user.created_at),
+        "last_login_at": _serialize_utc(user.last_login_at),
     }
 
 
