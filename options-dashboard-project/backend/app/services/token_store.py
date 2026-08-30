@@ -466,7 +466,12 @@ def _persist_token_to_db(session_id: str, token: str, connection_id: str | None,
 
 
 def _load_token_from_db(session_id: str) -> str | None:
-    """Load and decrypt token from broker_tokens table."""
+    """Load token from DB: BrokerToken (broker sessions) or UserSession (platform sessions).
+
+    For broker sessions: decrypt the broker access token from broker_tokens.
+    For platform sessions (Google/email): return the session_id as identity marker.
+    Platform sessions never create BrokerToken rows.
+    """
     from datetime import datetime, timezone
     from app.db import SessionLocal
     from app.identity import BrokerToken, UserSession, hash_session_id
@@ -476,6 +481,8 @@ def _load_token_from_db(session_id: str) -> str | None:
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
+
+        # Path 1: Broker session — find BrokerToken + valid UserSession
         row = (
             db.query(BrokerToken, UserSession)
             .join(
@@ -490,10 +497,25 @@ def _load_token_from_db(session_id: str) -> str | None:
             )
             .first()
         )
-        if row is None:
-            return None
-        bt, us = row
-        return decrypt(bt.broker_token_encrypted)
+        if row is not None:
+            bt, us = row
+            return decrypt(bt.broker_token_encrypted)
+
+        # Path 2: Platform session — UserSession exists, no BrokerToken
+        # Return session_id as identity marker (not a broker token)
+        us = (
+            db.query(UserSession)
+            .filter(
+                UserSession.session_hash == session_hash,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > now,
+            )
+            .first()
+        )
+        if us is not None:
+            return session_id  # Identity marker for platform session
+
+        return None
     except Exception:
         return None
     finally:

@@ -390,7 +390,7 @@ def login_email(
     session_id = set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        persist_to_db=True,   # Phase A: persist for restart survival
+        persist_to_db=False,  # Platform sessions use UserSession, not BrokerToken
     )
     create_session_record(db, user.id, session_id)
     db.commit()
@@ -497,7 +497,7 @@ def google_auth(
     session_id = token_store.set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        persist_to_db=True,   # Phase A: persist for restart survival
+        persist_to_db=False,  # Platform sessions use UserSession, not BrokerToken
     )
     create_session_record(db, user.id, session_id)
     db.commit()
