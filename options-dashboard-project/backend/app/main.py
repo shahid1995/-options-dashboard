@@ -79,11 +79,12 @@ async def _gex_capture_loop(user_id: str | None = None):
             from app.brokers.domain.enums import BROKER_ID_UPSTOX
             from app.brokers.gateway import gateway
 
-            # Phase 10.2B-4: Token priority
-            # 1. Analytics Token (1-year validity, read-only, most reliable)
+            # Token priority (user-scoped — never platform-wide):
+            # 1. Analytics Token via explicit connection (1-year, read-only)
             # 2. OAuth session token (daily expiry, fallback)
-            # 3. Skip capture if no token available
-            token = _get_analytics_token_for_gex(user_id) if user_id else None
+            # 3. Skip if no token available
+            connection_id = _find_default_connection_id(user_id) if user_id else None
+            token = _get_analytics_token_for_gex(user_id, connection_id=connection_id) if user_id and connection_id else None
             token_source = "analytics"
             current_session_id = None
             if not token:
@@ -135,10 +136,10 @@ async def _gex_capture_loop(user_id: str | None = None):
             # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
-                # owner_id tracks which session owns this snapshot.
-                # Analytics Token captures have no session (direct DB lookup),
-                # so owner_id is None.  OAuth captures use the session ID.
-                owner_id = current_session_id if token_source == "oauth" else None
+                # owner_id tracks which user owns this snapshot.
+                # All captures are user-scoped: Analytics Token captures use user_id,
+                # OAuth captures use the session ID.
+                owner_id = current_session_id if token_source == "oauth" else user_id
                 result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=owner_id)
                 status = result.get("status")
 
@@ -190,6 +191,51 @@ async def _gex_capture_loop(user_id: str | None = None):
         await _interruptible_sleep(effective_interval)
 
     logger.info("GEX capture loop stopped")
+
+
+def _find_default_connection_id(user_id: str) -> str | None:
+    """Find the user's default UPSTOX connection with active data.
+
+    Returns the connection_id for deterministic GEX token resolution,
+    or None if no qualifying connection exists.
+    """
+    try:
+        from app.db import SessionLocal
+        from app.identity import BrokerConnection
+
+        db = SessionLocal()
+        try:
+            conn = (
+                db.query(BrokerConnection)
+                .filter(
+                    BrokerConnection.user_id == user_id,
+                    BrokerConnection.status == "connected",
+                    BrokerConnection.broker == "UPSTOX",
+                    BrokerConnection.data_status == "active",
+                    BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+                    BrokerConnection.is_default == True,
+                )
+                .first()
+            )
+            if conn is None:
+                # Fallback: first active connected UPSTOX connection
+                conn = (
+                    db.query(BrokerConnection)
+                    .filter(
+                        BrokerConnection.user_id == user_id,
+                        BrokerConnection.status == "connected",
+                        BrokerConnection.broker == "UPSTOX",
+                        BrokerConnection.data_status == "active",
+                        BrokerConnection.broker_analytics_token_encrypted.isnot(None),
+                    )
+                    .order_by(BrokerConnection.created_at.asc())
+                    .first()
+                )
+            return conn.id if conn else None
+        finally:
+            db.close()
+    except Exception:
+        return None
 
 
 def _get_analytics_token_for_gex(user_id: str, *, connection_id: str | None = None) -> str | None:
