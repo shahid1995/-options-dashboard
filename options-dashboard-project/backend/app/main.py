@@ -32,7 +32,7 @@ _capture_task = None
 _stop_event = asyncio.Event()
 
 
-async def _gex_capture_loop():
+async def _gex_capture_loop(user_id: str | None = None):
     """Background loop: capture GEX snapshots at the configured interval.
 
     Resilience features:
@@ -78,11 +78,11 @@ async def _gex_capture_loop():
             # 1. Analytics Token (1-year validity, read-only, most reliable)
             # 2. OAuth session token (daily expiry, fallback)
             # 3. Skip capture if no token available
-            token = _get_analytics_token_for_gex()
+            token = _get_analytics_token_for_gex(user_id) if user_id else None
             token_source = "analytics"
             current_session_id = None
             if not token:
-                token, current_session_id = _get_oauth_token_for_gex()
+                token, current_session_id = _get_oauth_token_for_gex(user_id) if user_id else (None, None)
                 token_source = "oauth"
 
             if not token:
@@ -187,8 +187,8 @@ async def _gex_capture_loop():
     logger.info("GEX capture loop stopped")
 
 
-def _get_analytics_token_for_gex() -> str | None:
-    """Find an Analytics Token from any connected user for background GEX.
+def _get_analytics_token_for_gex(user_id: str) -> str | None:
+    """Find an Analytics Token for a specific user for background GEX.
 
     Phase 10.2B-4: Uses per-user Analytics Tokens (1-year validity) instead
     of daily-expiring OAuth tokens.  Returns the first available Analytics
@@ -207,6 +207,7 @@ def _get_analytics_token_for_gex() -> str | None:
             conn = (
                 db.query(BrokerConnection)
                 .filter(
+                    BrokerConnection.user_id == user_id,
                     BrokerConnection.status == "connected",
                     BrokerConnection.broker == "UPSTOX",
                     BrokerConnection.broker_analytics_token_encrypted.isnot(None),
@@ -224,19 +225,39 @@ def _get_analytics_token_for_gex() -> str | None:
         return None
 
 
-def _get_oauth_token_for_gex() -> tuple[str | None, str | None]:
-    """Fallback: find any active OAuth session token for background GEX.
+def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
+    """Fallback: find an active OAuth session token for a specific user.
 
     OAuth tokens expire daily at 3:30 AM IST.
     Returns (token, session_id) or (None, None).
+    Only resolves tokens belonging to the specified user.
     """
-    from app.services.token_store import get_token, get_all_session_ids
+    from app.services.token_store import get_token
+    from app.db import SessionLocal
+    from app.identity import UserSession
+    from datetime import datetime, timezone
 
-    active_sessions = get_all_session_ids()
-    if not active_sessions:
-        return None, None
-    session_id = active_sessions[-1]
-    return get_token(session_id), session_id
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        session = (
+            db.query(UserSession)
+            .filter(
+                UserSession.user_id == user_id,
+                UserSession.expires_at > now,
+                UserSession.revoked_at.is_(None),
+            )
+            .order_by(UserSession.created_at.desc())
+            .first()
+        )
+        if session is None:
+            return None, None
+        # We have the session hash but need the plaintext session_id for get_token.
+        # The token_store DB fallback resolves by hash, so we can use that.
+        token = get_token(session.session_hash)
+        return token, session.session_hash
+    finally:
+        db.close()
 
 
 async def _interruptible_sleep(seconds: float):
@@ -263,10 +284,12 @@ async def lifespan(app: FastAPI):
         logger.warning("DB token health check failed (non-critical)")
 
     # Start background GEX capture if enabled
+    # GEX_USER_ID must be configured for background capture to run.
+    gex_user_id = getattr(settings, "GEX_USER_ID", "") or None
     if getattr(settings, "GEX_HISTORY_ENABLED", False):
         _stop_event.clear()
-        _capture_task = asyncio.create_task(_gex_capture_loop())
-        logger.info("Background GEX capture task started")
+        _capture_task = asyncio.create_task(_gex_capture_loop(gex_user_id))
+        logger.info("Background GEX capture task started", extra={"user_id": bool(gex_user_id)})
 
     yield
 

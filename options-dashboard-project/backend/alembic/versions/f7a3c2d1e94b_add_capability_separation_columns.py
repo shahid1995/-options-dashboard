@@ -50,15 +50,9 @@ def upgrade() -> None:
         sa.Column("trading_static_ip", sa.String(45), nullable=True),
     )
 
-    # Backfill: existing "connected" rows should have trading_status = "active"
-    # and data_status = "active" if they have an analytics token
-    op.execute(
-        """
-        UPDATE broker_connections
-        SET trading_status = 'active'
-        WHERE status = 'connected'
-        """
-    )
+    # Backfill: existing connected rows get data_status from actual credential state.
+    # trading_status stays inactive — broker OAuth connected != trading authorized.
+    # Trading requires explicit authorization (Phase 10.2B-6 design decision).
     op.execute(
         """
         UPDATE broker_connections

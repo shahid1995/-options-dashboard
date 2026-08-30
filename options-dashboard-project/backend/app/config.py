@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     TOKEN_ENCRYPTION_KEY: str = ""
 
     # Phase A: Google OAuth
+    # Phase 10.2B-6: User ID for background GEX capture (required if GEX_HISTORY_ENABLED=True).
+    GEX_USER_ID: str = ""
+
     GOOGLE_CLIENT_ID: str = ""
 
     # Phase 10.2B-6: Optional backend URL for auto-deriving UPSTOX_REDIRECT_URI
