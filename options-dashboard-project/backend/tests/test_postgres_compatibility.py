@@ -76,6 +76,7 @@ def test_postgres_schema_supports_identity_and_gex_provenance(postgres_engine):
     connection_id = "postgres-compat-connection"
 
     try:
+        # Flush the parent first so PostgreSQL's FK constraint is satisfied.
         session.add(
             User(
                 id=user_id,
@@ -83,6 +84,8 @@ def test_postgres_schema_supports_identity_and_gex_provenance(postgres_engine):
                 identity_source="email",
             )
         )
+        session.flush()
+
         session.add(
             BrokerConnection(
                 id=connection_id,
