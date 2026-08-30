@@ -136,10 +136,9 @@ async def _gex_capture_loop(user_id: str | None = None):
             # Capture and persist — DB session in try/finally for guaranteed cleanup
             db = SessionLocal()
             try:
-                # owner_id tracks which user owns this snapshot.
-                # All captures are user-scoped: Analytics Token captures use user_id,
-                # OAuth captures use the session ID.
-                owner_id = current_session_id if token_source == "oauth" else user_id
+                # owner_id is always the StrikeNova user ID (user-scoped GEX).
+                # Both Analytics Token and OAuth captures are owned by the user.
+                owner_id = user_id
                 result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=owner_id)
                 status = result.get("status")
 
@@ -196,8 +195,9 @@ async def _gex_capture_loop(user_id: str | None = None):
 def _find_default_connection_id(user_id: str) -> str | None:
     """Find the user's default UPSTOX connection with active data.
 
-    Returns the connection_id for deterministic GEX token resolution,
-    or None if no qualifying connection exists.
+    Returns the connection_id for the user's explicitly-default connection,
+    or None if no default connection exists. Does NOT fall back to
+    arbitrary connection selection — GEX requires explicit authorization.
     """
     try:
         from app.db import SessionLocal
@@ -217,20 +217,6 @@ def _find_default_connection_id(user_id: str) -> str | None:
                 )
                 .first()
             )
-            if conn is None:
-                # Fallback: first active connected UPSTOX connection
-                conn = (
-                    db.query(BrokerConnection)
-                    .filter(
-                        BrokerConnection.user_id == user_id,
-                        BrokerConnection.status == "connected",
-                        BrokerConnection.broker == "UPSTOX",
-                        BrokerConnection.data_status == "active",
-                        BrokerConnection.broker_analytics_token_encrypted.isnot(None),
-                    )
-                    .order_by(BrokerConnection.created_at.asc())
-                    .first()
-                )
             return conn.id if conn else None
         finally:
             db.close()
