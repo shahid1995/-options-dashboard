@@ -170,3 +170,41 @@ def test_oauth_gex_requires_broker_connection(monkeypatch):
 
     result = _get_oauth_token_for_gex("user-a")
     assert result == (None, None)
+
+
+def test_oauth_capture_contract_is_broker_owned(monkeypatch):
+    """OAuth provenance must carry a broker connection, not a session identifier."""
+    session = SimpleNamespace(
+        user_id="user-a",
+        session_hash="session-hash-a",
+        broker_connection_id="connection-a",
+        created_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc),
+        revoked_at=None,
+    )
+
+    class _Query:
+        def filter(self, *args):
+            return self
+
+        def order_by(self, *args):
+            return self
+
+        def first(self):
+            return session
+
+    class _Db:
+        def query(self, *args):
+            return _Query()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(app.db, "SessionLocal", lambda: _Db())
+    monkeypatch.setattr(app.identity, "resolve_broker_token_by_session_hash", lambda _: "REAL_BROKER_TOKEN")
+
+    token, connection_id = _get_oauth_token_for_gex("user-a")
+
+    assert token == "REAL_BROKER_TOKEN"
+    assert connection_id == "connection-a"
+    assert connection_id != session.session_hash
