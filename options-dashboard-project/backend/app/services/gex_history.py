@@ -30,14 +30,22 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def record_gex_snapshot(db: Session, snapshot: dict, owner_id: str | None = None) -> int:
+def record_gex_snapshot(
+    db: Session,
+    snapshot: dict,
+    owner_id: str | None = None,
+    *,
+    connection_id: str | None = None,
+    data_source: str | None = None,
+) -> int:
     """Persist one GEX snapshot; return 1 if stored, 0 if invalid.
 
     Uses explicit commit with rollback-on-failure for transaction safety.
 
-    Phase 8F: ``owner_id`` is the authenticated session ID that owns this
-    snapshot.  When provided, it is stored on the row so queries can be
-    scoped to the owning session.
+    Phase 8F/10.2B-6: Provenance fields:
+      - owner_id: StrikeNova user ID that owns this snapshot
+      - connection_id: BrokerConnection ID that authorized the capture
+      - data_source: "analytics_token" or "broker_oauth"
 
     Expected shape::
 
@@ -92,6 +100,8 @@ def record_gex_snapshot(db: Session, snapshot: dict, owner_id: str | None = None
         db.add(
             GexSnapshot(
                 owner_id=owner_id,
+                connection_id=connection_id,
+                data_source=data_source,
                 symbol=symbol,
                 expiry=str(expiry),
                 spot=float(spot),
@@ -212,6 +222,8 @@ def _row_to_dict(row: GexSnapshot) -> dict:
     return {
         "id": row.id,
         "owner_id": row.owner_id,
+        "connection_id": row.connection_id,
+        "data_source": row.data_source,
         "symbol": row.symbol,
         "expiry": row.expiry,
         "spot": row.spot,

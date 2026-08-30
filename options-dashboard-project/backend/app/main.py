@@ -139,7 +139,11 @@ async def _gex_capture_loop(user_id: str | None = None):
                 # owner_id is always the StrikeNova user ID (user-scoped GEX).
                 # Both Analytics Token and OAuth captures are owned by the user.
                 owner_id = user_id
-                result = capture_service.capture_once(db, chain, expiry=expiry_date, symbol=symbol, owner_id=owner_id)
+                result = capture_service.capture_once(
+                    db, chain, expiry=expiry_date, symbol=symbol,
+                    owner_id=owner_id, connection_id=connection_id,
+                    data_source=token_source,
+                )
                 status = result.get("status")
 
                 if status == "captured":

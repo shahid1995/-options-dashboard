@@ -199,18 +199,15 @@ class GexCaptureService:
         expiry: str | None = None,
         symbol: str | None = None,
         owner_id: str | None = None,
+        connection_id: str | None = None,
+        data_source: str | None = None,
     ) -> dict:
         """Capture one GEX snapshot from the provided chain data.
 
-        Phase 8F: ``owner_id`` is the authenticated session that owns this
-        snapshot.  When provided, it is stored on the snapshot row.
-
-        Args:
-            db: Database session.
-            chain: Canonical option chain from Upstox adapter.
-            expiry: Expiry date override (if not in chain).
-            symbol: Symbol override (if not in chain).
-            owner_id: Authenticated session ID that owns this snapshot.
+        Provenance:
+          - owner_id: StrikeNova user ID that owns this snapshot
+          - connection_id: BrokerConnection ID that authorized the capture
+          - data_source: "analytics_token" or "broker_oauth"
 
         Returns:
             dict with keys: status, snapshot_id, symbol, expiry, net_gex, etc.
@@ -297,7 +294,10 @@ class GexCaptureService:
 
         # Persist with explicit error isolation
         try:
-            stored = record_gex_snapshot(db, snapshot_dict, owner_id=owner_id)
+            stored = record_gex_snapshot(
+                db, snapshot_dict, owner_id=owner_id,
+                connection_id=connection_id, data_source=data_source,
+            )
             if stored == 0:
                 self._consecutive_failures += 1
                 logger.warning(
