@@ -882,11 +882,11 @@ def test_custom_unnamed_strategy_remains_custom(client, logged_in):
 
 
 def test_legacy_position_without_execution_falls_back_to_custom(client, logged_in, db_session):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from app.models import Position
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db_session.add(Position(
         user_id=db_session._test_user_id, symbol="NIFTY", expiry=EXPIRY, strike=24400,
         option_type="call", net_quantity=1, average_entry_price=50.0,
@@ -899,11 +899,11 @@ def test_legacy_position_without_execution_falls_back_to_custom(client, logged_i
 
 
 def test_dangling_execution_id_falls_back_to_custom(client, logged_in, db_session):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from app.models import Position
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db_session.add(Position(
         user_id=db_session._test_user_id, symbol="NIFTY", expiry=EXPIRY, strike=24450,
         option_type="put", net_quantity=-1, average_entry_price=60.0,
@@ -1021,12 +1021,12 @@ def test_zero_quantity_positions_never_appear_as_active(client, logged_in, db_se
 
 
 def test_open_positions_are_user_isolated(client, logged_in, db_session):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from app.models import Position
 
     other_user = "tok-other-user"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db_session.add(Position(
         user_id=other_user, symbol="NIFTY", expiry=EXPIRY, strike=24600,
         option_type="call", net_quantity=3, average_entry_price=40.0,

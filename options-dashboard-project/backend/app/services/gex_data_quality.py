@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -221,7 +221,7 @@ class GexDataQualityEngine:
         QualityReport
         """
         report = QualityReport()
-        report.generated_at = datetime.utcnow().isoformat() + "Z"
+        report.generated_at = datetime.now(timezone.utc).isoformat()
 
         # 1. Base counts
         self._count_tables(report)

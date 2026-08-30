@@ -10,7 +10,7 @@ All tests use an in-memory SQLite database to avoid side effects.
 import math
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -53,7 +53,7 @@ def db_session():
 @pytest.fixture()
 def sample_data(db_session):
     """Insert sample contract specs, NIFTY candles, and option candles."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Contract specs (both lot sizes)
     contracts = [
@@ -167,7 +167,7 @@ class TestInitDbSafety:
     def test_init_db_preserves_existing_data(self, db_session):
         """init_db() must not delete existing rows."""
         # Insert data
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db_session.add(ContractSpec(
             instrument_key="TEST|KEY|01-01-2026",
             underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",

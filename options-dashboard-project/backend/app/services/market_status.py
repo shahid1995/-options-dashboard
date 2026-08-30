@@ -51,7 +51,7 @@ from app.brokers.gateway import gateway
 
 logger = logging.getLogger(__name__)
 
-IST = timezone(timedelta(hours=5, minutes=30))
+from app.utils.market_time import IST
 
 # ---- Segments & configurable session definitions (Phase 5.2.1) --------------
 #

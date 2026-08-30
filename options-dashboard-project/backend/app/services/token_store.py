@@ -442,6 +442,7 @@ def consume_google_oauth_state(state: str | None) -> str | None:
 
 def _persist_token_to_db(session_id: str, token: str, connection_id: str | None, expires_at) -> None:
     """Write encrypted token to broker_tokens table."""
+    from datetime import datetime, timezone
     from app.db import SessionLocal
     from app.identity import BrokerToken, hash_session_id
     from app.crypto import encrypt
@@ -453,7 +454,7 @@ def _persist_token_to_db(session_id: str, token: str, connection_id: str | None,
             session_hash=hash_session_id(session_id),
             broker_token_encrypted=encrypt(token),
             broker_token_expires_at=expires_at,
-            created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            created_at=datetime.now(timezone.utc),
         )
         db.add(bt)
         db.commit()
@@ -466,6 +467,7 @@ def _persist_token_to_db(session_id: str, token: str, connection_id: str | None,
 
 def _load_token_from_db(session_id: str) -> str | None:
     """Load and decrypt token from broker_tokens table."""
+    from datetime import datetime, timezone
     from app.db import SessionLocal
     from app.identity import BrokerToken, UserSession, hash_session_id
     from app.crypto import decrypt
@@ -473,7 +475,7 @@ def _load_token_from_db(session_id: str) -> str | None:
     session_hash = hash_session_id(session_id)
     db = SessionLocal()
     try:
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        now = datetime.now(timezone.utc)
         row = (
             db.query(BrokerToken, UserSession)
             .join(
