@@ -501,25 +501,50 @@ def _load_token_from_db(session_id: str) -> str | None:
             bt, us = row
             return decrypt(bt.broker_token_encrypted)
 
-        # Path 2: Platform session — UserSession exists, no BrokerToken
-        # Return session_id as identity marker (not a broker token)
-        us = (
-            db.query(UserSession)
-            .filter(
-                UserSession.session_hash == session_hash,
-                UserSession.revoked_at.is_(None),
-                UserSession.expires_at > now,
-            )
-            .first()
-        )
-        if us is not None:
-            return session_id  # Identity marker for platform session
+        # Path 2: Platform-only session (UserSession exists, no BrokerToken)
+        # get_token() is for BROKER tokens only — return None.
+        # Use has_platform_session() for platform identity checks.
 
         return None
     except Exception:
         return None
     finally:
         db.close()
+
+
+def has_platform_session(session_id: str | None) -> bool:
+    """Check whether session_id has a valid UserSession DB record.
+
+    This is a DB-only check — it does NOT use the in-memory cache.
+    Use this in require_token() to distinguish 'platform-only session'
+    from 'broker session' or 'no session'.
+
+    Returns True if a non-expired, non-revoked UserSession exists.
+    """
+    if not session_id:
+        return False
+    try:
+        from datetime import datetime, timezone
+        from app.db import SessionLocal
+        from app.identity import UserSession, hash_session_id
+
+        now = datetime.now(timezone.utc)
+        db = SessionLocal()
+        try:
+            us = (
+                db.query(UserSession)
+                .filter(
+                    UserSession.session_hash == hash_session_id(session_id),
+                    UserSession.revoked_at.is_(None),
+                    UserSession.expires_at > now,
+                )
+                .first()
+            )
+            return us is not None
+        finally:
+            db.close()
+    except Exception:
+        return False
 
 
 def _clear_token_in_db(session_id: str) -> None:

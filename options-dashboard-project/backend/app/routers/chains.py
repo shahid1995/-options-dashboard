@@ -44,18 +44,27 @@ def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:
 
 
 def require_token(session_id: str | None) -> str:
+    """Return the broker access token for the session.
+
+    Raises 401 if session is invalid/expired (not logged in).
+    Raises 403 if session is valid but no broker token is available
+    (Google/email session without broker connection).
+    """
     token = token_store.get_token(session_id)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-    # Phase A fix: identity tokens (email/google sessions) contain ':'
-    # and are NOT broker access tokens.  Return 403 so the frontend can
-    # distinguish "logged in but no broker" from "session expired".
-    if ":" in token:
+    if token:
+        return token
+
+    # No broker token in memory or DB. Check if the session itself is valid.
+    from app.services.token_store import has_platform_session
+    if has_platform_session(session_id):
+        # Valid session exists but no broker token — platform-only user
         raise HTTPException(
             status_code=403,
             detail="No broker token available. Connect your broker to view market data.",
         )
-    return token
+
+    # No valid session at all
+    raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
 
 
 def resolve_symbol(symbol: str) -> str:

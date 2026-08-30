@@ -38,11 +38,22 @@ _live_gex_service = LiveGexService()
 # ---------------------------------------------------------------------------
 
 def _require_token(session_id: str | None) -> str:
-    """Validate session and return the broker access token."""
+    """Validate session and return the broker access token.
+
+    Raises 401 if session is invalid/expired (not logged in).
+    Raises 403 if session is valid but no broker token is available.
+    """
     token = token_store.get_token(session_id) if session_id else None
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
-    return token
+    if token:
+        return token
+
+    # No broker token — check if session is valid at all
+    if session_id and token_store.has_platform_session(session_id):
+        raise HTTPException(
+            status_code=403,
+            detail="No broker token available. Connect your broker to view market data.",
+        )
+    raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
 
 
 def _resolve_symbol(symbol: str) -> str:

@@ -26,10 +26,11 @@ class AuthenticatedUser:
 
     ``user_id`` is the durable ``users.id`` (UUID) — the application-level
     identity that every data query must use.  ``access_token`` is the broker
-    token required for Upstox API calls.
+    token required for Upstox API calls, or ``None`` when the session is
+    platform-only (Google/email) with no broker connection.
     """
     user_id: str
-    access_token: str
+    access_token: str | None
 
 
 def _extract_session_id(
@@ -44,20 +45,21 @@ def _extract_session_id(
 
 
 def _resolve_user(db: Session, sid: str) -> AuthenticatedUser:
-    """Core resolution: session_id → (user_id, access_token).
+    """Core resolution: session_id → (user_id, access_token|None).
 
-    Phase 10.2B-3: token_store.get_token() now has DB fallback, so this
-    function works across server restarts (memory → DB → decrypt → cache).
+    Two distinct lookups:
+    - token_store.get_token(sid) → broker access token (None if no broker)
+    - identity.get_active_session(db, sid) → platform session validity
 
     Raises 401/403 on any failure.  Pure logic, no DI.
     """
     from app.identity import get_active_session, User
     from app.services import token_store
 
-    token = token_store.get_token(sid)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
+    # Broker token: None for platform-only sessions, real token for broker sessions
+    broker_token = token_store.get_token(sid)
 
+    # Platform session validity: must exist and be active
     session = get_active_session(db, sid)
     if session is None:
         raise HTTPException(status_code=401, detail="Session is invalid or expired.")
@@ -66,7 +68,8 @@ def _resolve_user(db: Session, sid: str) -> AuthenticatedUser:
     if user is None or user.status != "active":
         raise HTTPException(status_code=403, detail="StrikeNova account is not active.")
 
-    return AuthenticatedUser(user_id=user.id, access_token=token)
+    # access_token is None for platform-only sessions (no broker connected)
+    return AuthenticatedUser(user_id=user.id, access_token=broker_token)
 
 
 def get_current_user(
