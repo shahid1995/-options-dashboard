@@ -98,10 +98,10 @@ export function useAuth() {
     }
   }, []);
 
-  const loginWithGoogle = useCallback(async (credential) => {
+  const loginWithGoogle = useCallback(async (credential, state) => {
     setError(null);
     try {
-      const result = await loginGoogle(credential);
+      const result = await loginGoogle(credential, state);
       if (result.session_id) {
         setSessionId(result.session_id);
       }

@@ -377,6 +377,7 @@ def login_email(
     session_id = set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        persist_to_db=False,  # Phase A: email sessions have no broker token
     )
     create_session_record(db, user.id, session_id)
     db.commit()
@@ -393,12 +394,35 @@ def login_email(
 
 
 # ---------------------------------------------------------------------------
+# POST /auth/google/state — Generate HMAC-signed state for nonce binding
+# ---------------------------------------------------------------------------
+
+@router.post("/google/state")
+def google_oauth_state():
+    """Generate an HMAC-signed state value for Google OAuth nonce binding.
+
+    The frontend calls this before redirecting to Google.  It stores a
+    random nonce in HMAC-signed state and returns the state string.
+    The frontend includes this state in the Google OAuth URL.
+    When Google redirects back, the frontend sends the state alongside
+    the id_token to POST /auth/google.
+    """
+    state = token_store.create_google_oauth_state()
+    # Return both state and nonce.  The frontend must use the nonce value
+    # (not generate its own) as the Google OAuth nonce parameter, so the
+    # backend can later compare it against the JWT nonce claim.
+    nonce = token_store.peek_google_oauth_nonce(state)
+    return {"state": state, "nonce": nonce}
+
+
+# ---------------------------------------------------------------------------
 # POST /auth/google — Google One Tap / Sign-In
 # ---------------------------------------------------------------------------
 
 @router.post("/google")
 def google_auth(
     credential: str = Body(..., embed=True),
+    state: str | None = Body(default=None, embed=True),
     db: Session = Depends(get_db),
 ):
     """Authenticate via Google Sign-In (One Tap / GIS).
@@ -417,8 +441,24 @@ def google_auth(
     if not credential:
         raise HTTPException(status_code=422, detail="Google credential is required")
 
+    # Phase A security: state is MANDATORY for nonce binding.
+    # The HMAC-signed state carries a nonce that must match the JWT nonce.
+    # Without state, an attacker could replay a stolen Google ID token.
+    if not state:
+        raise HTTPException(
+            status_code=401,
+            detail="Google OAuth state is required. Please restart the sign-in flow.",
+        )
+
+    expected_nonce = token_store.consume_google_oauth_state(state)
+    if expected_nonce is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired Google OAuth state",
+        )
+
     # Verify the Google ID token
-    google_user = _verify_google_token(credential)
+    google_user = _verify_google_token(credential, expected_nonce=expected_nonce)
     if google_user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired Google credential")
 
@@ -444,6 +484,7 @@ def google_auth(
     session_id = token_store.set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        persist_to_db=False,  # Phase A: Google sessions have no broker token
     )
     create_session_record(db, user.id, session_id)
     db.commit()
@@ -460,7 +501,7 @@ def google_auth(
     }
 
 
-def _verify_google_token(credential: str) -> dict | None:
+def _verify_google_token(credential: str, expected_nonce: str) -> dict | None:
     """Verify a Google ID token (JWT) and return the payload.
 
     Uses Google's public JWKS endpoint to verify the token signature.
@@ -499,6 +540,43 @@ def _verify_google_token(credential: str) -> dict | None:
         if alg != "RS256" or not kid:
             return None
 
+        # Phase A security: Pre-flight checks on payload BEFORE JWKS fetch.
+        # Decode the payload to check issuer and nonce early — avoids an
+        # unnecessary network round-trip to Google JWKS for obviously
+        # invalid tokens.
+        try:
+            payload_pre = json.loads(_b64.urlsafe_b64decode(payload_b64 + "=="))
+        except Exception:
+            return None
+
+        # Explicit issuer validation — prevents acceptance of JWTs from
+        # non-Google issuers.
+        valid_issuers = {"https://accounts.google.com", "accounts.google.com"}
+        if payload_pre.get("iss") not in valid_issuers:
+            logger.warning(
+                "Google token rejected: invalid issuer %s",
+                payload_pre.get("iss"),
+            )
+            return None
+
+        # Nonce validation — MANDATORY.
+        # The expected_nonce comes from the HMAC-signed state (required by
+        # POST /auth/google).  The JWT nonce MUST match exactly.
+        # This cryptographically binds the token to this specific auth attempt.
+        jwt_nonce = payload_pre.get("nonce")
+        if not jwt_nonce:
+            logger.warning("Google token rejected: missing nonce claim")
+            return None
+        if expected_nonce is None:
+            # Defensive: should never reach here (state is required upstream)
+            logger.warning("Google token rejected: no expected nonce (state missing)")
+            return None
+        if jwt_nonce != expected_nonce:
+            logger.warning(
+                "Google token rejected: nonce mismatch (expected from state, got from JWT)",
+            )
+            return None
+
         # Fetch Google's public keys
         jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
         req = Request(jwks_url, headers={"User-Agent": "StrikeNova/1.0"})
@@ -532,9 +610,13 @@ def _verify_google_token(credential: str) -> dict | None:
             "picture": payload.get("picture"),
         }
     except Exception as e:
-        import sys
-        print(f"GOOGLE_AUTH_ERROR: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-        logger.warning("Google token verification failed: %s: %s", type(e).__name__, e, exc_info=True)
+        # Phase A fix: remove debug print, use structured logging only.
+        # Never log the credential/token itself.
+        logger.warning(
+            "Google token verification failed: %s: %s",
+            type(e).__name__, e,
+            exc_info=True,
+        )
         return None
 
 

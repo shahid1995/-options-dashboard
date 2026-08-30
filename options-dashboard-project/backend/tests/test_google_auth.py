@@ -55,6 +55,11 @@ def client():
 # Helper: build a fake Google credential (JWT-like)
 # ---------------------------------------------------------------------------
 
+def _make_valid_state() -> str:
+    """Create a valid HMAC-signed Google OAuth state for tests."""
+    return token_store.create_google_oauth_state()
+
+
 def _fake_google_credential(sub="google-user-123", email="test@gmail.com", name="Test User"):
     """Build a minimal JWT-like string for testing.
 
@@ -84,7 +89,7 @@ class TestGoogleAuthNewUser:
             "email": "newuser@gmail.com",
             "name": "New User",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -107,7 +112,7 @@ class TestGoogleAuthNewUser:
             "email": None,
             "name": "Anonymous",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -147,7 +152,7 @@ class TestGoogleAccountLinking:
             "email": "linktest@gmail.com",
             "name": "Google User",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -166,11 +171,11 @@ class TestGoogleAccountLinking:
             "email": "repeat@gmail.com",
             "name": "Repeat User",
         }
-        resp1 = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp1 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp1.status_code == 200
         user_id_1 = resp1.json()["user"]["user_id"]
 
-        resp2 = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp2 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp2.status_code == 200
         user_id_2 = resp2.json()["user"]["user_id"]
 
@@ -206,7 +211,7 @@ class TestDuplicateAccountProtection:
             "email": "nodup@gmail.com",
             "name": "No Dup",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
 
         # Count should not increase
@@ -233,7 +238,7 @@ class TestDuplicateAccountProtection:
             "email": "upstoxuser@gmail.com",
             "name": "Upstox Google",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
 
         # Upstox user should now have google_sub
@@ -251,7 +256,7 @@ class TestGoogleTokenValidation:
     @patch("app.routers.auth._verify_google_token")
     def test_invalid_token_rejected(self, mock_verify, client):
         mock_verify.return_value = None
-        resp = client.post("/auth/google", json={"credential": "invalid-token"})
+        resp = client.post("/auth/google", json={"credential": "invalid-token", "state": _make_valid_state()})
         assert resp.status_code == 401
         assert "Invalid" in resp.json()["detail"]
 
@@ -280,7 +285,7 @@ class TestGoogleSessionManagement:
             "email": "metest@gmail.com",
             "name": "ME Test",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         session_id = resp.json()["session_id"]
 
         # Use the session to access /auth/me
@@ -298,7 +303,7 @@ class TestGoogleSessionManagement:
             "email": "logout@gmail.com",
             "name": "Logout Test",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         session_id = resp.json()["session_id"]
 
         # Logout
@@ -316,8 +321,8 @@ class TestGoogleSessionManagement:
             "email": "unique@gmail.com",
             "name": "Unique Session",
         }
-        resp1 = client.post("/auth/google", json={"credential": "fake-jwt"})
-        resp2 = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp1 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
+        resp2 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
 
         sid1 = resp1.json()["session_id"]
         sid2 = resp2.json()["session_id"]
@@ -338,7 +343,7 @@ class TestAuthMe:
             "email": "medata@gmail.com",
             "name": "ME Data",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         session_id = resp.json()["session_id"]
 
         me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
@@ -370,7 +375,7 @@ class TestIdentitySourceTracking:
             "email": "src@gmail.com",
             "name": "Src Test",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.json()["user"]["identity_source"] == "google"
 
     @patch("app.routers.auth._verify_google_token")
@@ -392,7 +397,7 @@ class TestIdentitySourceTracking:
             "email": "srcupdate@gmail.com",
             "name": "Source Update",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
 
         db.refresh(user)
@@ -425,7 +430,7 @@ class TestGoogleAuthEdgeCases:
             "email": "inactive@gmail.com",
             "name": "Inactive",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 403
         assert "not active" in resp.json()["detail"]
 
@@ -437,7 +442,7 @@ class TestGoogleAuthEdgeCases:
             "email": None,
             "name": "Case Test",
         }
-        resp1 = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp1 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp1.status_code == 200
 
         mock_verify.return_value = {
@@ -445,7 +450,7 @@ class TestGoogleAuthEdgeCases:
             "email": None,
             "name": "Case Test 2",
         }
-        resp2 = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp2 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp2.status_code == 200
 
         # Should create two different users (different subs)
@@ -459,8 +464,428 @@ class TestGoogleAuthEdgeCases:
             "email": "UPPER@GMAIL.COM",
             "name": "Upper",
         }
-        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
 
         user = db.query(User).filter(User.google_sub == "sub-upper").first()
         assert user.email == "upper@gmail.com"  # Normalized
+
+
+# ---------------------------------------------------------------------------
+# Phase A: Google nonce/issuer validation + security
+# ---------------------------------------------------------------------------
+
+
+class TestGoogleNonceValidation:
+    """Nonce and issuer validation for Google ID tokens."""
+
+    def test_missing_nonce_rejected(self, client):
+        """Token without nonce claim is rejected (pre-JWKS check)."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            # No nonce
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce="any")
+            assert result is None  # Rejected: missing nonce in JWT
+
+    def test_invalid_issuer_rejected(self, client):
+        """Token with wrong issuer is rejected (pre-JWKS check)."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://evil.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "valid-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce="valid-nonce")
+            assert result is None  # Rejected: wrong issuer
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_valid_google_session_no_db_persist(self, mock_verify, client, db):
+        """Google sessions should not persist broker tokens to DB."""
+        mock_verify.return_value = {
+            "sub": "google-no-persist",
+            "email": "nopersist@gmail.com",
+            "name": "No Persist",
+        }
+        resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+
+        # Session works via in-memory cache
+        me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
+        assert me_resp.status_code == 200
+
+    def test_google_state_endpoint_returns_signed_state(self, client):
+        """POST /auth/google/state returns HMAC-signed state with nonce."""
+        resp = client.post("/auth/google/state")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "state" in data
+        assert "." in data["state"]  # HMAC-signed format
+        assert "nonce" in data
+        assert len(data["nonce"]) > 0
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_with_valid_nonce_state(self, mock_verify, client, db):
+        """POST /auth/google with valid signed state and matching nonce succeeds."""
+        from app.services import token_store
+        state = token_store.create_google_oauth_state()
+        nonce = token_store.peek_google_oauth_nonce(state)
+
+        mock_verify.return_value = {
+            "sub": "google-nonce-test",
+            "email": "nonce@gmail.com",
+            "name": "Nonce Test",
+        }
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": state,
+        })
+        assert resp.status_code == 200
+        call_args = mock_verify.call_args
+        assert call_args[1]["expected_nonce"] == nonce
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_rejects_invalid_state(self, mock_verify, client, db):
+        """POST /auth/google with invalid/tampered state is rejected."""
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": "tampered-state.signature",
+        })
+        assert resp.status_code == 401
+        assert "OAuth state" in resp.json()["detail"]
+        mock_verify.assert_not_called()
+
+    @patch("app.routers.auth._verify_google_token")
+    def test_google_auth_rejects_expired_state(self, mock_verify, client, db):
+        """POST /auth/google with expired state is rejected."""
+        from app.services import token_store
+        import base64 as _b64
+        import hmac as _hmac
+
+        old_ts = int(time.time()) - 700
+        payload = json.dumps({"nonce": "old-nonce", "ts": old_ts}, separators=(",", ":"))
+        b64 = _b64.urlsafe_b64encode(payload.encode()).decode()
+        sig = _hmac.new(
+            token_store._get_state_hmac_key(), b64.encode(), token_store.hashlib.sha256
+        ).hexdigest()[:32]
+        expired_state = f"{b64}.{sig}"
+
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": expired_state,
+        })
+        assert resp.status_code == 401
+        mock_verify.assert_not_called()
+
+    def test_google_auth_without_state_rejected(self, client):
+        """POST /auth/google without state is rejected at the endpoint level."""
+        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        assert resp.status_code == 401
+        assert "state" in resp.json()["detail"].lower()
+
+    def test_google_auth_rejects_nonce_mismatch(self, client):
+        """POST /auth/google rejects token when JWT nonce doesn't match state."""
+        from app.services import token_store
+        from app.routers.auth import _verify_google_token
+        import base64
+
+        state = token_store.create_google_oauth_state()
+        nonce_a = token_store.peek_google_oauth_nonce(state)
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "different-nonce-B",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce=nonce_a)
+            assert result is None  # Rejected: nonce mismatch
+
+
+# ---------------------------------------------------------------------------
+# Phase A security: Mandatory nonce binding — comprehensive regression suite
+# ---------------------------------------------------------------------------
+
+class TestGoogleMandatoryNonceBinding:
+    """Verify that POST /auth/google REQUIRES a valid signed state.
+
+    The state carries an HMAC-signed nonce that MUST match the JWT nonce.
+    No fallback to presence-only validation is allowed.
+    """
+
+    # 1. Missing state → rejected
+    @patch("app.routers.auth._verify_google_token")
+    def test_missing_state_rejected(self, mock_verify, client):
+        """POST /auth/google without state parameter is rejected."""
+        resp = client.post("/auth/google", json={"credential": "fake-jwt"})
+        assert resp.status_code == 401
+        assert "state" in resp.json()["detail"].lower()
+        mock_verify.assert_not_called()  # Rejected before token verification
+
+    # 2. Invalid state → rejected
+    @patch("app.routers.auth._verify_google_token")
+    def test_invalid_state_rejected(self, mock_verify, client):
+        """POST /auth/google with garbage state is rejected."""
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": "not-a-valid-state",
+        })
+        assert resp.status_code == 401
+        mock_verify.assert_not_called()
+
+    # 3. Tampered state → rejected
+    @patch("app.routers.auth._verify_google_token")
+    def test_tampered_state_rejected(self, mock_verify, client):
+        """POST /auth/google with tampered HMAC signature is rejected."""
+        from app.services import token_store
+        import base64 as _b64
+        import hmac as _hmac
+
+        # Create a valid state, then tamper with the signature
+        state = token_store.create_google_oauth_state()
+        b64, _sig = state.rsplit(".", 1)
+        tampered_sig = "0000000000000000"  # Wrong signature
+        tampered_state = f"{b64}.{tampered_sig}"
+
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": tampered_state,
+        })
+        assert resp.status_code == 401
+        mock_verify.assert_not_called()
+
+    # 4. Expired state → rejected
+    @patch("app.routers.auth._verify_google_token")
+    def test_expired_state_rejected(self, mock_verify, client):
+        """POST /auth/google with expired state (>10min old) is rejected."""
+        from app.services import token_store
+        import base64 as _b64
+        import hmac as _hmac
+
+        old_ts = int(time.time()) - 700  # 11 minutes ago
+        payload = json.dumps({"nonce": "old-nonce", "ts": old_ts}, separators=(",", ":"))
+        b64 = _b64.urlsafe_b64encode(payload.encode()).decode()
+        sig = _hmac.new(
+            token_store._get_state_hmac_key(), b64.encode(), token_store.hashlib.sha256
+        ).hexdigest()[:32]
+        expired_state = f"{b64}.{sig}"
+
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": expired_state,
+        })
+        assert resp.status_code == 401
+        mock_verify.assert_not_called()
+
+    # 5. Reused state → rejected
+    @patch("app.routers.auth._verify_google_token")
+    def test_reused_state_rejected(self, mock_verify, client, db):
+        """POST /auth/google rejects reuse of an already-consumed state."""
+        from app.services import token_store
+
+        state = token_store.create_google_oauth_state()
+        nonce = token_store.peek_google_oauth_nonce(state)
+
+        mock_verify.return_value = {
+            "sub": "google-reuse-test",
+            "email": "reuse@gmail.com",
+            "name": "Reuse Test",
+        }
+
+        # First use — should succeed
+        resp1 = client.post("/auth/google", json={
+            "credential": "fake-jwt-1",
+            "state": state,
+        })
+        assert resp1.status_code == 200
+
+        # Second use — should fail (state already consumed)
+        mock_verify.reset_mock()
+        resp2 = client.post("/auth/google", json={
+            "credential": "fake-jwt-2",
+            "state": state,
+        })
+        assert resp2.status_code == 401
+        mock_verify.assert_not_called()
+
+    # 6. JWT nonce != state nonce → rejected
+    def test_nonce_mismatch_rejected(self, client):
+        """POST /auth/google rejects token when JWT nonce doesn't match state."""
+        from app.services import token_store
+        from app.routers.auth import _verify_google_token
+        import base64
+
+        state = token_store.create_google_oauth_state()
+        nonce_a = token_store.peek_google_oauth_nonce(state)
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "different-nonce-B",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce=nonce_a)
+            assert result is None  # Rejected: nonce mismatch
+
+    # 7. JWT nonce == state nonce → accepted (at nonce-check level)
+    @patch("app.routers.auth._verify_google_token")
+    def test_nonce_match_accepted(self, mock_verify, client, db):
+        """POST /auth/google accepts token when JWT nonce matches state."""
+        from app.services import token_store
+
+        state = token_store.create_google_oauth_state()
+        nonce = token_store.peek_google_oauth_nonce(state)
+
+        mock_verify.return_value = {
+            "sub": "google-nonce-match",
+            "email": "match@gmail.com",
+            "name": "Match Test",
+        }
+        resp = client.post("/auth/google", json={
+            "credential": "fake-jwt",
+            "state": state,
+        })
+        assert resp.status_code == 200
+        # Verify the correct nonce was passed to verification
+        call_args = mock_verify.call_args
+        assert call_args[1]["expected_nonce"] == nonce
+
+    # 8. Valid Google JWT + missing nonce claim → rejected
+    def test_jwt_missing_nonce_rejected(self, client):
+        """Token without nonce claim is rejected even with valid state."""
+        import base64
+        from app.routers.auth import _verify_google_token
+        from app.services import token_store
+
+        state = token_store.create_google_oauth_state()
+        nonce = token_store.peek_google_oauth_nonce(state)
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            # No nonce claim
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce=nonce)
+            assert result is None  # Rejected: missing nonce in JWT
+
+    # 9. Invalid Google issuer → rejected
+    def test_invalid_issuer_rejected(self, client):
+        """Token with wrong issuer is rejected."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://evil.com",
+            "aud": "test",
+            "exp": int(time.time()) + 3600,
+            "nonce": "valid-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            result = _verify_google_token(token, expected_nonce="valid-nonce")
+            assert result is None  # Rejected: wrong issuer
+
+    # 10. Wrong audience → rejected (caught by PyJWT audience check)
+    def test_wrong_audience_rejected(self, client):
+        """Token with wrong audience is rejected by PyJWT."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "wrong-client-id",
+            "exp": int(time.time()) + 3600,
+            "nonce": "valid-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "correct-client-id"):
+            # This will fail at PyJWT audience check (wrong aud vs GOOGLE_CLIENT_ID)
+            # The nonce check passes, issuer check passes, but JWT verification fails
+            result = _verify_google_token(token, expected_nonce="valid-nonce")
+            assert result is None  # Rejected: wrong audience
+
+    # 11. Expired JWT → rejected (caught by PyJWT exp check)
+    def test_expired_jwt_rejected(self, client):
+        """Expired JWT is rejected by PyJWT."""
+        import base64
+        from app.routers.auth import _verify_google_token
+
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test"}
+        payload = {
+            "sub": "123",
+            "email": "test@gmail.com",
+            "iss": "https://accounts.google.com",
+            "aud": "test",
+            "exp": int(time.time()) - 3600,  # Expired 1 hour ago
+            "nonce": "valid-nonce",
+        }
+        h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+        p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"{h}.{p}.fake-sig"
+
+        with patch("app.config.settings.GOOGLE_CLIENT_ID", "test"):
+            # This will pass nonce/issuer pre-flight checks but fail at PyJWT exp check
+            result = _verify_google_token(token, expected_nonce="valid-nonce")
+            assert result is None  # Rejected: expired JWT

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { C } from "@/lib/ui";
-import { loginUrl, registerEmail, loginEmail, loginGoogle } from "@/lib/api";
+import { loginUrl, registerEmail, loginEmail, loginGoogle, getGoogleState } from "@/lib/api";
 import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
 
@@ -63,22 +63,31 @@ function GoogleSignInButton({ onError }) {
       return;
     }
 
-    // Build the Google OAuth URL for redirect flow
-    const redirectUri = window.location.origin;
-    const nonce = crypto.randomUUID();
-    const state = JSON.stringify({ nonce, redirect: "/dashboard" });
-
-    const params = new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID,
-      redirect_uri: redirectUri,
-      response_type: "id_token",
-      scope: "openid email profile",
-      nonce: nonce,
-      state: state,
-      prompt: "select_account",
-    });
-
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    // Phase A security: Get HMAC-signed state from backend for nonce binding.
+    // The backend generates a random nonce, embeds it in HMAC-signed state,
+    // and returns the state string.  We include:
+    //   - state: the HMAC-signed blob (returned to backend for validation)
+    //   - nonce: a simple random value Google embeds in the ID token
+    // On callback, we send both state and credential to the backend.
+    // The backend validates the HMAC, extracts the expected nonce, and
+    // compares it against the JWT nonce claim.
+    getGoogleState()
+      .then(({ state, nonce }) => {
+        const redirectUri = window.location.origin;
+        const params = new URLSearchParams({
+          client_id: GOOGLE_CLIENT_ID,
+          redirect_uri: redirectUri,
+          response_type: "id_token",
+          scope: "openid email profile",
+          nonce: nonce, // Backend-generated nonce — will be in JWT and validated
+          state: state, // HMAC-signed state — sent back for nonce binding
+          prompt: "select_account",
+        });
+        window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+      })
+      .catch(() => {
+        onError("Failed to initialize Google Sign-In. Please try again.");
+      });
   };
 
   if (!GOOGLE_CLIENT_ID) {

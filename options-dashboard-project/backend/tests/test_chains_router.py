@@ -330,3 +330,77 @@ def test_ws_streams_transformed_chain(client, logged_in, monkeypatch):
     assert body["expiry_date"] == "2026-08-28"
     assert body["chain"][0]["strike"] == 25000
     assert body["chain"][0]["call"]["ltp"] == 160.0
+
+
+# ---------------------------------------------------------------------------
+# Phase A: Broker token vs StrikeNova session distinction
+# ---------------------------------------------------------------------------
+
+
+def test_expiries_returns_403_for_email_session(client):
+    """Email session (identity token, no broker token) gets 403, not 401."""
+    session_id = token_store.set_token(
+        "email:user-123:random-value",
+        persist_to_db=False,
+    )
+    resp = client.get(
+        "/chains/NIFTY/expiries",
+        headers={"X-Session-Id": session_id},
+    )
+    assert resp.status_code == 403
+    assert "No broker token" in resp.json()["detail"]
+
+
+def test_expiries_returns_403_for_google_session(client):
+    """Google session (identity token, no broker token) gets 403, not 401."""
+    session_id = token_store.set_token(
+        "google:user-456:random-value",
+        persist_to_db=False,
+    )
+    resp = client.get(
+        "/chains/NIFTY/expiries",
+        headers={"X-Session-Id": session_id},
+    )
+    assert resp.status_code == 403
+    assert "No broker token" in resp.json()["detail"]
+
+
+def test_expiries_returns_401_for_no_session(client):
+    """No session at all returns 401 (not 403)."""
+    resp = client.get("/chains/NIFTY/expiries")
+    assert resp.status_code == 401
+    assert "Not logged in" in resp.json()["detail"]
+
+
+def test_chain_returns_403_for_email_session(client):
+    """Chain endpoint returns 403 for email session."""
+    session_id = token_store.set_token(
+        "email:user-789:random-value",
+        persist_to_db=False,
+    )
+    resp = client.get(
+        "/chains/NIFTY",
+        params={"expiry_date": "2026-09-24"},
+        headers={"X-Session-Id": session_id},
+    )
+    assert resp.status_code == 403
+    assert "No broker token" in resp.json()["detail"]
+
+
+def test_broker_token_still_works_for_expiries(client, logged_in, monkeypatch):
+    """Real broker token (no colon) still works normally."""
+    mock = AsyncMock(return_value={"data": [{"expiry": "2026-09-24"}]})
+    monkeypatch.setattr(upstox, "get_option_contracts", mock)
+
+    resp = client.get("/chains/NIFTY/expiries")
+    assert resp.status_code == 200
+
+
+def test_token_store_skip_persist_works():
+    """set_token with persist_to_db=False does not write to DB."""
+    session_id = token_store.set_token(
+        "email:test:val",
+        persist_to_db=False,
+    )
+    assert session_id is not None
+    assert token_store.get_token(session_id) == "email:test:val"

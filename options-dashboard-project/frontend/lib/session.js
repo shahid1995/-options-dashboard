@@ -64,5 +64,12 @@ export const captureGoogleIdTokenFromUrl = () => {
   // CRITICAL: strip the token from the URL bar immediately
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
 
-  return { idToken, redirectPath };
+  // Also capture the state parameter (for nonce binding)
+  let oauthState = null;
+  try {
+    const stateStr = params.get("state");
+    if (stateStr) oauthState = stateStr;
+  } catch {}
+
+  return { idToken, redirectPath, state: oauthState };
 };

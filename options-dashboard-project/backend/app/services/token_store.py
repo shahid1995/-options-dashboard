@@ -68,8 +68,8 @@ def _get_state_hmac_key() -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def set_token(token: str, *, connection_id: str | None = None, expires_at=None) -> str:
-    """Store a broker token in both memory and DB.
+def set_token(token: str, *, connection_id: str | None = None, expires_at=None, persist_to_db: bool = True) -> str:
+    """Store a broker token in memory (and optionally DB).
 
     Returns a new session ID bound to the token.
 
@@ -81,6 +81,10 @@ def set_token(token: str, *, connection_id: str | None = None, expires_at=None) 
         The broker connection ID to link this token to.
     expires_at : datetime, optional
         When the token expires (provider-specific).
+    persist_to_db : bool, optional
+        Whether to persist to DB (default True).  Set to False for
+        non-broker sessions (email/password, Google) that don't need
+        DB-backed token recovery after restart.
     """
     session_id = secrets.token_urlsafe(32)
     _sessions[session_id] = {
@@ -92,14 +96,18 @@ def set_token(token: str, *, connection_id: str | None = None, expires_at=None) 
         extra={"event": "auth.session.created", "session_prefix": session_id[:8]},
     )
 
-    # Persist to DB (best-effort — don't fail the login if DB write fails)
-    try:
-        _persist_token_to_db(session_id, token, connection_id, expires_at)
-    except Exception:
-        logger.warning(
-            "Failed to persist token to DB (non-critical)",
-            extra={"event": "auth.token.persist_failed", "session_prefix": session_id[:8]},
-        )
+    # Phase A fix: only persist to DB when explicitly requested (broker sessions).
+    # Email/password and Google sessions store identity tokens that are not
+    # broker access tokens — persisting them to DB is unnecessary and causes
+    # a misleading warning.
+    if persist_to_db:
+        try:
+            _persist_token_to_db(session_id, token, connection_id, expires_at)
+        except Exception:
+            logger.warning(
+                "Failed to persist token to DB (non-critical)",
+                extra={"event": "auth.token.persist_failed", "session_prefix": session_id[:8]},
+            )
 
     return session_id
 
@@ -341,6 +349,90 @@ def consume_oauth_state(state: str | None) -> dict | None:
 # ---------------------------------------------------------------------------
 
 _pending_states: dict[str, float] = {}
+
+
+# ---------------------------------------------------------------------------
+# Google OAuth nonce binding — HMAC-signed state carrying the nonce
+# ---------------------------------------------------------------------------
+#
+# Phase A security fix: The frontend generates a nonce and sends it to
+# Google, but the backend never sees it.  To cryptographically bind the
+# nonce to the authentication attempt, the backend generates its own
+# nonce, embeds it in an HMAC-signed state, and returns it to the
+# frontend.  The frontend includes this state in the Google OAuth URL.
+# When Google redirects back, the frontend sends both the id_token AND
+# the state to POST /auth/google.  The backend validates the HMAC,
+# extracts the expected nonce, and compares it against the JWT nonce.
+#
+# This prevents replay of Google ID tokens from unrelated auth attempts.
+
+def peek_google_oauth_nonce(state: str) -> str | None:
+    """Read the nonce from a signed Google OAuth state WITHOUT consuming it.
+
+    Used by POST /auth/google/state to return the nonce to the frontend.
+    The state remains in _pending_states for later consumption.
+    """
+    if not state or "." not in state:
+        return None
+    b64, sig = state.rsplit(".", 1)
+    try:
+        expected_sig = hmac.new(
+            _get_state_hmac_key(), b64.encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(b64))
+        return payload.get("nonce")
+    except Exception:
+        return None
+
+
+def create_google_oauth_state(nonce: str | None = None) -> str:
+    """Create an HMAC-signed state for Google OAuth nonce binding.
+
+    Generates a random nonce if not provided.  The state carries
+    {nonce, ts} and is HMAC-signed with the same key as broker OAuth state.
+
+    Returns the signed state string (base64.signature format).
+    """
+    now = time.time()
+    if nonce is None:
+        nonce = secrets.token_urlsafe(32)
+    payload = json.dumps(
+        {"nonce": nonce, "ts": int(now)},
+        separators=(",", ":"),
+    )
+    b64 = base64.urlsafe_b64encode(payload.encode()).decode()
+    sig = hmac.new(_get_state_hmac_key(), b64.encode(), hashlib.sha256).hexdigest()[:32]
+    state = f"{b64}.{sig}"
+    _pending_states[state] = now
+    return state
+
+
+def consume_google_oauth_state(state: str | None) -> str | None:
+    """Validate and extract the expected nonce from a signed Google OAuth state.
+
+    Returns the nonce string on success.
+    Returns None if state is invalid, expired, or already consumed.
+    """
+    if not state or "." not in state:
+        return None
+    b64, sig = state.rsplit(".", 1)
+    try:
+        expected_sig = hmac.new(
+            _get_state_hmac_key(), b64.encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None
+        payload = json.loads(base64.urlsafe_b64decode(b64))
+        if time.time() - payload.get("ts", 0) > _STATE_TTL_SECONDS:
+            return None
+        created_at = _pending_states.pop(state, None)
+        if created_at is None:
+            return None  # Already consumed or not from us
+        return payload.get("nonce")
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------

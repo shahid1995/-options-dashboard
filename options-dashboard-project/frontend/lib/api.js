@@ -52,8 +52,16 @@ export const logoutUser = () => api.post("/auth/logout").then((r) => r.data);
 
 // ---- Phase A: Google OAuth ----
 
-export const loginGoogle = (credential) =>
-  api.post("/auth/google", { credential }).then((r) => r.data);
+// Phase A security: Generate HMAC-signed state for nonce binding.
+// The frontend calls this before redirecting to Google, then includes
+// the returned state in the Google OAuth URL.  On callback, the state
+// is sent alongside the id_token so the backend can validate the nonce.
+export const getGoogleState = () =>
+  api.post("/auth/google/state").then((r) => r.data);
+
+// Phase A security: state parameter binds the nonce to the auth attempt.
+export const loginGoogle = (credential, state) =>
+  api.post("/auth/google", { credential, state }).then((r) => r.data);
 
 // ---- Analytics Token (Phase 10.2B-4 frontend integration) ----
 
