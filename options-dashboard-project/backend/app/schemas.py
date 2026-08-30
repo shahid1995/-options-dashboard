@@ -1,7 +1,32 @@
-from datetime import datetime
-from typing import Literal
+from datetime import datetime, timezone
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
+
+# ---------------------------------------------------------------------------
+# UTC-aware datetime serialization (Phase: timestamp standardization)
+# ---------------------------------------------------------------------------
+
+def _serialize_utc_datetime(dt: datetime) -> str | None:
+    """Serialize a datetime to ISO 8601 with explicit UTC offset.
+
+    SQLite strips timezone info on storage, so datetimes read back are naive
+    UTC.  This serializer re-attaches UTC and produces ``+00:00`` offset,
+    ensuring the frontend correctly interprets the instant.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+# Custom Pydantic type: naive datetimes from SQLite are treated as UTC
+UtcDatetime = Annotated[
+    datetime,
+    PlainSerializer(_serialize_utc_datetime, return_type=str, when_used="always"),
+]
+
 
 
 class LegOrderIn(BaseModel):
@@ -95,8 +120,8 @@ class OrderOut(BaseModel):
     price_source: str
     realized_pnl: float | None
     rejected_reason: str | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     # Strategy attribution (resolved by the service layer, not stored on PaperOrder)
     strategy_tag: str | None = None
     strategy_execution_id: str | None = None
@@ -139,8 +164,8 @@ class PositionOut(BaseModel):
     # (the position itself never duplicates strategy logic). Null/legacy rows
     # fall back to "Custom" at the boundary.
     strategy_tag: str | None = None
-    opened_at: datetime
-    closed_at: datetime | None
+    opened_at: UtcDatetime
+    closed_at: UtcDatetime | None
     # Unrealized P&L requires a market mark. The backend never fabricates it:
     # it stays null here and the UI applies the existing chain-cache mark.
     unrealized_pnl: float | None = None
@@ -353,8 +378,8 @@ class LegOut(BaseModel):
     premium: float
     quantity: int
     lot_size: int
-    entry_at: datetime
-    exit_at: datetime | None
+    entry_at: UtcDatetime
+    exit_at: UtcDatetime | None
     exit_price: float | None
     realized_pnl: float | None
 
@@ -368,8 +393,8 @@ class TradeOut(BaseModel):
     status: str
     entry_net: float
     realized_pnl: float | None
-    entry_at: datetime
-    exit_at: datetime | None
+    entry_at: UtcDatetime
+    exit_at: UtcDatetime | None
     legs: list[LegOut]
 
 
@@ -535,8 +560,8 @@ class JournalRowOut(BaseModel):
     execution_id: str
     strategy: str
     symbol: str
-    entry_at: datetime
-    exit_at: datetime
+    entry_at: UtcDatetime
+    exit_at: UtcDatetime
     duration_seconds: float | None = None
     duration_label: str | None = None
     realized_pnl: float
@@ -558,7 +583,8 @@ class TradeAnnotationsOut(BaseModel):
     execution_id: str
     tags: list[str] | None = None
     notes: str | None = None
-
+
+
 class TradeLegDetailOut(BaseModel):
     """One leg of a strategy execution with entry/exit details."""
 
@@ -584,8 +610,8 @@ class TradeDetailOut(BaseModel):
     symbol: str
     status: str
     result: str | None = None
-    entry_at: datetime
-    exit_at: datetime | None = None
+    entry_at: UtcDatetime
+    exit_at: UtcDatetime | None = None
     duration_seconds: float | None = None
     duration_label: str | None = None
     entry_net: float
@@ -609,8 +635,8 @@ class StrategyTradeRowOut(BaseModel):
     symbol: str
     status: str
     result: str | None = None
-    entry_at: datetime
-    exit_at: datetime | None = None
+    entry_at: UtcDatetime
+    exit_at: UtcDatetime | None = None
     realized_pnl: float | None = None
     duration_seconds: float | None = None
     duration_label: str | None = None
@@ -988,8 +1014,8 @@ class StrategyTemplateOut(BaseModel):
     name: str
     symbol: str
     legs: list[StrategyTemplateLegOut]
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 # ---- Phase 6.6.6: live position valuation ----------------------------------
