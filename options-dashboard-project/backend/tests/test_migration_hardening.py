@@ -79,6 +79,12 @@ def test_sqlite_fingerprint_is_independent_of_row_storage_order(tmp_path: Path) 
     assert fp_before == fp_after
 
 
+def test_sqlite_boolean_and_postgres_boolean_share_fingerprint() -> None:
+    tool = load_tool()
+    assert tool.sha256_rows([(1,)]) == tool.sha256_rows([(True,)])
+    assert tool.sha256_rows([(0,)]) == tool.sha256_rows([(False,)])
+
+
 def test_alembic_head_is_discovered_dynamically() -> None:
     tool = load_tool()
     assert hasattr(tool, "get_alembic_heads")
