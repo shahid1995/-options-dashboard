@@ -109,7 +109,7 @@ def test_migration_failure_during_sequence_repair_rolls_back_data(tmp_path):
 
         @event.listens_for(postgres_engine, "before_cursor_execute")
         def fail_on_sequence_repair(conn, cursor, statement, parameters, context, executemany):
-            if "setval(" in statement.lower():
+            if "pg_get_serial_sequence" in statement.lower():
                 raise RuntimeError("injected sequence-repair failure")
 
         try:
