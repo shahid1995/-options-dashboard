@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Safe, reversible SQLite -> PostgreSQL migration utility for StrikeNova.
-
-The utility reads only from a verified SQLite backup and writes to PostgreSQL.
-It never changes the application's DATABASE_URL or deploys production.
-"""
+"""Safe, reversible SQLite -> PostgreSQL migration utility for StrikeNova."""
 
 from __future__ import annotations
 
@@ -120,8 +116,19 @@ def canonical_value(value: Any) -> list[str]:
     return ["str", str(value)]
 
 
+def _fingerprint_token(value: Any) -> tuple[str, ...]:
+    # SQLite reflects BOOLEAN columns as INTEGER 0/1 while PostgreSQL returns
+    # Python bools. Normalize those two database representations only for the
+    # cross-database fingerprint; canonical_value() remains type-sensitive.
+    if isinstance(value, bool):
+        return ("bool", "1" if value else "0")
+    if isinstance(value, int) and value in (0, 1):
+        return ("bool", str(value))
+    return tuple(canonical_value(value))
+
+
 def _canonical_row(row: Sequence[Any]) -> tuple[tuple[str, ...], ...]:
-    return tuple(tuple(canonical_value(value)) for value in row)
+    return tuple(_fingerprint_token(value) for value in row)
 
 
 def sha256_rows(rows: Iterable[Sequence[Any]]) -> str:
@@ -371,8 +378,7 @@ class PgWriter:
                 max_value = int(cur.fetchone()[0] or 0)
                 cur.execute("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=%s", (sequence_name.split('.')[-1],))
                 row = cur.fetchone()
-                raw_sequence_value = row[0] if row else None
-                sequence_value = int(raw_sequence_value) if raw_sequence_value is not None else 0
+                sequence_value = int(row[0]) if row and row[0] is not None else 0
                 results[sequence_name] = {"table": table, "column": column, "value": sequence_value, "max": max_value, "ok": sequence_value >= max_value}
         return results
 
@@ -468,7 +474,7 @@ def assert_target_empty(writer: PgWriter, tables: Sequence[str]) -> None:
 
 def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: bool = False) -> MigrationResult:
     result = MigrationResult(table=table)
-    started = time.monotonic()
+    start = time.monotonic()
     result.source_count = reader.count(table)
     if result.source_count == 0:
         result.skipped = True
@@ -495,35 +501,8 @@ def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: b
         result.rows_written += writer.insert_batch(table, common_columns, batch)
         offset += len(batch)
     result.target_count = writer.count(table)
-    result.duration_seconds = time.monotonic() - started
+    result.duration_seconds = time.monotonic() - start
     return result
-
-
-def _repair_sequences_with_sqlalchemy(connection) -> None:
-    from sqlalchemy import text
-
-    sequence_rows = connection.execute(
-        text(
-            "SELECT table_name, column_name, pg_get_serial_sequence('public.' || table_name, column_name) "
-            "FROM information_schema.columns WHERE table_schema='public' "
-            "AND (is_identity='YES' OR column_default LIKE 'nextval(%')"
-        )
-    ).fetchall()
-    for table, column, sequence_name in sequence_rows:
-        if not sequence_name:
-            continue
-        max_value = connection.execute(text(f'SELECT MAX("{column}") FROM "{table}"')).scalar()
-        if max_value is None:
-            continue
-        current = connection.execute(
-            text("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=:name"),
-            {"name": sequence_name.split('.')[-1]},
-        ).scalar()
-        if current is None or int(current) < int(max_value):
-            connection.execute(
-                text("SELECT setval(:sequence_name, :max_value, true)"),
-                {"sequence_name": sequence_name, "max_value": int(max_value)},
-            )
 
 
 def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
@@ -562,6 +541,33 @@ def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZ
         source_conn.close()
         target_conn.close()
     return verify_databases(sqlite_engine, postgres_engine)
+
+
+def _repair_sequences_with_sqlalchemy(connection) -> None:
+    from sqlalchemy import text
+
+    sequence_rows = connection.execute(
+        text(
+            "SELECT table_name, column_name, pg_get_serial_sequence('public.' || table_name, column_name) "
+            "FROM information_schema.columns WHERE table_schema='public' "
+            "AND (is_identity='YES' OR column_default LIKE 'nextval(%')"
+        )
+    ).fetchall()
+    for table, column, sequence_name in sequence_rows:
+        if not sequence_name:
+            continue
+        max_value = connection.execute(text(f'SELECT MAX("{column}") FROM "{table}"')).scalar()
+        if max_value is None:
+            continue
+        current = connection.execute(
+            text("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=:name"),
+            {"name": sequence_name.split('.')[-1]},
+        ).scalar()
+        if current is None or int(current) < int(max_value):
+            connection.execute(
+                text("SELECT setval(:sequence_name, :max_value, true)"),
+                {"sequence_name": sequence_name, "max_value": int(max_value)},
+            )
 
 
 def verify_table(reader: SQLiteReader, writer: PgWriter, table: str) -> VerificationResult:
@@ -616,21 +622,18 @@ def verify_databases(sqlite_engine, postgres_engine) -> dict[str, Any]:
                 and not security.get("invalid_gex_sources")
                 and int(security.get("gex_missing_connection_provenance", 0)) == 0
                 and "cross_user_violation" not in isolation,
-            "tables": {
-                v.table: {
-                    "row_count": v.target_count,
-                    "source_count": v.source_count,
-                    "fingerprint_match": v.fingerprint_match,
-                    "source_fingerprint": v.source_fingerprint,
-                    "target_fingerprint": v.target_fingerprint,
-                    "pk_unique": v.pk_unique,
-                    "fk_clean": v.fk_clean,
-                    "not_null_clean": v.not_null_clean,
-                    "errors": v.errors,
-                    "passed": v.passed,
-                }
-                for v in verifications
-            },
+            "tables": {v.table: {
+                "row_count": v.target_count,
+                "source_count": v.source_count,
+                "fingerprint_match": v.fingerprint_match,
+                "source_fingerprint": v.source_fingerprint,
+                "target_fingerprint": v.target_fingerprint,
+                "pk_unique": v.pk_unique,
+                "fk_clean": v.fk_clean,
+                "not_null_clean": v.not_null_clean,
+                "errors": v.errors,
+                "passed": v.passed,
+            } for v in verifications},
             "sequences": sequences,
             "security": security,
             "isolation": isolation,
