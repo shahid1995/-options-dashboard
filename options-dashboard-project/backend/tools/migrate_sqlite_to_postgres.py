@@ -371,7 +371,8 @@ class PgWriter:
                 max_value = int(cur.fetchone()[0] or 0)
                 cur.execute("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=%s", (sequence_name.split('.')[-1],))
                 row = cur.fetchone()
-                sequence_value = int(row[0]) if row else 0
+                raw_sequence_value = row[0] if row else None
+                sequence_value = int(raw_sequence_value) if raw_sequence_value is not None else 0
                 results[sequence_name] = {"table": table, "column": column, "value": sequence_value, "max": max_value, "ok": sequence_value >= max_value}
         return results
 
@@ -526,7 +527,6 @@ def _repair_sequences_with_sqlalchemy(connection) -> None:
 
 
 def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
-    """Atomically migrate all application tables and verify after commit."""
     from sqlalchemy import MetaData, select
 
     source_metadata = MetaData()
@@ -616,18 +616,21 @@ def verify_databases(sqlite_engine, postgres_engine) -> dict[str, Any]:
                 and not security.get("invalid_gex_sources")
                 and int(security.get("gex_missing_connection_provenance", 0)) == 0
                 and "cross_user_violation" not in isolation,
-            "tables": {v.table: {
-                "row_count": v.target_count,
-                "source_count": v.source_count,
-                "fingerprint_match": v.fingerprint_match,
-                "source_fingerprint": v.source_fingerprint,
-                "target_fingerprint": v.target_fingerprint,
-                "pk_unique": v.pk_unique,
-                "fk_clean": v.fk_clean,
-                "not_null_clean": v.not_null_clean,
-                "errors": v.errors,
-                "passed": v.passed,
-            } for v in verifications},
+            "tables": {
+                v.table: {
+                    "row_count": v.target_count,
+                    "source_count": v.source_count,
+                    "fingerprint_match": v.fingerprint_match,
+                    "source_fingerprint": v.source_fingerprint,
+                    "target_fingerprint": v.target_fingerprint,
+                    "pk_unique": v.pk_unique,
+                    "fk_clean": v.fk_clean,
+                    "not_null_clean": v.not_null_clean,
+                    "errors": v.errors,
+                    "passed": v.passed,
+                }
+                for v in verifications
+            },
             "sequences": sequences,
             "security": security,
             "isolation": isolation,
@@ -687,7 +690,6 @@ def main() -> int:
     if not pg_url.startswith("postgresql+psycopg://"):
         print("ERROR: PostgreSQL URL must use the supported psycopg dialect")
         return 1
-
     sqlite_path = Path(args.sqlite).resolve()
     if not sqlite_path.exists():
         print(f"ERROR: SQLite backup not found: {sqlite_path}")
@@ -703,11 +705,9 @@ def main() -> int:
         print("SQLite integrity: ok")
         print(f"Backup SHA-256: {reader.file_sha256()}")
         print(f"Backup size: {reader.file_size():,} bytes")
-
         if args.dry_run:
             print("DRY RUN: source validated; no PostgreSQL writes performed")
             return 0
-
         if args.validate_only or args.ready_for_cutover:
             tables = [t for t in reader.get_tables() if t not in SKIP_TABLES and writer.table_exists(t)]
             verifications = [verify_table(reader, writer, table) for table in tables]
@@ -722,7 +722,6 @@ def main() -> int:
                 for reason in reasons:
                     print(f"- {reason}")
             return 0 if ready else 1
-
         tables = [t for t in reader.get_tables() if t not in SKIP_TABLES]
         assert_target_empty(writer, tables)
         from sqlalchemy import create_engine
