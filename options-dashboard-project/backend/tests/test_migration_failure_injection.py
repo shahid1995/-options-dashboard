@@ -46,7 +46,7 @@ def test_migration_failure_rolls_back_all_imported_rows(tmp_path):
 
         @event.listens_for(postgres_engine, "before_cursor_execute")
         def fail_on_users_insert(conn, cursor, statement, parameters, context, executemany):
-            if 'INSERT INTO "users"' in statement:
+            if statement.lstrip().lower().startswith("insert into users"):
                 raise RuntimeError("injected migration failure")
 
         try:
@@ -76,7 +76,7 @@ def test_migration_failure_during_later_table_rolls_back_earlier_tables(tmp_path
 
         @event.listens_for(postgres_engine, "before_cursor_execute")
         def fail_on_gex_insert(conn, cursor, statement, parameters, context, executemany):
-            if 'INSERT INTO "gex_snapshots"' in statement:
+            if statement.lstrip().lower().startswith("insert into gex_snapshots"):
                 raise RuntimeError("injected later-table failure")
 
         try:
@@ -106,7 +106,7 @@ def test_migration_failure_during_sequence_repair_rolls_back_data(tmp_path):
 
         @event.listens_for(postgres_engine, "before_cursor_execute")
         def fail_on_sequence_repair(conn, cursor, statement, parameters, context, executemany):
-            if "setval(" in statement:
+            if "setval(" in statement.lower():
                 raise RuntimeError("injected sequence-repair failure")
 
         try:
