@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import MetaData, create_engine, text
+from sqlalchemy.orm import sessionmaker
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,18 +22,11 @@ from migrate_sqlite_to_postgres import (  # noqa: E402
     normalize_url,
     verify_databases,
 )
+from app.identity import BrokerConnection, User  # noqa: E402
+from app.models import GexSnapshot  # noqa: E402
 
 
-def _load_synthetic_builder():
-    path = Path(__file__).with_name("test_rehearsal_synthetic.py")
-    spec = importlib.util.spec_from_file_location("synthetic_builder", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.build_synthetic_dataset
-
-
-def _prepare_postgres_schema(engine) -> None:
+def _prepare_schema(engine) -> None:
     cfg = Config(str(ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", str(engine.url))
@@ -49,55 +43,69 @@ def _clear_postgres_target(engine) -> None:
             conn.execute(text(f'DELETE FROM "{table_name}"'))
 
 
-def _align_synthetic_fixture_schema(sqlite_path: Path) -> None:
-    """Keep the legacy synthetic fixture compatible with the current Alembic schema."""
-    engine = create_engine(f"sqlite:///{sqlite_path}")
+def _populate_current_schema_synthetic_dataset(engine) -> None:
+    session = sessionmaker(bind=engine)()
     try:
-        with engine.begin() as conn:
-            columns = {
-                row[1]
-                for row in conn.exec_driver_sql('PRAGMA table_info("broker_tokens")').fetchall()
-            }
-            if "broker" not in columns:
-                conn.exec_driver_sql(
-                    'ALTER TABLE "broker_tokens" ADD COLUMN "broker" VARCHAR DEFAULT \'UPSTOX\''
-                )
-            if "broker_analytics_token_encrypted" not in columns:
-                conn.exec_driver_sql(
-                    'ALTER TABLE "broker_tokens" ADD COLUMN "broker_analytics_token_encrypted" VARCHAR'
-                )
-            if "has_analytics_token" not in columns:
-                conn.exec_driver_sql(
-                    'ALTER TABLE "broker_tokens" ADD COLUMN "has_analytics_token" BOOLEAN DEFAULT 0'
-                )
-            if "updated_at" not in columns:
-                conn.exec_driver_sql(
-                    'ALTER TABLE "broker_tokens" ADD COLUMN "updated_at" DATETIME'
-                )
+        user = User(
+            id="ci-rehearsal-user",
+            email="ci-rehearsal@example.com",
+            identity_source="email",
+        )
+        connection = BrokerConnection(
+            id="ci-rehearsal-connection",
+            user_id=user.id,
+            broker="UPSTOX",
+            broker_account_id="ci-rehearsal-account",
+            is_default=True,
+            status="connected",
+            capability_mode="data",
+            data_status="active",
+            trading_status="inactive",
+        )
+        session.add_all([user, connection])
+        session.add(
+            GexSnapshot(
+                owner_id=user.id,
+                connection_id=connection.id,
+                data_source="analytics_token",
+                symbol="NIFTY",
+                expiry="2026-12-31",
+                spot=25000.0,
+                methodology="GEX_STANDARD_V1",
+                sign_convention="NAIVE_DEALER_CONVENTION",
+                availability_status="available",
+                valid_strike_count=1,
+                total_strike_count=1,
+                captured_at=datetime.now(timezone.utc),
+                strike_data="[]",
+                expiry_data="[]",
+                methodology_metadata="{}",
+            )
+        )
+        session.commit()
     finally:
-        engine.dispose()
+        session.close()
 
 
-def test_synthetic_rehearsal_uses_ci_postgres_and_verifies_full_report(tmp_path):
+def test_synthetic_rehearsal_uses_current_alembic_schema_and_verifies_full_report(tmp_path):
     raw_url = os.getenv("TEST_DATABASE_URL")
     if not raw_url:
         pytest.skip("TEST_DATABASE_URL is not configured")
 
-    sqlite_path = tmp_path / "synthetic-ci.db"
-    _load_synthetic_builder()(str(sqlite_path))
-    _align_synthetic_fixture_schema(sqlite_path)
-
-    sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
+    sqlite_engine = create_engine(
+        f"sqlite:///{tmp_path / 'synthetic-ci.db'}",
+        connect_args={"check_same_thread": False},
+    )
     postgres_engine = create_engine(normalize_url(raw_url), pool_pre_ping=True)
     try:
-        _prepare_postgres_schema(postgres_engine)
+        _prepare_schema(sqlite_engine)
+        _populate_current_schema_synthetic_dataset(sqlite_engine)
+
+        _prepare_schema(postgres_engine)
         _clear_postgres_target(postgres_engine)
 
-        report = migrate_database(
-            sqlite_engine,
-            postgres_engine,
-            batch_size=1000,
-        )
+        migrate_database(sqlite_engine, postgres_engine, batch_size=1000)
+        report = verify_databases(sqlite_engine, postgres_engine)
 
         assert report["ok"] is True, {
             "failed_tables": {
@@ -113,9 +121,6 @@ def test_synthetic_rehearsal_uses_ci_postgres_and_verifies_full_report(tmp_path)
             "security": report["security"],
             "isolation": report["isolation"],
         }
-
-        verified = verify_databases(sqlite_engine, postgres_engine)
-        assert verified["ok"] is True
     finally:
         sqlite_engine.dispose()
         postgres_engine.dispose()
