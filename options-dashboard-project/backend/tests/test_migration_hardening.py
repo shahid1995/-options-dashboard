@@ -41,7 +41,6 @@ def test_read_only_sqlite_reader_does_not_checkpoint_wal(tmp_path: Path) -> None
         conn.execute("CREATE TABLE demo (id INTEGER PRIMARY KEY, value TEXT)")
         conn.execute("INSERT INTO demo(value) VALUES ('one')")
         conn.commit()
-
     reader = tool.SQLiteReader(str(db_path))
     try:
         with pytest.raises(RuntimeError, match="read-write"):
@@ -55,27 +54,14 @@ def test_sqlite_fingerprint_is_independent_of_row_storage_order(tmp_path: Path) 
     db_path = tmp_path / "order.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE demo (id INTEGER PRIMARY KEY, value TEXT)")
-        conn.executemany(
-            "INSERT INTO demo(id, value) VALUES (?, ?)",
-            [(1, "one"), (2, "two"), (3, "three")],
-        )
+        conn.executemany("INSERT INTO demo(id, value) VALUES (?, ?)", [(1, "one"), (2, "two"), (3, "three")])
         conn.commit()
-
-    reader = tool.SQLiteReader(str(db_path))
-    fp_before = reader.compute_fingerprint("demo", ["id", "value"])
-    reader.close()
-
+    reader = tool.SQLiteReader(str(db_path)); fp_before = reader.compute_fingerprint("demo", ["id", "value"]); reader.close()
     with sqlite3.connect(db_path) as conn:
         conn.execute("DELETE FROM demo")
-        conn.executemany(
-            "INSERT INTO demo(id, value) VALUES (?, ?)",
-            [(3, "three"), (1, "one"), (2, "two")],
-        )
+        conn.executemany("INSERT INTO demo(id, value) VALUES (?, ?)", [(3, "three"), (1, "one"), (2, "two")])
         conn.commit()
-
-    reader = tool.SQLiteReader(str(db_path))
-    fp_after = reader.compute_fingerprint("demo", ["id", "value"])
-    reader.close()
+    reader = tool.SQLiteReader(str(db_path)); fp_after = reader.compute_fingerprint("demo", ["id", "value"]); reader.close()
     assert fp_before == fp_after
 
 
@@ -87,29 +73,23 @@ def test_sqlite_boolean_and_postgres_boolean_share_fingerprint() -> None:
 
 def test_alembic_head_is_discovered_dynamically() -> None:
     tool = load_tool()
-    assert hasattr(tool, "get_alembic_heads")
     heads = tool.get_alembic_heads(Path(__file__).resolve().parent.parent / "alembic")
-    assert isinstance(heads, list)
-    assert len(heads) == 1
+    assert isinstance(heads, list) and len(heads) == 1
 
 
 def test_no_hardcoded_alembic_head_constant() -> None:
-    source = MODULE_PATH.read_text(encoding="utf-8")
-    assert "EXPECTED_ALEMBIC_HEAD =" not in source
+    assert "EXPECTED_ALEMBIC_HEAD =" not in MODULE_PATH.read_text(encoding="utf-8")
 
 
 def test_insert_batch_does_not_commit_each_batch() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
-    start = source.index("def insert_batch")
-    end = source.index("def compute_fingerprint", start)
-    insert_batch_source = source[start:end]
-    assert ".commit()" not in insert_batch_source
+    start = source.index("def insert_batch"); end = source.index("def compute_fingerprint", start)
+    assert ".commit()" not in source[start:end]
 
 
 def test_migration_has_explicit_commit_and_rollback_boundary() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
-    start = source.index("def migrate_database")
-    end = source.index("def verify_table", start)
+    start = source.index("def migrate_database"); end = source.index("def verify_table", start)
     migration_source = source[start:end]
     assert "transaction = target_conn.begin()" in migration_source
     assert "transaction.commit()" in migration_source
@@ -117,22 +97,37 @@ def test_migration_has_explicit_commit_and_rollback_boundary() -> None:
 
 
 def test_sequence_reset_sql_is_present() -> None:
-    tool = load_tool()
-    sql = tool.sequence_reset_sql("users", "id")
-    assert "pg_get_serial_sequence" in sql
-    assert "setval" in sql
+    tool = load_tool(); sql = tool.sequence_reset_sql("users", "id")
+    assert "pg_get_serial_sequence" in sql and "setval" in sql
 
 
 def test_redaction_never_returns_password() -> None:
-    tool = load_tool()
-    redacted = tool.redact_url("postgresql+psycopg://user:super-secret@host:5432/db")
+    tool = load_tool(); redacted = tool.redact_url("postgresql+psycopg://user:super-secret@host:5432/db")
     assert "super-secret" not in redacted
 
 
 def test_canonical_gex_sources_remain_frozen() -> None:
     tool = load_tool()
-    assert tool.GEX_DATA_SOURCES == {
-        "analytics_token",
-        "broker_oauth",
-        "api_upload",
-    }
+    assert tool.GEX_DATA_SOURCES == {"analytics_token", "broker_oauth", "api_upload"}
+
+
+def test_missing_target_table_is_a_failed_verification() -> None:
+    tool = load_tool()
+
+    class FakeWriter:
+        def table_exists(self, table: str) -> bool:
+            return table != "missing"
+
+    results = tool._missing_target_verifications(FakeWriter(), ["present", "missing"])
+    assert len(results) == 1
+    assert results[0].table == "missing"
+    assert results[0].passed is False
+    assert results[0].errors == ["table missing from PostgreSQL target"]
+
+
+def test_isolation_verifier_exposes_cross_user_violation_gate() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    assert '"cross_user_violation"' in source
+    assert "session_broker_owner_mismatch" in source
+    assert "gex_connection_owner_mismatch" in source
+    assert 'isolation.get("cross_user_violation", 0) == 0' in source
