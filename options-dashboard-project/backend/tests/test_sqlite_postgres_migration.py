@@ -135,13 +135,7 @@ def _column_fingerprint_differences(sqlite_engine, postgres_engine, tables):
     with sqlite_engine.connect() as src, postgres_engine.connect() as dst:
         for table in tables:
             source_columns = [c[1] for c in src.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()]
-            target_columns = [
-                row[0]
-                for row in dst.execute(
-                    text("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=:table ORDER BY ordinal_position"),
-                    {"table": table},
-                ).fetchall()
-            ]
+            target_columns = [row[0] for row in dst.execute(text("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=:table ORDER BY ordinal_position"), {"table": table}).fetchall()]
             common = [c for c in source_columns if c in target_columns]
             table_diffs = {}
             for column in common:
@@ -185,16 +179,13 @@ def test_rehearsal_migrates_sqlite_rows_into_postgres(postgres_engine, tmp_path)
     migrate_sqlite_to_postgres.migrate_database(sqlite_engine, postgres_engine, batch_size=1000)
     report = migrate_sqlite_to_postgres.verify_databases(sqlite_engine, postgres_engine)
 
-    differences = _column_fingerprint_differences(sqlite_engine, postgres_engine, ["users", "broker_connections", "gex_snapshots"])
-    assert report["ok"] is True, repr({
-        "failed_tables": [name for name, details in report["tables"].items() if not details["passed"]],
-        "table_errors": {name: details["errors"] for name, details in report["tables"].items() if details["errors"]},
-        "fingerprints": {name: (details["source_fingerprint"], details["target_fingerprint"]) for name, details in report["tables"].items() if not details["fingerprint_match"]},
-        "column_fingerprint_differences": differences,
-        "sequences": report["sequences"],
-        "security": report["security"],
-        "isolation": report["isolation"],
-    })
+    if not report["ok"]:
+        bad_tables = {name: details["errors"] for name, details in report["tables"].items() if not details["passed"]}
+        bad_sequences = {name: details for name, details in report["sequences"].items() if not details.get("ok")}
+        security = report["security"]
+        isolation = report["isolation"]
+        pytest.fail(f"bad_tables={bad_tables}; bad_sequences={bad_sequences}; security={security}; isolation={isolation}")
+
     assert report["tables"]["users"]["row_count"] == 1
     assert report["tables"]["gex_snapshots"]["row_count"] == 1
 
