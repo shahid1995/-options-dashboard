@@ -65,7 +65,8 @@ def _get_session():
     database file is used regardless of process working directory.
     """
     db_url = settings.DATABASE_URL or f"sqlite:///{_DEFAULT_DB_PATH}"
-    engine = create_engine(db_url, connect_args={"check_same_thread": False})
+    connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+    engine = create_engine(db_url, connect_args=connect_args)
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
 
