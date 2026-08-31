@@ -18,7 +18,6 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 from migrate_sqlite_to_postgres import (  # noqa: E402
     SKIP_TABLES,
-    get_table_order,
     migrate_database,
     normalize_url,
     verify_databases,
@@ -43,10 +42,15 @@ def _prepare_schema(engine) -> None:
 def _clear_postgres_target(engine) -> None:
     metadata = MetaData()
     metadata.reflect(bind=engine)
-    tables = [name for name in get_table_order(metadata) if name not in SKIP_TABLES]
+    tables = [
+        table_name
+        for table_name in metadata.tables
+        if table_name not in SKIP_TABLES
+    ]
     with engine.begin() as conn:
-        for table_name in reversed(tables):
-            conn.execute(text(f'DELETE FROM "{table_name}"'))
+        if tables:
+            quoted = ", ".join(f'"{table_name}"' for table_name in tables)
+            conn.execute(text(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"))
 
 
 def _populate_large_dataset(engine) -> None:
@@ -160,7 +164,7 @@ def test_large_realistic_rehearsal_migrates_and_verifies_without_data_loss(tmp_p
             "isolation": report["isolation"],
         }
         assert report["tables"]["gex_snapshots"]["source_count"] == EXPECTED_GEX_ROWS
-        assert report["tables"]["gex_snapshots"]["target_count"] == EXPECTED_GEX_ROWS
+        assert report["tables"]["gex_snapshots"]["row_count"] == EXPECTED_GEX_ROWS
         assert report["tables"]["gex_snapshots"]["fingerprint_match"] is True
         assert elapsed_seconds < MAX_REHEARSAL_SECONDS
 
