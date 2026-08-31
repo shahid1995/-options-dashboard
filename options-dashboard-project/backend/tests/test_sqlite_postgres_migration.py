@@ -19,6 +19,7 @@ from tools.migrate_sqlite_to_postgres import (
     normalize_url,
     redact_url,
     sequence_reset_sql,
+    sha256_rows,
     storage_safety_ok,
 )
 from app.identity import BrokerConnection, User
@@ -129,6 +130,32 @@ def postgres_engine():
         engine.dispose()
 
 
+def _column_fingerprint_differences(sqlite_engine, postgres_engine, tables):
+    differences = {}
+    with sqlite_engine.connect() as src, postgres_engine.connect() as dst:
+        for table in tables:
+            source_columns = [c[1] for c in src.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()]
+            target_columns = [
+                row[0]
+                for row in dst.execute(
+                    text("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=:table ORDER BY ordinal_position"),
+                    {"table": table},
+                ).fetchall()
+            ]
+            common = [c for c in source_columns if c in target_columns]
+            table_diffs = {}
+            for column in common:
+                source_rows = src.execute(text(f'SELECT "{column}" FROM "{table}"')).fetchall()
+                target_rows = dst.execute(text(f'SELECT "{column}" FROM "{table}"')).fetchall()
+                source_hash = sha256_rows(source_rows)
+                target_hash = sha256_rows(target_rows)
+                if source_hash != target_hash:
+                    table_diffs[column] = (source_hash, target_hash)
+            if table_diffs:
+                differences[table] = table_diffs
+    return differences
+
+
 def test_rehearsal_migrates_sqlite_rows_into_postgres(postgres_engine, tmp_path):
     sqlite_engine = create_engine(f"sqlite:///{tmp_path / 'source.db'}", connect_args={"check_same_thread": False})
     prepare_schema(sqlite_engine)
@@ -158,21 +185,12 @@ def test_rehearsal_migrates_sqlite_rows_into_postgres(postgres_engine, tmp_path)
     migrate_sqlite_to_postgres.migrate_database(sqlite_engine, postgres_engine, batch_size=1000)
     report = migrate_sqlite_to_postgres.verify_databases(sqlite_engine, postgres_engine)
 
+    differences = _column_fingerprint_differences(sqlite_engine, postgres_engine, ["users", "broker_connections", "gex_snapshots"])
     assert report["ok"] is True, repr({
-        "failed_tables": [
-            name for name, details in report["tables"].items()
-            if not details["passed"]
-        ],
-        "table_errors": {
-            name: details["errors"]
-            for name, details in report["tables"].items()
-            if details["errors"]
-        },
-        "fingerprints": {
-            name: (details["source_fingerprint"], details["target_fingerprint"])
-            for name, details in report["tables"].items()
-            if not details["fingerprint_match"]
-        },
+        "failed_tables": [name for name, details in report["tables"].items() if not details["passed"]],
+        "table_errors": {name: details["errors"] for name, details in report["tables"].items() if details["errors"]},
+        "fingerprints": {name: (details["source_fingerprint"], details["target_fingerprint"]) for name, details in report["tables"].items() if not details["fingerprint_match"]},
+        "column_fingerprint_differences": differences,
         "sequences": report["sequences"],
         "security": report["security"],
         "isolation": report["isolation"],
