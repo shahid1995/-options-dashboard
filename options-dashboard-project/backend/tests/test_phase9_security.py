@@ -284,6 +284,46 @@ class TestHealthEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# Staging URL integrity (Phase J)
+# ---------------------------------------------------------------------------
+
+
+class TestStagingUrlIntegrity:
+    """Verify no documentation references the orphaned staging domain.
+
+    Regression: Railway's staging-backend.up.railway.app was an orphaned
+    domain serving 'ET Verdict' instead of StrikeNova. All staging
+    references must use the corrected domain.
+    """
+
+    ORPHANED_HOST = "staging-backend.up.railway.app"
+
+    def test_no_orphaned_staging_url_in_docs(self):
+        import glob
+        import os
+
+        docs_dir = os.path.join(
+            os.path.dirname(__file__), "..", "..", "docs"
+        )
+        if not os.path.isdir(docs_dir):
+            pytest.skip("docs directory not found")
+
+        violations = []
+        for fpath in glob.glob(os.path.join(docs_dir, "**", "*.md"), recursive=True):
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    for i, line in enumerate(f, 1):
+                        if self.ORPHANED_HOST in line:
+                            violations.append(f"{os.path.basename(fpath)}:{i}")
+            except UnicodeDecodeError:
+                continue
+        assert not violations, (
+            f"Orphaned staging URL '{self.ORPHANED_HOST}' found in: {violations}. "
+            "Use staging-backend-staging-8159.up.railway.app instead."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Security: no _state references in production code
 # ---------------------------------------------------------------------------
 

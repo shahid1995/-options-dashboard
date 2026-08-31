@@ -69,7 +69,7 @@ The following must be verified manually before production cutover:
 
 | # | Test | URL | Expected |
 |---|------|-----|----------|
-| 1 | Landing page | `https://staging-backend.up.railway.app` | Login form visible |
+| 1 | Landing page | `https://staging-backend-staging-8159.up.railway.app` | Login form visible |
 | 2 | Google login | Click "Continue with Google" | OAuth flow initiates |
 | 3 | Dashboard | After login | Dashboard loads with data |
 | 4 | GEX view | Navigate to GEX | 60 synthetic snapshots visible |

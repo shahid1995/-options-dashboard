@@ -1,7 +1,7 @@
 # Staging Observation Procedure
 
 **Date:** 2026-08-31
-**Staging URL:** `https://staging-backend.up.railway.app`
+**Staging URL:** `https://staging-backend-staging-8159.up.railway.app`
 **PostgreSQL:** `Postgres-EYbJ` (9.6MB)
 
 ---
@@ -22,7 +22,7 @@
 | Frequency | Check | Command |
 |-----------|-------|---------|
 | Every 4 hours | Service status | `railway service status --service staging-backend` |
-| Every 4 hours | Health endpoint | `curl -s https://staging-backend.up.railway.app/health` |
+| Every 4 hours | Health endpoint | `curl -s https://staging-backend-staging-8159.up.railway.app/health` |
 | On error | Application logs | `railway logs --service staging-backend \| grep -i error` |
 | Daily | PostgreSQL size | `psql -c "SELECT pg_size_pretty(pg_database_size('railway'))"` |
 | Daily | Connection count | `psql -c "SELECT count(*) FROM pg_stat_activity"` |

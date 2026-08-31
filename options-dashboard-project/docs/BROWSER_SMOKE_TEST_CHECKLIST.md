@@ -1,7 +1,7 @@
 # Browser Smoke Test Checklist — Staging
 
 **Date:** 2026-08-31
-**Staging URL:** `https://staging-backend.up.railway.app`
+**Staging URL:** `https://staging-backend-staging-8159.up.railway.app`
 **Status:** BROWSER AUTOMATION UNAVAILABLE — Manual testing required
 
 ---
@@ -35,7 +35,7 @@ The following must be verified manually in a real browser:
 
 | # | Test | URL | Expected | Status |
 |---|------|-----|----------|--------|
-| 1 | Landing page | `https://staging-backend.up.railway.app` | Login form visible | ⏳ PENDING |
+| 1 | Landing page | `https://staging-backend-staging-8159.up.railway.app` | Login form visible | ⏳ PENDING |
 | 2 | Google login | Click "Continue with Google" | OAuth flow initiates | ⏳ PENDING |
 | 3 | Dashboard | After login | Dashboard loads with data | ⏳ PENDING |
 | 4 | GEX view | Navigate to GEX | 60 synthetic snapshots visible | ⏳ PENDING |
