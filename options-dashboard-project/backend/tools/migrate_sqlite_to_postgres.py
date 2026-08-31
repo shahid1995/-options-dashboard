@@ -3,16 +3,6 @@
 
 The utility reads only from a verified SQLite backup and writes to PostgreSQL.
 It never changes the application's DATABASE_URL or deploys production.
-
-Safety properties:
-- SQLite backup uses sqlite3.Connection.backup() from a writable source handle.
-- The migration reader is strictly read-only and never checkpoints WAL.
-- PostgreSQL uses psycopg 3, matching backend/requirements.txt.
-- Batches never commit themselves; the complete import is one transaction.
-- Duplicate/constraint errors abort the transaction instead of being skipped.
-- Fingerprints use canonical SHA-256 with deterministic row ordering.
-- Alembic heads are discovered dynamically from the repository.
-- --ready-for-cutover is a verification gate only.
 """
 
 from __future__ import annotations
@@ -167,7 +157,7 @@ def get_alembic_heads(alembic_dir: str | Path) -> list[str]:
 
 
 def backup_sqlite(source_path: str, destination_path: str) -> None:
-    """Create a transaction-consistent SQLite backup."""
+    """Create a transaction-consistent SQLite backup from a writable handle."""
     source = Path(source_path).resolve()
     destination = Path(destination_path).resolve()
     if not source.exists():
@@ -367,11 +357,9 @@ class PgWriter:
     def get_sequence_info(self) -> list[tuple[str, str, str]]:
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT table_name, column_name, "
-                "pg_get_serial_sequence('public.' || table_name, column_name) "
+                "SELECT table_name, column_name, pg_get_serial_sequence('public.' || table_name, column_name) "
                 "FROM information_schema.columns WHERE table_schema='public' "
-                "AND (is_identity='YES' OR column_default LIKE 'nextval(%') "
-                "ORDER BY table_name, column_name"
+                "AND (is_identity='YES' OR column_default LIKE 'nextval(%') ORDER BY table_name, column_name"
             )
             return [(r[0], r[1], r[2]) for r in cur.fetchall() if r[2]]
 
@@ -387,22 +375,6 @@ class PgWriter:
                 results[sequence_name] = {"table": table, "column": column, "value": sequence_value, "max": max_value, "ok": sequence_value >= max_value}
         return results
 
-    def repair_sequences(self) -> dict[str, dict[str, Any]]:
-        results: dict[str, dict[str, Any]] = {}
-        with self.conn.cursor() as cur:
-            for table, column, sequence_name in self.get_sequence_info():
-                cur.execute(f'SELECT COALESCE(MAX("{column}"), 0) FROM "{table}"')
-                max_value = int(cur.fetchone()[0] or 0)
-                cur.execute("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=%s", (sequence_name.split('.')[-1],))
-                row = cur.fetchone()
-                before = int(row[0]) if row else 0
-                if max_value and before < max_value:
-                    cur.execute("SELECT setval(%s, %s, true)", (sequence_name, max_value))
-                    results[sequence_name] = {"corrected": True, "from": before, "to": max_value}
-                else:
-                    results[sequence_name] = {"corrected": False, "value": before}
-        return results
-
     def verify_security_invariants(self) -> dict[str, Any]:
         with self.conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM users")
@@ -416,10 +388,19 @@ class PgWriter:
             cur.execute("SELECT DISTINCT data_source FROM gex_snapshots WHERE data_source IS NOT NULL ORDER BY data_source")
             sources = [r[0] for r in cur.fetchall()]
             cur.execute("SELECT COUNT(*) FROM gex_snapshots WHERE data_source IN ('analytics_token','broker_oauth') AND connection_id IS NULL")
-            missing_conn = int(cur.fetchone()[0])
+            missing_connection = int(cur.fetchone()[0])
             cur.execute("SELECT trading_status, COUNT(*) FROM broker_connections GROUP BY trading_status")
             trading = {r[0]: int(r[1]) for r in cur.fetchall()}
-        return {"users_count": users, "user_sessions_count": sessions, "broker_connections_count": connections, "broker_tokens_count": broker_tokens, "gex_data_sources": sources, "invalid_gex_sources": [s for s in sources if s not in GEX_DATA_SOURCES], "gex_missing_connection_provenance": missing_conn, "trading_status": trading}
+        return {
+            "users_count": users,
+            "user_sessions_count": sessions,
+            "broker_connections_count": connections,
+            "broker_tokens_count": broker_tokens,
+            "gex_data_sources": sources,
+            "invalid_gex_sources": [s for s in sources if s not in GEX_DATA_SOURCES],
+            "gex_missing_connection_provenance": missing_connection,
+            "trading_status": trading,
+        }
 
     def verify_multi_user_isolation(self, user_ids: list[str]) -> dict[str, Any]:
         results: dict[str, Any] = {}
@@ -524,7 +505,7 @@ def _repair_sequences_with_sqlalchemy(connection) -> None:
         text(
             "SELECT table_name, column_name, pg_get_serial_sequence('public.' || table_name, column_name) "
             "FROM information_schema.columns WHERE table_schema='public' "
-            "AND (is_identity='YES' OR column_default LIKE 'nextval(%') "
+            "AND (is_identity='YES' OR column_default LIKE 'nextval(%')"
         )
     ).fetchall()
     for table, column, sequence_name in sequence_rows:
@@ -545,6 +526,7 @@ def _repair_sequences_with_sqlalchemy(connection) -> None:
 
 
 def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
+    """Atomically migrate all application tables and verify after commit."""
     from sqlalchemy import MetaData, select
 
     source_metadata = MetaData()
@@ -686,3 +668,77 @@ def check_ready_for_cutover(reader: SQLiteReader, writer: PgWriter, results: lis
     if not all(item.get("ok", False) for item in writer.check_sequences().values()):
         reasons.append("PostgreSQL sequences are behind imported IDs")
     return not reasons, reasons
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Safe SQLite -> PostgreSQL migration for StrikeNova")
+    parser.add_argument("--sqlite", required=True, help="Path to a verified SQLite backup")
+    parser.add_argument("--pg-url", help="PostgreSQL URL; defaults to DATABASE_URL")
+    parser.add_argument("--dry-run", action="store_true", help="Validate inputs without database writes")
+    parser.add_argument("--validate-only", action="store_true", help="Verify an already migrated target")
+    parser.add_argument("--ready-for-cutover", action="store_true", help="Run readiness checks only")
+    args = parser.parse_args()
+
+    pg_url = args.pg_url or os.getenv("DATABASE_URL")
+    if not pg_url:
+        print("ERROR: PostgreSQL URL is required")
+        return 1
+    pg_url = normalize_url(pg_url)
+    if not pg_url.startswith("postgresql+psycopg://"):
+        print("ERROR: PostgreSQL URL must use the supported psycopg dialect")
+        return 1
+
+    sqlite_path = Path(args.sqlite).resolve()
+    if not sqlite_path.exists():
+        print(f"ERROR: SQLite backup not found: {sqlite_path}")
+        return 1
+
+    reader = SQLiteReader(str(sqlite_path))
+    writer = PgWriter(pg_url)
+    try:
+        integrity = reader.integrity_check()
+        if integrity != "ok":
+            print(f"ERROR: SQLite integrity: {integrity}")
+            return 1
+        print("SQLite integrity: ok")
+        print(f"Backup SHA-256: {reader.file_sha256()}")
+        print(f"Backup size: {reader.file_size():,} bytes")
+
+        if args.dry_run:
+            print("DRY RUN: source validated; no PostgreSQL writes performed")
+            return 0
+
+        if args.validate_only or args.ready_for_cutover:
+            tables = [t for t in reader.get_tables() if t not in SKIP_TABLES and writer.table_exists(t)]
+            verifications = [verify_table(reader, writer, table) for table in tables]
+            security = writer.verify_security_invariants()
+            with writer.conn.cursor() as cur:
+                cur.execute("SELECT id FROM users ORDER BY id")
+                user_ids = [row[0] for row in cur.fetchall()]
+            isolation = writer.verify_multi_user_isolation(user_ids)
+            ready, reasons = check_ready_for_cutover(reader, writer, [], verifications, security, isolation)
+            if args.ready_for_cutover:
+                print("READY FOR CUTOVER" if ready else "NOT READY FOR CUTOVER")
+                for reason in reasons:
+                    print(f"- {reason}")
+            return 0 if ready else 1
+
+        tables = [t for t in reader.get_tables() if t not in SKIP_TABLES]
+        assert_target_empty(writer, tables)
+        from sqlalchemy import create_engine
+        sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
+        postgres_engine = create_engine(pg_url)
+        try:
+            report = migrate_database(sqlite_engine, postgres_engine, batch_size=BATCH_SIZE)
+        finally:
+            sqlite_engine.dispose()
+            postgres_engine.dispose()
+        print(f"Migration verification: {'PASS' if report['ok'] else 'FAIL'}")
+        return 0 if report["ok"] else 1
+    finally:
+        reader.close()
+        writer.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
