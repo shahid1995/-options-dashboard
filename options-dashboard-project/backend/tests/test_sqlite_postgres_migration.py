@@ -158,7 +158,25 @@ def test_rehearsal_migrates_sqlite_rows_into_postgres(postgres_engine, tmp_path)
     migrate_sqlite_to_postgres.migrate_database(sqlite_engine, postgres_engine, batch_size=1000)
     report = migrate_sqlite_to_postgres.verify_databases(sqlite_engine, postgres_engine)
 
-    assert report["ok"], {"failed_tables": [name for name, details in report["tables"].items() if not details["passed"]], "sequences": report["sequences"], "security": report["security"], "isolation": report["isolation"]}
+    assert report["ok"] is True, repr({
+        "failed_tables": [
+            name for name, details in report["tables"].items()
+            if not details["passed"]
+        ],
+        "table_errors": {
+            name: details["errors"]
+            for name, details in report["tables"].items()
+            if details["errors"]
+        },
+        "fingerprints": {
+            name: (details["source_fingerprint"], details["target_fingerprint"])
+            for name, details in report["tables"].items()
+            if not details["fingerprint_match"]
+        },
+        "sequences": report["sequences"],
+        "security": report["security"],
+        "isolation": report["isolation"],
+    })
     assert report["tables"]["users"]["row_count"] == 1
     assert report["tables"]["gex_snapshots"]["row_count"] == 1
 
