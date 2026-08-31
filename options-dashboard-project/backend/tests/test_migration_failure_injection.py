@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, event, text
 
-from test_rehearsal_ci_database import (
+TESTS_DIR = Path(__file__).resolve().parent
+TOOLS_DIR = TESTS_DIR.parent / "tools"
+sys.path.insert(0, str(TESTS_DIR))
+sys.path.insert(0, str(TOOLS_DIR))
+
+from test_rehearsal_ci_database import (  # noqa: E402
     _clear_postgres_target,
     _populate_current_schema_synthetic_dataset,
     _prepare_schema,
 )
-from migrate_sqlite_to_postgres import migrate_database, normalize_url
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from migrate_sqlite_to_postgres import migrate_database, normalize_url  # noqa: E402
 
 
 def _make_source_engine(tmp_path):
