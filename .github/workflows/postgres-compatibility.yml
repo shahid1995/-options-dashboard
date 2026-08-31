@@ -55,4 +55,5 @@ jobs:
           tests/test_sqlite_postgres_migration.py
           tests/test_migrate_sqlite_to_postgres.py
           tests/test_rehearsal_synthetic.py
+          tests/test_rehearsal_ci_database.py
           tests/test_migration_hardening.py
