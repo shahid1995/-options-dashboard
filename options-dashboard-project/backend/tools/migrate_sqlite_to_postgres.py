@@ -439,13 +439,32 @@ def _repair_sequences_with_sqlalchemy(connection) -> None:
             connection.execute(text("SELECT setval(:sequence_name, :max_value, true)"), {"sequence_name": sequence_name, "max_value": int(max_value)})
 
 
-def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
-    from sqlalchemy import MetaData, select
+def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE, target_budget_bytes: int | None = None) -> dict[str, Any]:
+    from sqlalchemy import MetaData, select, text
     source_metadata = MetaData(); target_metadata = MetaData()
     source_metadata.reflect(bind=sqlite_engine); target_metadata.reflect(bind=postgres_engine)
     assert_schema_compatible(source_metadata, target_metadata)
     source_names = {name for name in source_metadata.tables if name not in SKIP_TABLES}
     table_order = _order_table_names(target_metadata, source_names)
+    # --- BLOCKER 2 FIX: target-empty enforcement at migration boundary ---
+    non_empty = []
+    with postgres_engine.connect() as _conn:
+        for table_name in table_order:
+            cnt = _conn.execute(text(f'SELECT COUNT(*) FROM "{table_name}"')).scalar()
+            if cnt:
+                non_empty.append(f"{table_name}={cnt}")
+    if non_empty:
+        raise RuntimeError("PostgreSQL target is not empty: " + ", ".join(non_empty))
+    # --- BLOCKER 3 FIX: storage safety gate before any writes ---
+    if target_budget_bytes is not None:
+        source_path = sqlite_engine.url.database
+        if source_path and source_path != ":memory:":
+            source_size = Path(source_path).stat().st_size
+            if not storage_safety_ok(source_size, target_budget_bytes):
+                raise RuntimeError(
+                    f"Storage safety check failed: source {source_size} bytes "
+                    f"exceeds {80}% of target budget {target_budget_bytes} bytes"
+                )
     source_conn = sqlite_engine.connect(); target_conn = postgres_engine.connect(); transaction = target_conn.begin()
     try:
         for table_name in table_order:
@@ -491,7 +510,7 @@ def _missing_target_verifications(writer: PgWriter, tables: Sequence[str]) -> li
 
 def verify_databases(sqlite_engine, postgres_engine) -> dict[str, Any]:
     source_path = sqlite_engine.url.database
-    if not source_path or source_path == ":memory:":
+    if not source_path or source_path == ':memory:':
         raise ValueError("verify_databases requires a file-backed SQLite database")
     reader = SQLiteReader(str(source_path)); writer = PgWriter.from_sqlalchemy_engine(postgres_engine)
     try:
@@ -536,17 +555,144 @@ def check_ready_for_cutover(reader: SQLiteReader, writer: PgWriter, results: lis
     return not reasons, reasons
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser with subcommands matching the CUTOVER_RUNBOOK.
+
+    Subcommands: backup, preflight, migrate, verify.
+    Legacy --sqlite/--pg-url flags are supported for backward compatibility.
+    """
     parser = argparse.ArgumentParser(description="Safe SQLite -> PostgreSQL migration for StrikeNova")
-    parser.add_argument("--sqlite", required=True, help="Path to a verified SQLite backup")
-    parser.add_argument("--pg-url", help="PostgreSQL URL; defaults to DATABASE_URL")
-    parser.add_argument("--dry-run", action="store_true", help="Validate inputs without database writes")
-    parser.add_argument("--validate-only", action="store_true", help="Verify an already migrated target")
-    parser.add_argument("--ready-for-cutover", action="store_true", help="Run readiness checks only")
+    parser.add_argument("--sqlite", help="(legacy) Path to a verified SQLite backup")
+    parser.add_argument("--pg-url", help="(legacy) PostgreSQL URL; defaults to DATABASE_URL")
+    parser.add_argument("--dry-run", action="store_true", help="(legacy) Validate inputs without database writes")
+    parser.add_argument("--validate-only", action="store_true", help="(legacy) Verify an already migrated target")
+    parser.add_argument("--ready-for-cutover", action="store_true", help="(legacy) Run readiness checks only")
+
+    sub = parser.add_subparsers(dest="subcommand")
+
+    # backup subcommand
+    p_backup = sub.add_parser("backup", help="Create a transaction-consistent SQLite backup")
+    p_backup.add_argument("--source", required=True, help="Path to the live SQLite database")
+    p_backup.add_argument("--backup", required=True, dest="backup_path", help="Destination path for the backup")
+
+    # preflight subcommand
+    p_preflight = sub.add_parser("preflight", help="Validate source/target compatibility without writes")
+    p_preflight.add_argument("--source", required=True, help="Path to the verified SQLite backup")
+    p_preflight.add_argument("--target", required=True, help="PostgreSQL connection URL")
+    p_preflight.add_argument("--target-budget-mib", type=int, default=0, help="Target capacity in MiB for storage safety check")
+
+    # migrate subcommand
+    p_migrate = sub.add_parser("migrate", help="Migrate SQLite data into PostgreSQL")
+    p_migrate.add_argument("--source", required=True, help="Path to the verified SQLite backup")
+    p_migrate.add_argument("--target", required=True, help="PostgreSQL connection URL")
+    p_migrate.add_argument("--batch-size", type=int, default=BATCH_SIZE, help=f"Rows per batch (default {BATCH_SIZE})")
+    p_migrate.add_argument("--target-budget-mib", type=int, default=0, help="Target capacity in MiB for storage safety check")
+
+    # verify subcommand
+    p_verify = sub.add_parser("verify", help="Verify an already migrated target against source")
+    p_verify.add_argument("--source", required=True, help="Path to the verified SQLite backup")
+    p_verify.add_argument("--target", required=True, help="PostgreSQL connection URL")
+
+    return parser
+
+
+def main() -> int:
+    parser = _build_parser()
     args = parser.parse_args()
+
+    # ── Subcommand: backup ──
+    if args.subcommand == "backup":
+        source_path = Path(args.source).resolve()
+        backup_path = Path(args.backup_path).resolve()
+        if not source_path.exists():
+            print(f"ERROR: Source not found: {source_path}"); return 1
+        try:
+            backup_sqlite(str(source_path), str(backup_path))
+        except Exception as exc:
+            print(f"ERROR: Backup failed: {exc}"); return 1
+        print(f"Backup created: {backup_path}")
+        sha = sha256_file(str(backup_path))
+        print(f"Backup SHA-256: {sha}")
+        print(f"Backup size: {backup_path.stat().st_size:,} bytes")
+        return 0
+
+    # ── Subcommand: preflight ──
+    if args.subcommand == "preflight":
+        pg_url = normalize_url(args.target)
+        if not pg_url.startswith("postgresql+psycopg://"):
+            print("ERROR: Target must use the supported psycopg dialect"); return 1
+        source_path = Path(args.source).resolve()
+        if not source_path.exists():
+            print(f"ERROR: Source not found: {source_path}"); return 1
+        reader = SQLiteReader(str(source_path)); writer = PgWriter(pg_url)
+        try:
+            integrity = reader.integrity_check()
+            if integrity != "ok": print(f"ERROR: SQLite integrity: {integrity}"); return 1
+            tables = [t for t in reader.get_tables() if t not in SKIP_TABLES]
+            missing = _missing_target_verifications(writer, tables)
+            if missing:
+                for m in missing:
+                    print(f"ERROR: {m.table}: {m.errors}")
+                return 1
+            if args.target_budget_mib > 0:
+                budget = args.target_budget_mib * 1024 * 1024
+                if not storage_safety_ok(reader.file_size(), budget):
+                    print(f"ERROR: Storage safety check failed: source {reader.file_size():,} bytes exceeds 80% of {args.target_budget_mib} MiB budget")
+                    return 1
+            print("Preflight OK: source valid, target reachable, schema compatible")
+            return 0
+        finally:
+            reader.close(); writer.close()
+
+    # ── Subcommand: migrate ──
+    if args.subcommand == "migrate":
+        pg_url = normalize_url(args.target)
+        if not pg_url.startswith("postgresql+psycopg://"):
+            print("ERROR: Target must use the supported psycopg dialect"); return 1
+        source_path = Path(args.source).resolve()
+        if not source_path.exists():
+            print(f"ERROR: Source not found: {source_path}"); return 1
+        reader = SQLiteReader(str(source_path)); writer = PgWriter(pg_url)
+        try:
+            integrity = reader.integrity_check()
+            if integrity != "ok": print(f"ERROR: SQLite integrity: {integrity}"); return 1
+            print("SQLite integrity: ok"); print(f"Backup SHA-256: {reader.file_sha256()}"); print(f"Backup size: {reader.file_size():,} bytes")
+        finally:
+            reader.close(); writer.close()
+        budget_bytes = args.target_budget_mib * 1024 * 1024 if args.target_budget_mib > 0 else None
+        from sqlalchemy import create_engine
+        source_engine = create_engine(f"sqlite:///{source_path}"); target_engine = create_engine(pg_url)
+        try:
+            report = migrate_database(source_engine, target_engine, batch_size=args.batch_size, target_budget_bytes=budget_bytes)
+        finally:
+            source_engine.dispose(); target_engine.dispose()
+        print(f"Migration verification: {'PASS' if report['ok'] else 'FAIL'}")
+        return 0 if report["ok"] else 1
+
+    # ── Subcommand: verify ──
+    if args.subcommand == "verify":
+        pg_url = normalize_url(args.target)
+        if not pg_url.startswith("postgresql+psycopg://"):
+            print("ERROR: Target must use the supported psycopg dialect"); return 1
+        source_path = Path(args.source).resolve()
+        if not source_path.exists():
+            print(f"ERROR: Source not found: {source_path}"); return 1
+        import json as json_mod
+        from sqlalchemy import create_engine
+        source_engine = create_engine(f"sqlite:///{source_path}"); target_engine = create_engine(pg_url)
+        try:
+            report = verify_databases(source_engine, target_engine)
+        finally:
+            source_engine.dispose(); target_engine.dispose()
+        print(json_mod.dumps(report, indent=2, default=str))
+        return 0 if report["ok"] else 1
+
+    # ── Legacy flag interface ──
     pg_url = normalize_url(args.pg_url or os.getenv("DATABASE_URL") or "")
     if not pg_url.startswith("postgresql+psycopg://"):
         print("ERROR: PostgreSQL URL must use the supported psycopg dialect"); return 1
+    if not args.sqlite:
+        print("ERROR: --sqlite is required (legacy mode) or use a subcommand"); return 1
     sqlite_path = Path(args.sqlite).resolve()
     if not sqlite_path.exists():
         print(f"ERROR: SQLite backup not found: {sqlite_path}"); return 1
@@ -571,7 +717,6 @@ def main() -> int:
                 print("READY FOR CUTOVER" if ready else "NOT READY FOR CUTOVER")
                 for reason in reasons: print(f"- {reason}")
             return 0 if ready else 1
-        assert_target_empty(writer, tables)
         from sqlalchemy import create_engine
         source_engine = create_engine(f"sqlite:///{sqlite_path}"); target_engine = create_engine(pg_url)
         try: report = migrate_database(source_engine, target_engine, batch_size=BATCH_SIZE)
