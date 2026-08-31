@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Safe SQLite -> PostgreSQL migration utility for StrikeNova.
+"""Safe, reversible SQLite -> PostgreSQL migration utility for StrikeNova.
 
 The utility reads only from a verified SQLite backup and writes to PostgreSQL.
 It never changes the application's DATABASE_URL or deploys production.
+
+Safety properties:
+- SQLite backup uses sqlite3.Connection.backup() from a writable source handle.
+- The migration reader is strictly read-only and never checkpoints WAL.
+- PostgreSQL uses psycopg 3, matching backend/requirements.txt.
+- Batches never commit themselves; the complete import is one transaction.
+- Duplicate/constraint errors abort the transaction instead of being skipped.
+- Fingerprints use canonical SHA-256 with deterministic row ordering.
+- Alembic heads are discovered dynamically from the repository.
+- --ready-for-cutover is a verification gate only.
 """
 
 from __future__ import annotations
@@ -12,6 +22,7 @@ import base64
 import hashlib
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime, timezone
 from decimal import Decimal
@@ -30,32 +41,13 @@ ENCRYPTED_COLUMNS = {
     "broker_refresh_token_encrypted",
 }
 ALL_TABLES = [
-    "users",
-    "user_sessions",
-    "broker_connections",
-    "broker_tokens",
-    "paper_accounts",
-    "strategy_templates",
-    "strategy_template_legs",
-    "trades",
-    "legs",
-    "strategy_executions",
-    "paper_orders",
-    "positions",
-    "paper_transactions",
-    "strategy_leg_exposures",
-    "exit_exposure_allocations",
-    "bulk_exit_records",
-    "gex_snapshots",
-    "historical_gex",
-    "contract_specs",
-    "nifty_candles",
-    "option_candles",
-    "option_greeks",
-    "data_completeness",
-    "ingestion_checkpoint",
-    "ingestion_log",
-    "iv_observations",
+    "users", "user_sessions", "broker_connections", "broker_tokens",
+    "paper_accounts", "strategy_templates", "strategy_template_legs",
+    "trades", "legs", "strategy_executions", "paper_orders", "positions",
+    "paper_transactions", "strategy_leg_exposures", "exit_exposure_allocations",
+    "bulk_exit_records", "gex_snapshots", "historical_gex", "contract_specs",
+    "nifty_candles", "option_candles", "option_greeks", "data_completeness",
+    "ingestion_checkpoint", "ingestion_log", "iv_observations",
 ]
 
 
@@ -126,8 +118,9 @@ def canonical_value(value: Any) -> list[str]:
     if isinstance(value, Decimal):
         return ["decimal", format(value, "f")]
     if isinstance(value, datetime):
-        normalized = value.astimezone(timezone.utc) if value.tzinfo else value
-        return ["datetime", normalized.isoformat()]
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc)
+        return ["datetime", value.isoformat()]
     if isinstance(value, date):
         return ["date", value.isoformat()]
     if isinstance(value, dtime):
@@ -143,9 +136,7 @@ def _canonical_row(row: Sequence[Any]) -> tuple[tuple[str, ...], ...]:
 
 def sha256_rows(rows: Iterable[Sequence[Any]]) -> str:
     canonical_rows = sorted(_canonical_row(row) for row in rows)
-    payload = "\n".join(
-        "|".join(":".join(part) for part in row) for row in canonical_rows
-    )
+    payload = "\n".join("|".join(":".join(part) for part in row) for row in canonical_rows)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -159,7 +150,7 @@ def sha256_file(path: str) -> str:
 
 def sequence_reset_sql(table: str, column: str) -> str:
     return (
-        "SELECT setval(" 
+        "SELECT setval("
         f"pg_get_serial_sequence('{table}', '{column}'), "
         f"COALESCE((SELECT MAX(\"{column}\") FROM \"{table}\"), 1), true)"
     )
@@ -176,7 +167,7 @@ def get_alembic_heads(alembic_dir: str | Path) -> list[str]:
 
 
 def backup_sqlite(source_path: str, destination_path: str) -> None:
-    """Create a consistent SQLite backup using a writable source handle."""
+    """Create a transaction-consistent SQLite backup."""
     source = Path(source_path).resolve()
     destination = Path(destination_path).resolve()
     if not source.exists():
@@ -184,18 +175,14 @@ def backup_sqlite(source_path: str, destination_path: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     with sqlite3.connect(str(source), timeout=30) as src:
-        integrity = src.execute("PRAGMA integrity_check(quick)").fetchone()[0]
+        integrity = src.execute("PRAGMA quick_check").fetchone()[0]
         if integrity != "ok":
             raise RuntimeError(f"SQLite integrity check failed: {integrity}")
-        # Checkpointing is deliberately done here, on a writable connection.
-        try:
-            src.execute("PRAGMA wal_checkpoint(FULL)")
-        except sqlite3.DatabaseError as exc:
-            raise RuntimeError("WAL checkpoint failed before backup") from exc
+        src.execute("PRAGMA wal_checkpoint(FULL)")
         with sqlite3.connect(str(destination), timeout=30) as dst:
             src.backup(dst)
             dst.commit()
-            backup_integrity = dst.execute("PRAGMA integrity_check(quick)").fetchone()[0]
+            backup_integrity = dst.execute("PRAGMA quick_check").fetchone()[0]
             if backup_integrity != "ok":
                 raise RuntimeError(f"Backup integrity check failed: {backup_integrity}")
     os.chmod(destination, 0o600)
@@ -216,17 +203,13 @@ class SQLiteReader:
         self.conn.close()
 
     def integrity_check(self) -> str:
-        return self.conn.execute("PRAGMA integrity_check(quick)").fetchone()[0]
+        return self.conn.execute("PRAGMA quick_check").fetchone()[0]
 
     def wal_checkpoint(self) -> None:
-        raise RuntimeError(
-            "WAL checkpoint requires a read-write SQLite connection; use backup_sqlite()"
-        )
+        raise RuntimeError("WAL checkpoint requires a read-write SQLite connection; use backup_sqlite()")
 
     def get_tables(self) -> list[str]:
-        rows = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        ).fetchall()
+        rows = self.conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
         return [row[0] for row in rows]
 
     def get_columns(self, table: str) -> list[str]:
@@ -246,13 +229,7 @@ class SQLiteReader:
 
     def fetch_batch(self, table: str, columns: list[str], offset: int, limit: int) -> list[tuple]:
         cols = ", ".join(f"[{column}]" for column in columns)
-        return [
-            tuple(row)
-            for row in self.conn.execute(
-                f"SELECT {cols} FROM [{table}] LIMIT ? OFFSET ?",
-                (limit, offset),
-            )
-        ]
+        return [tuple(row) for row in self.conn.execute(f"SELECT {cols} FROM [{table}] LIMIT ? OFFSET ?", (limit, offset))]
 
     def compute_fingerprint(self, table: str, columns: list[str]) -> str:
         return sha256_rows(self.fetch_all(table, columns))
@@ -265,16 +242,27 @@ class SQLiteReader:
 
 
 class PgWriter:
-    """PostgreSQL writer using psycopg 3; batches never commit themselves."""
+    """PostgreSQL writer using psycopg 3; transaction ownership is explicit."""
 
-    def __init__(self, pg_url: str):
-        import psycopg
+    def __init__(self, pg_url: str | None = None, connection: Any | None = None, owns_connection: bool = True):
+        if connection is None:
+            import psycopg
+            if pg_url is None:
+                raise ValueError("pg_url or connection is required")
+            self.conn = psycopg.connect(normalize_url(pg_url), connect_timeout=15)
+            self.conn.autocommit = False
+            self._owns_connection = True
+        else:
+            self.conn = connection
+            self._owns_connection = owns_connection
 
-        self.conn = psycopg.connect(normalize_url(pg_url), connect_timeout=15)
-        self.conn.autocommit = False
+    @classmethod
+    def from_sqlalchemy_engine(cls, engine):
+        return cls(connection=engine.raw_connection(), owns_connection=True)
 
     def close(self) -> None:
-        self.conn.close()
+        if self._owns_connection:
+            self.conn.close()
 
     def commit(self) -> None:
         self.conn.commit()
@@ -284,20 +272,12 @@ class PgWriter:
 
     def table_exists(self, table: str) -> bool:
         with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT EXISTS(SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema='public' AND table_name=%s)",
-                (table,),
-            )
+            cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)", (table,))
             return bool(cur.fetchone()[0])
 
     def get_columns(self, table: str) -> list[str]:
         with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position",
-                (table,),
-            )
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s ORDER BY ordinal_position", (table,))
             return [row[0] for row in cur.fetchall()]
 
     def count(self, table: str) -> int:
@@ -316,8 +296,7 @@ class PgWriter:
             cur.execute(
                 "SELECT a.attname, k.ordinality FROM pg_index i "
                 "JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=ANY(i.indkey) "
-                "JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality) "
-                "ON k.attnum=a.attnum "
+                "JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ordinality) ON k.attnum=a.attnum "
                 "WHERE i.indrelid=%s::regclass AND i.indisprimary ORDER BY k.ordinality",
                 (table,),
             )
@@ -328,23 +307,16 @@ class PgWriter:
             cur.execute(
                 "SELECT kcu.column_name, ccu.table_name, ccu.column_name "
                 "FROM information_schema.table_constraints tc "
-                "JOIN information_schema.key_column_usage kcu "
-                "ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema "
-                "JOIN information_schema.constraint_column_usage ccu "
-                "ON tc.constraint_name=ccu.constraint_name AND tc.table_schema=ccu.table_schema "
-                "WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='public' "
-                "AND tc.table_name=%s",
+                "JOIN information_schema.key_column_usage kcu ON tc.constraint_name=kcu.constraint_name AND tc.table_schema=kcu.table_schema "
+                "JOIN information_schema.constraint_column_usage ccu ON tc.constraint_name=ccu.constraint_name AND tc.table_schema=ccu.table_schema "
+                "WHERE tc.constraint_type='FOREIGN KEY' AND tc.table_schema='public' AND tc.table_name=%s",
                 (table,),
             )
             return list(cur.fetchall())
 
     def get_not_null_columns(self, table: str) -> list[str]:
         with self.conn.cursor() as cur:
-            cur.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema='public' AND table_name=%s AND is_nullable='NO'",
-                (table,),
-            )
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s AND is_nullable='NO'", (table,))
             return [row[0] for row in cur.fetchall()]
 
     def insert_batch(self, table: str, columns: list[str], rows: list[tuple]) -> int:
@@ -352,9 +324,8 @@ class PgWriter:
             return 0
         cols = ", ".join(f'"{column}"' for column in columns)
         placeholders = ", ".join(["%s"] * len(columns))
-        sql = f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})'
         with self.conn.cursor() as cur:
-            cur.executemany(sql, rows)
+            cur.executemany(f'INSERT INTO "{table}" ({cols}) VALUES ({placeholders})', rows)
         return len(rows)
 
     def compute_fingerprint(self, table: str, columns: list[str]) -> str:
@@ -372,69 +343,64 @@ class PgWriter:
 
     def check_fk_integrity(self, table: str) -> list[str]:
         errors: list[str] = []
-        for col, ref_table, ref_col in self.get_fk_constraints(table):
+        for column, ref_table, ref_column in self.get_fk_constraints(table):
             with self.conn.cursor() as cur:
                 cur.execute(
-                    f'SELECT COUNT(*) FROM "{table}" t '
-                    f'LEFT JOIN "{ref_table}" r ON t."{col}"=r."{ref_col}" '
-                    f'WHERE t."{col}" IS NOT NULL AND r."{ref_col}" IS NULL'
+                    f'SELECT COUNT(*) FROM "{table}" t LEFT JOIN "{ref_table}" r ON t."{column}"=r."{ref_column}" '
+                    f'WHERE t."{column}" IS NOT NULL AND r."{ref_column}" IS NULL'
                 )
                 count = int(cur.fetchone()[0])
             if count:
-                errors.append(f"{table}.{col} -> {ref_table}.{ref_col}: {count} orphaned rows")
+                errors.append(f"{table}.{column} -> {ref_table}.{ref_column}: {count} orphaned rows")
         return errors
 
     def check_not_null(self, table: str) -> list[str]:
         errors: list[str] = []
-        for col in self.get_not_null_columns(table):
+        for column in self.get_not_null_columns(table):
             with self.conn.cursor() as cur:
-                cur.execute(f'SELECT COUNT(*) FROM "{table}" WHERE "{col}" IS NULL')
+                cur.execute(f'SELECT COUNT(*) FROM "{table}" WHERE "{column}" IS NULL')
                 count = int(cur.fetchone()[0])
             if count:
-                errors.append(f"{table}.{col}: {count} NULL values")
+                errors.append(f"{table}.{column}: {count} NULL values")
         return errors
 
     def get_sequence_info(self) -> list[tuple[str, str, str]]:
         with self.conn.cursor() as cur:
             cur.execute(
                 "SELECT table_name, column_name, "
-                "pg_get_serial_sequence(quote_ident(table_schema)||'.'||quote_ident(table_name), column_name) "
-                "FROM information_schema.columns "
-                "WHERE table_schema='public' "
-                "AND (is_identity='YES' OR column_default LIKE 'nextval(%')"
+                "pg_get_serial_sequence('public.' || table_name, column_name) "
+                "FROM information_schema.columns WHERE table_schema='public' "
+                "AND (is_identity='YES' OR column_default LIKE 'nextval(%') "
+                "ORDER BY table_name, column_name"
             )
-            return [(row[0], row[1], row[2]) for row in cur.fetchall() if row[2]]
+            return [(r[0], r[1], r[2]) for r in cur.fetchall() if r[2]]
 
     def check_sequences(self) -> dict[str, dict[str, Any]]:
         results: dict[str, dict[str, Any]] = {}
-        for table, column, seq_name in self.get_sequence_info():
-            with self.conn.cursor() as cur:
+        with self.conn.cursor() as cur:
+            for table, column, sequence_name in self.get_sequence_info():
                 cur.execute(f'SELECT COALESCE(MAX("{column}"), 0) FROM "{table}"')
                 max_value = int(cur.fetchone()[0] or 0)
-                cur.execute(f'SELECT last_value FROM "{seq_name}"')
-                seq_value = int(cur.fetchone()[0])
-            results[seq_name] = {
-                "table": table,
-                "column": column,
-                "value": seq_value,
-                "max": max_value,
-                "ok": seq_value >= max_value,
-            }
+                cur.execute("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=%s", (sequence_name.split('.')[-1],))
+                row = cur.fetchone()
+                sequence_value = int(row[0]) if row else 0
+                results[sequence_name] = {"table": table, "column": column, "value": sequence_value, "max": max_value, "ok": sequence_value >= max_value}
         return results
 
     def repair_sequences(self) -> dict[str, dict[str, Any]]:
         results: dict[str, dict[str, Any]] = {}
-        for table, column, seq_name in self.get_sequence_info():
-            with self.conn.cursor() as cur:
+        with self.conn.cursor() as cur:
+            for table, column, sequence_name in self.get_sequence_info():
                 cur.execute(f'SELECT COALESCE(MAX("{column}"), 0) FROM "{table}"')
                 max_value = int(cur.fetchone()[0] or 0)
-                cur.execute(f'SELECT last_value FROM "{seq_name}"')
-                before = int(cur.fetchone()[0])
-                if before < max_value:
-                    cur.execute("SELECT setval(%s, %s, true)", (seq_name, max_value))
-                    results[seq_name] = {"corrected": True, "from": before, "to": max_value}
+                cur.execute("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=%s", (sequence_name.split('.')[-1],))
+                row = cur.fetchone()
+                before = int(row[0]) if row else 0
+                if max_value and before < max_value:
+                    cur.execute("SELECT setval(%s, %s, true)", (sequence_name, max_value))
+                    results[sequence_name] = {"corrected": True, "from": before, "to": max_value}
                 else:
-                    results[seq_name] = {"corrected": False, "value": before}
+                    results[sequence_name] = {"corrected": False, "value": before}
         return results
 
     def verify_security_invariants(self) -> dict[str, Any]:
@@ -447,64 +413,46 @@ class PgWriter:
             connections = int(cur.fetchone()[0])
             cur.execute("SELECT COUNT(*) FROM broker_tokens")
             broker_tokens = int(cur.fetchone()[0])
-            cur.execute(
-                "SELECT DISTINCT data_source FROM gex_snapshots WHERE data_source IS NOT NULL ORDER BY data_source"
-            )
-            sources = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT DISTINCT data_source FROM gex_snapshots WHERE data_source IS NOT NULL ORDER BY data_source")
+            sources = [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT COUNT(*) FROM gex_snapshots WHERE data_source IN ('analytics_token','broker_oauth') AND connection_id IS NULL")
+            missing_conn = int(cur.fetchone()[0])
             cur.execute("SELECT trading_status, COUNT(*) FROM broker_connections GROUP BY trading_status")
-            trading_status = {row[0]: int(row[1]) for row in cur.fetchall()}
-        return {
-            "users_count": users,
-            "user_sessions_count": sessions,
-            "broker_connections_count": connections,
-            "broker_tokens_count": broker_tokens,
-            "gex_data_sources": sources,
-            "invalid_gex_sources": [source for source in sources if source not in GEX_DATA_SOURCES],
-            "trading_status": trading_status,
-        }
+            trading = {r[0]: int(r[1]) for r in cur.fetchall()}
+        return {"users_count": users, "user_sessions_count": sessions, "broker_connections_count": connections, "broker_tokens_count": broker_tokens, "gex_data_sources": sources, "invalid_gex_sources": [s for s in sources if s not in GEX_DATA_SOURCES], "gex_missing_connection_provenance": missing_conn, "trading_status": trading}
 
     def verify_multi_user_isolation(self, user_ids: list[str]) -> dict[str, Any]:
         results: dict[str, Any] = {}
         with self.conn.cursor() as cur:
-            for user_id in user_ids:
-                cur.execute("SELECT COUNT(*) FROM user_sessions WHERE user_id=%s", (user_id,))
+            for uid in user_ids:
+                cur.execute("SELECT COUNT(*) FROM user_sessions WHERE user_id=%s", (uid,))
                 sessions = int(cur.fetchone()[0])
-                cur.execute("SELECT COUNT(*) FROM broker_connections WHERE user_id=%s", (user_id,))
+                cur.execute("SELECT COUNT(*) FROM broker_connections WHERE user_id=%s", (uid,))
                 connections = int(cur.fetchone()[0])
-                cur.execute("SELECT COUNT(*) FROM gex_snapshots WHERE owner_id=%s", (user_id,))
+                cur.execute("SELECT COUNT(*) FROM gex_snapshots WHERE owner_id=%s", (uid,))
                 gex = int(cur.fetchone()[0])
-                results[user_id] = {"sessions": sessions, "connections": connections, "gex_snapshots": gex}
+                results[uid] = {"sessions": sessions, "connections": connections, "gex_snapshots": gex}
         return results
 
 
-# ---------------------------------------------------------------------------
-# Metadata / migration helpers
-# ---------------------------------------------------------------------------
-
-
 def _order_table_names(metadata, names: set[str] | None = None) -> list[str]:
-    selected = {
-        name: table
-        for name, table in metadata.tables.items()
-        if name not in SKIP_TABLES and (names is None or name in names)
-    }
-    dependencies: dict[str, set[str]] = {name: set() for name in selected}
+    selected = {name: table for name, table in metadata.tables.items() if name not in SKIP_TABLES and (names is None or name in names)}
+    deps: dict[str, set[str]] = {name: set() for name in selected}
     for name, table in selected.items():
         for fk in table.foreign_keys:
             parent = fk.column.table.name
             if parent in selected and parent != name:
-                dependencies[name].add(parent)
-
+                deps[name].add(parent)
     order: list[str] = []
-    while dependencies:
-        ready = sorted(name for name, deps in dependencies.items() if not deps)
+    while deps:
+        ready = sorted(name for name, parents in deps.items() if not parents)
         if not ready:
             raise RuntimeError("dependency cycle detected in migration tables")
         order.extend(ready)
         for name in ready:
-            dependencies.pop(name, None)
-        for deps in dependencies.values():
-            deps.difference_update(ready)
+            deps.pop(name, None)
+        for parents in deps.values():
+            parents.difference_update(ready)
     return order
 
 
@@ -523,20 +471,17 @@ def assert_schema_compatible(source_metadata, target_metadata) -> None:
         target_columns = set(target_metadata.tables[name].columns.keys())
         missing_columns = sorted(source_columns - target_columns)
         if missing_columns:
-            raise ValueError(
-                f"columns missing from target for {name}: {', '.join(missing_columns)}"
-            )
+            raise ValueError(f"columns missing from target for {name}: {', '.join(missing_columns)}")
 
 
 def assert_target_empty(writer: PgWriter, tables: Sequence[str]) -> None:
-    non_empty: list[tuple[str, int]] = []
+    non_empty = []
     for table in tables:
         count = writer.count(table)
         if count:
             non_empty.append((table, count))
     if non_empty:
-        details = ", ".join(f"{table}={count}" for table, count in non_empty)
-        raise RuntimeError(f"PostgreSQL target is not empty: {details}")
+        raise RuntimeError("PostgreSQL target is not empty: " + ", ".join(f"{table}={count}" for table, count in non_empty))
 
 
 def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: bool = False) -> MigrationResult:
@@ -552,7 +497,7 @@ def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: b
         return result
     source_columns = reader.get_columns(table)
     target_columns = writer.get_columns(table)
-    common_columns = [column for column in source_columns if column in target_columns]
+    common_columns = [c for c in source_columns if c in target_columns]
     if not common_columns:
         result.error = f"No common columns for {table}"
         return result
@@ -560,7 +505,6 @@ def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: b
         result.skipped = True
         result.skip_reason = "dry run"
         return result
-
     offset = 0
     while offset < result.source_count:
         batch = reader.fetch_batch(table, common_columns, offset, BATCH_SIZE)
@@ -573,8 +517,34 @@ def migrate_table(reader: SQLiteReader, writer: PgWriter, table: str, dry_run: b
     return result
 
 
+def _repair_sequences_with_sqlalchemy(connection) -> None:
+    from sqlalchemy import text
+
+    sequence_rows = connection.execute(
+        text(
+            "SELECT table_name, column_name, pg_get_serial_sequence('public.' || table_name, column_name) "
+            "FROM information_schema.columns WHERE table_schema='public' "
+            "AND (is_identity='YES' OR column_default LIKE 'nextval(%') "
+        )
+    ).fetchall()
+    for table, column, sequence_name in sequence_rows:
+        if not sequence_name:
+            continue
+        max_value = connection.execute(text(f'SELECT MAX("{column}") FROM "{table}"')).scalar()
+        if max_value is None:
+            continue
+        current = connection.execute(
+            text("SELECT last_value FROM pg_sequences WHERE schemaname='public' AND sequencename=:name"),
+            {"name": sequence_name.split('.')[-1]},
+        ).scalar()
+        if current is None or int(current) < int(max_value):
+            connection.execute(
+                text("SELECT setval(:sequence_name, :max_value, true)"),
+                {"sequence_name": sequence_name, "max_value": int(max_value)},
+            )
+
+
 def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZE) -> dict[str, Any]:
-    """Atomically migrate all source tables and verify after commit."""
     from sqlalchemy import MetaData, select
 
     source_metadata = MetaData()
@@ -582,7 +552,6 @@ def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZ
     source_metadata.reflect(bind=sqlite_engine)
     target_metadata.reflect(bind=postgres_engine)
     assert_schema_compatible(source_metadata, target_metadata)
-
     source_names = {name for name in source_metadata.tables if name not in SKIP_TABLES}
     table_order = _order_table_names(target_metadata, source_names)
 
@@ -593,11 +562,7 @@ def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZ
         for table_name in table_order:
             source_table = source_metadata.tables[table_name]
             target_table = target_metadata.tables[table_name]
-            common = [
-                column.name
-                for column in source_table.columns
-                if column.name in target_table.columns
-            ]
+            common = [c.name for c in source_table.columns if c.name in target_table.columns]
             if not common:
                 continue
             result = source_conn.execute(select(*[source_table.c[name] for name in common]))
@@ -605,9 +570,8 @@ def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZ
                 rows = result.fetchmany(batch_size)
                 if not rows:
                     break
-                payload = [dict(zip(common, row)) for row in rows]
-                target_conn.execute(target_table.insert(), payload)
-
+                target_conn.execute(target_table.insert(), [dict(zip(common, row)) for row in rows])
+        _repair_sequences_with_sqlalchemy(target_conn)
         transaction.commit()
     except Exception:
         transaction.rollback()
@@ -615,7 +579,6 @@ def migrate_database(sqlite_engine, postgres_engine, batch_size: int = BATCH_SIZ
     finally:
         source_conn.close()
         target_conn.close()
-
     return verify_databases(sqlite_engine, postgres_engine)
 
 
@@ -624,15 +587,14 @@ def verify_table(reader: SQLiteReader, writer: PgWriter, table: str) -> Verifica
     result.source_count = reader.count(table)
     result.target_count = writer.count(table)
     result.row_count_match = result.source_count == result.target_count
-    common = [column for column in reader.get_columns(table) if column in writer.get_columns(table)]
+    common = [c for c in reader.get_columns(table) if c in writer.get_columns(table)]
     if not common:
         result.errors.append("no common columns")
         return result
     result.source_fingerprint = reader.compute_fingerprint(table, common)
     result.target_fingerprint = writer.compute_fingerprint(table, common)
     result.fingerprint_match = result.source_fingerprint == result.target_fingerprint
-    pk_cols = writer.get_pk_columns(table)
-    result.pk_unique = writer.check_pk_uniqueness(table, pk_cols)[0]
+    result.pk_unique = writer.check_pk_uniqueness(table, writer.get_pk_columns(table))[0]
     fk_errors = writer.check_fk_integrity(table)
     result.fk_clean = not fk_errors
     result.errors.extend(fk_errors)
@@ -643,13 +605,9 @@ def verify_table(reader: SQLiteReader, writer: PgWriter, table: str) -> Verifica
         result.errors.append(f"row count mismatch: source={result.source_count}, target={result.target_count}")
     if not result.fingerprint_match:
         result.errors.append("SHA-256 fingerprint mismatch")
-    result.passed = (
-        result.row_count_match
-        and result.fingerprint_match
-        and result.pk_unique
-        and result.fk_clean
-        and result.not_null_clean
-    )
+    if not result.pk_unique:
+        result.errors.append("primary key uniqueness check failed")
+    result.passed = result.row_count_match and result.fingerprint_match and result.pk_unique and result.fk_clean and result.not_null_clean
     return result
 
 
@@ -658,42 +616,36 @@ def verify_databases(sqlite_engine, postgres_engine) -> dict[str, Any]:
     if not source_path or source_path == ":memory:":
         raise ValueError("verify_databases requires a file-backed SQLite database")
     reader = SQLiteReader(str(source_path))
-    writer = PgWriter(str(postgres_engine.url))
+    writer = PgWriter.from_sqlalchemy_engine(postgres_engine)
     try:
-        tables = [table for table in reader.get_tables() if table not in SKIP_TABLES]
-        verifications = [verify_table(reader, writer, table) for table in tables]
+        tables = [t for t in reader.get_tables() if t not in SKIP_TABLES]
+        verifications = [verify_table(reader, writer, table) for table in tables if writer.table_exists(table)]
         sequences = writer.check_sequences()
         security = writer.verify_security_invariants()
-        user_ids: list[str] = []
+        user_ids = []
         if writer.table_exists("users"):
             with writer.conn.cursor() as cur:
                 cur.execute("SELECT id FROM users ORDER BY id")
                 user_ids = [row[0] for row in cur.fetchall()]
         isolation = writer.verify_multi_user_isolation(user_ids)
-        sequence_ok = all(item.get("ok", False) for item in sequences.values())
-        ok = (
-            all(item.passed for item in verifications)
-            and sequence_ok
-            and not security.get("invalid_gex_sources")
-            and "cross_user_violation" not in isolation
-        )
         return {
-            "ok": ok,
-            "tables": {
-                item.table: {
-                    "row_count": item.target_count,
-                    "source_count": item.source_count,
-                    "fingerprint_match": item.fingerprint_match,
-                    "source_fingerprint": item.source_fingerprint,
-                    "target_fingerprint": item.target_fingerprint,
-                    "pk_unique": item.pk_unique,
-                    "fk_clean": item.fk_clean,
-                    "not_null_clean": item.not_null_clean,
-                    "errors": item.errors,
-                    "passed": item.passed,
-                }
-                for item in verifications
-            },
+            "ok": all(v.passed for v in verifications)
+                and all(item.get("ok", False) for item in sequences.values())
+                and not security.get("invalid_gex_sources")
+                and int(security.get("gex_missing_connection_provenance", 0)) == 0
+                and "cross_user_violation" not in isolation,
+            "tables": {v.table: {
+                "row_count": v.target_count,
+                "source_count": v.source_count,
+                "fingerprint_match": v.fingerprint_match,
+                "source_fingerprint": v.source_fingerprint,
+                "target_fingerprint": v.target_fingerprint,
+                "pk_unique": v.pk_unique,
+                "fk_clean": v.fk_clean,
+                "not_null_clean": v.not_null_clean,
+                "errors": v.errors,
+                "passed": v.passed,
+            } for v in verifications},
             "sequences": sequences,
             "security": security,
             "isolation": isolation,
@@ -703,20 +655,13 @@ def verify_databases(sqlite_engine, postgres_engine) -> dict[str, Any]:
         writer.close()
 
 
-def check_ready_for_cutover(
-    reader: SQLiteReader,
-    writer: PgWriter,
-    results: list[MigrationResult],
-    verifications: list[VerificationResult],
-    security: dict[str, Any],
-    user_isolation: dict[str, Any],
-) -> tuple[bool, list[str]]:
+def check_ready_for_cutover(reader: SQLiteReader, writer: PgWriter, results: list[MigrationResult], verifications: list[VerificationResult], security: dict[str, Any], user_isolation: dict[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if reader.integrity_check() != "ok":
         reasons.append("SQLite integrity check failed")
     heads = get_alembic_heads(Path(__file__).resolve().parents[1] / "alembic")
     if len(heads) != 1:
-        reasons.append(f"Alembic has {len(heads)} heads; expected exactly one")
+        reasons.append(f"Alembic has {len(heads)} heads")
     else:
         try:
             with writer.conn.cursor() as cur:
@@ -734,84 +679,10 @@ def check_ready_for_cutover(
             reasons.append(f"Verification failed for {verification.table}")
     if security.get("invalid_gex_sources"):
         reasons.append("Invalid GEX data_source values")
+    if security.get("gex_missing_connection_provenance"):
+        reasons.append("User-owned GEX snapshot is missing connection provenance")
     if "cross_user_violation" in user_isolation:
         reasons.append("Cross-user ownership violation")
+    if not all(item.get("ok", False) for item in writer.check_sequences().values()):
+        reasons.append("PostgreSQL sequences are behind imported IDs")
     return not reasons, reasons
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Safe SQLite -> PostgreSQL migration for StrikeNova")
-    parser.add_argument("--sqlite", required=True, help="Path to a verified SQLite backup")
-    parser.add_argument("--pg-url", help="PostgreSQL URL; defaults to DATABASE_URL")
-    parser.add_argument("--dry-run", action="store_true", help="Validate inputs without database writes")
-    parser.add_argument("--validate-only", action="store_true", help="Verify an already migrated target")
-    parser.add_argument("--ready-for-cutover", action="store_true", help="Run readiness checks only")
-    args = parser.parse_args()
-
-    pg_url = args.pg_url or os.getenv("DATABASE_URL")
-    if not pg_url:
-        print("ERROR: PostgreSQL URL is required")
-        return 1
-    if not normalize_url(pg_url).startswith("postgresql+psycopg://"):
-        print("ERROR: PostgreSQL URL must use the supported psycopg dialect")
-        return 1
-    sqlite_path = Path(args.sqlite).resolve()
-    if not sqlite_path.exists():
-        print(f"ERROR: SQLite backup not found: {sqlite_path}")
-        return 1
-
-    reader = SQLiteReader(str(sqlite_path))
-    writer = PgWriter(pg_url)
-    try:
-        integrity = reader.integrity_check()
-        if integrity != "ok":
-            print(f"ERROR: SQLite integrity: {integrity}")
-            return 1
-        print(f"SQLite integrity: {integrity}")
-        print(f"Backup SHA-256: {reader.file_sha256()}")
-        print(f"Backup size: {reader.file_size():,} bytes")
-
-        if args.dry_run:
-            print(f"DRY RUN: {len([t for t in reader.get_tables() if t not in SKIP_TABLES])} application tables")
-            return 0
-
-        if args.validate_only or args.ready_for_cutover:
-            tables = [t for t in reader.get_tables() if t not in SKIP_TABLES and writer.table_exists(t)]
-            verifications = [verify_table(reader, writer, table) for table in tables]
-            security = writer.verify_security_invariants()
-            with writer.conn.cursor() as cur:
-                cur.execute("SELECT id FROM users ORDER BY id")
-                user_ids = [row[0] for row in cur.fetchall()]
-            isolation = writer.verify_multi_user_isolation(user_ids)
-            ready, reasons = check_ready_for_cutover(reader, writer, [], verifications, security, isolation)
-            if args.ready_for_cutover:
-                print("READY FOR CUTOVER" if ready else "NOT READY FOR CUTOVER")
-                for reason in reasons:
-                    print(f"- {reason}")
-            return 0 if ready else 1
-
-        tables = [t for t in reader.get_tables() if t not in SKIP_TABLES]
-        assert_target_empty(writer, tables)
-        from sqlalchemy import create_engine
-
-        sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
-        postgres_engine = create_engine(normalize_url(pg_url))
-        try:
-            report = migrate_database(sqlite_engine, postgres_engine, batch_size=BATCH_SIZE)
-        finally:
-            sqlite_engine.dispose()
-            postgres_engine.dispose()
-        print(f"Verification: {'PASS' if report['ok'] else 'FAIL'}")
-        return 0 if report["ok"] else 1
-    finally:
-        reader.close()
-        writer.close()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
