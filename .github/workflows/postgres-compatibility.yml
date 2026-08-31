@@ -57,3 +57,4 @@ jobs:
           tests/test_rehearsal_ci_database.py
           tests/test_migration_hardening.py
           tests/test_migration_failure_injection.py
+          tests/test_migration_large_rehearsal.py
