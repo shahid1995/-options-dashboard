@@ -44,7 +44,7 @@ def test_read_only_sqlite_reader_does_not_checkpoint_wal(tmp_path: Path) -> None
 
     reader = tool.SQLiteReader(str(db_path))
     try:
-        with pytest.raises(RuntimeError, match="read-only"):
+        with pytest.raises(RuntimeError, match="read-write"):
             reader.wal_checkpoint()
     finally:
         reader.close()
