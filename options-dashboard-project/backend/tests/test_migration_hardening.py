@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,8 +17,13 @@ def load_tool():
     spec = importlib.util.spec_from_file_location("migration_tool", MODULE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
 
 
 def test_migration_tool_uses_psycopg3_not_psycopg2() -> None:
@@ -97,10 +103,11 @@ def test_insert_batch_does_not_commit_each_batch() -> None:
 def test_migration_has_explicit_commit_and_rollback_boundary() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
     start = source.index("def migrate_database")
-    end = source.index("# Verification", start)
+    end = source.index("def verify_table", start)
     migration_source = source[start:end]
-    assert "commit()" in migration_source
-    assert "rollback()" in migration_source
+    assert "transaction = target_conn.begin()" in migration_source
+    assert "transaction.commit()" in migration_source
+    assert "transaction.rollback()" in migration_source
 
 
 def test_sequence_reset_sql_is_present() -> None:
