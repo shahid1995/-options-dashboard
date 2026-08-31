@@ -256,6 +256,32 @@ class TestHealthEndpoints:
         assert data["status"] == "ready"
         assert data["checks"]["database"] == "ok"
 
+    def test_readiness_route_is_registered(self):
+        """Verify /readiness is in the actual FastAPI route table.
+
+        Regression test: a previous deployment served a completely different
+        application because the Railway service had an orphaned domain pointing
+        to an old service. This test ensures the route table itself is correct
+        regardless of deployment configuration.
+        """
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "methods"):
+                for method in route.methods:
+                    routes.append((method.upper(), route.path))
+        assert ("GET", "/readiness") in routes, (
+            "/readiness route not found in app routes — "
+            f"registered routes: {[r for r in routes if r[1] == '/health']}"
+        )
+
+    def test_app_title_is_strikenova(self):
+        """Ensure the FastAPI app is the StrikeNova Options Dashboard.
+
+        Regression: a misconfigured Railway service was serving 'ET Verdict'
+        instead of StrikeNova because of an orphaned public domain.
+        """
+        assert app.title == "Options Dashboard API"
+
 
 # ---------------------------------------------------------------------------
 # Security: no _state references in production code
