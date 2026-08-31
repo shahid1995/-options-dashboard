@@ -49,6 +49,35 @@ def _clear_postgres_target(engine) -> None:
             conn.execute(text(f'DELETE FROM "{table_name}"'))
 
 
+def _align_synthetic_fixture_schema(sqlite_path: Path) -> None:
+    """Keep the legacy synthetic fixture compatible with the current Alembic schema."""
+    engine = create_engine(f"sqlite:///{sqlite_path}")
+    try:
+        with engine.begin() as conn:
+            columns = {
+                row[1]
+                for row in conn.exec_driver_sql('PRAGMA table_info("broker_tokens")').fetchall()
+            }
+            if "broker" not in columns:
+                conn.exec_driver_sql(
+                    'ALTER TABLE "broker_tokens" ADD COLUMN "broker" VARCHAR DEFAULT \'UPSTOX\''
+                )
+            if "broker_analytics_token_encrypted" not in columns:
+                conn.exec_driver_sql(
+                    'ALTER TABLE "broker_tokens" ADD COLUMN "broker_analytics_token_encrypted" VARCHAR'
+                )
+            if "has_analytics_token" not in columns:
+                conn.exec_driver_sql(
+                    'ALTER TABLE "broker_tokens" ADD COLUMN "has_analytics_token" BOOLEAN DEFAULT 0'
+                )
+            if "updated_at" not in columns:
+                conn.exec_driver_sql(
+                    'ALTER TABLE "broker_tokens" ADD COLUMN "updated_at" DATETIME'
+                )
+    finally:
+        engine.dispose()
+
+
 def test_synthetic_rehearsal_uses_ci_postgres_and_verifies_full_report(tmp_path):
     raw_url = os.getenv("TEST_DATABASE_URL")
     if not raw_url:
@@ -56,6 +85,7 @@ def test_synthetic_rehearsal_uses_ci_postgres_and_verifies_full_report(tmp_path)
 
     sqlite_path = tmp_path / "synthetic-ci.db"
     _load_synthetic_builder()(str(sqlite_path))
+    _align_synthetic_fixture_schema(sqlite_path)
 
     sqlite_engine = create_engine(f"sqlite:///{sqlite_path}")
     postgres_engine = create_engine(normalize_url(raw_url), pool_pre_ping=True)
