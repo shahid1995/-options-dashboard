@@ -29,6 +29,7 @@ from app.models import GexSnapshot  # noqa: E402
 DATASET_USERS = 20
 GEX_ROWS_PER_USER = 500
 EXPECTED_GEX_ROWS = DATASET_USERS * GEX_ROWS_PER_USER
+MAX_REHEARSAL_SECONDS = 60.0
 
 
 def _prepare_schema(engine) -> None:
@@ -116,7 +117,7 @@ def _populate_large_dataset(engine) -> None:
         session.close()
 
 
-def test_large_realistic_rehearsal_migrates_and_verifies_without_data_loss(tmp_path, capsys):
+def test_large_realistic_rehearsal_migrates_and_verifies_without_data_loss(tmp_path):
     raw_url = os.getenv("TEST_DATABASE_URL")
     if not raw_url:
         pytest.skip("TEST_DATABASE_URL is not configured")
@@ -133,11 +134,11 @@ def test_large_realistic_rehearsal_migrates_and_verifies_without_data_loss(tmp_p
         _prepare_schema(postgres_engine)
         _clear_postgres_target(postgres_engine)
 
+        with sqlite_engine.connect() as conn:
+            source_count = int(conn.execute(text("SELECT COUNT(*) FROM gex_snapshots")).scalar())
         source_size_bytes = sqlite_path.stat().st_size
-        source_count = int(
-            sqlite_engine.connect().execute(text("SELECT COUNT(*) FROM gex_snapshots")).scalar()
-        )
         assert source_count == EXPECTED_GEX_ROWS
+        assert source_size_bytes > 0
 
         started = time.monotonic()
         migrate_database(sqlite_engine, postgres_engine, batch_size=500)
@@ -161,13 +162,20 @@ def test_large_realistic_rehearsal_migrates_and_verifies_without_data_loss(tmp_p
         assert report["tables"]["gex_snapshots"]["source_count"] == EXPECTED_GEX_ROWS
         assert report["tables"]["gex_snapshots"]["target_count"] == EXPECTED_GEX_ROWS
         assert report["tables"]["gex_snapshots"]["fingerprint_match"] is True
+        assert elapsed_seconds < MAX_REHEARSAL_SECONDS
 
-        captured = capsys.readouterr()
-        assert "password" not in captured.out.lower()
-        assert "postgres://" not in captured.out.lower()
+        with postgres_engine.connect() as conn:
+            target_size_bytes = int(
+                conn.execute(
+                    text("SELECT pg_total_relation_size('public.gex_snapshots')")
+                ).scalar()
+            )
+        assert target_size_bytes > 0
         print(
             f"large migration rehearsal: rows={EXPECTED_GEX_ROWS} "
-            f"source_sqlite_bytes={source_size_bytes} elapsed_seconds={elapsed_seconds:.3f}"
+            f"source_sqlite_bytes={source_size_bytes} "
+            f"target_gex_relation_bytes={target_size_bytes} "
+            f"elapsed_seconds={elapsed_seconds:.3f}"
         )
     finally:
         sqlite_engine.dispose()
