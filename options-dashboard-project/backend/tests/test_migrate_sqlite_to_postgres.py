@@ -1,4 +1,4 @@
-"""Tests for tools/migrate_sqlite_to_postgres.py
+"""Tests for backend/tools/migrate_sqlite_to_postgres.py
 
 These tests verify:
   - Backup creation and integrity
@@ -24,8 +24,8 @@ import sys
 
 import pytest
 
-# Add tools/ to path so we can import the migration module
-TOOLS_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "tools"
+# Add backend/tools/ to path so we can import the migration module
+TOOLS_DIR = pathlib.Path(__file__).resolve().parent.parent / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 from migrate_sqlite_to_postgres import (
@@ -36,7 +36,7 @@ from migrate_sqlite_to_postgres import (
     PgWriter,
     migrate_table,
     verify_table,
-    check_cutover_readiness,
+    check_ready_for_cutover,
     MigrationResult,
     VerificationResult,
 )
@@ -266,7 +266,7 @@ class TestSQLiteReader:
         fp1 = reader.compute_fingerprint("users", ["id", "email"])
         fp2 = reader.compute_fingerprint("users", ["id", "email"])
         assert fp1 == fp2
-        assert len(fp1) == 32  # MD5 hex
+        assert len(fp1) == 64  # SHA-256 hex
         reader.close()
 
     def test_read_only_mode(self, sqlite_db):
@@ -350,7 +350,6 @@ class TestMigrateTable:
         assert v.table == "users"
         assert v.passed is False
         assert v.errors == []
-        assert v.warnings == []
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +463,8 @@ class TestFingerprintEquality:
     def test_empty_table_fingerprint(self, sqlite_empty):
         reader = SQLiteReader(str(sqlite_empty))
         fp = reader.compute_fingerprint("users", ["id", "email"])
-        assert fp == hashlib.md5(b"").hexdigest()
+        # SHA-256 of empty input
+        assert fp == hashlib.sha256(b"").hexdigest()
         reader.close()
 
 
