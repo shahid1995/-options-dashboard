@@ -210,10 +210,15 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setSuccess("");
     setLoading(true);
     try {
-      const fn = tab === "signin" ? loginEmail : registerEmail;
-      const args = tab === "signin" ? [email, password] : [email, password, displayName];
-      const data = await fn(...args);
-      handleAuthSuccess(data);
+      if (tab === "signin") {
+        const data = await loginEmail(email, password);
+        handleAuthSuccess(data);
+      } else {
+        // Register first, then auto-login so the user gets a session.
+        await registerEmail(email, password, displayName);
+        const data = await loginEmail(email, password);
+        handleAuthSuccess(data);
+      }
     } catch (err) {
       setError(err.message || "Authentication failed. Please try again.");
       setLoading(false);
