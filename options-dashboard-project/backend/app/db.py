@@ -5,47 +5,58 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
+
 class Base(DeclarativeBase):
     pass
 
 
 # ---------------------------------------------------------------------------
-# Database path resolution
+# Database path / URL resolution
 # ---------------------------------------------------------------------------
 #
-# Phase 7.20 audit discovered that the previous relative path
-# ("sqlite:///./paper_journal.db") resolved differently depending on
-# the process working directory, causing data loss across server
-# restarts and CLI invocations.
-#
-# FIX: When DATABASE_URL is not set, resolve relative to this file's
-# parent directory (backend/), so the database always lives at
-#   backend/paper_journal.db
-# regardless of where Python/Uvicorn/CLI is launched from.
-#
-# When DATABASE_URL IS set (e.g. Railway PostgreSQL), use it as-is.
+# SQLite remains the default for local development and for the current
+# production environment until the explicit PostgreSQL switchover phase.
+# When DATABASE_URL points at PostgreSQL, normalize bare postgres URLs to the
+# installed psycopg 3 SQLAlchemy dialect.
 # ---------------------------------------------------------------------------
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_DB_PATH = os.path.join(_BACKEND_DIR, "paper_journal.db")
 
 
+def normalize_database_url(url: str) -> str:
+    """Normalize database URLs to dialects supported by this application.
+
+    Railway may provide either ``postgres://`` or ``postgresql://`` style
+    URLs. The application uses psycopg 3, so bare PostgreSQL URLs are mapped
+    to ``postgresql+psycopg://``. Explicit driver URLs are preserved.
+    SQLite and other SQLAlchemy URLs are returned unchanged.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
 def _engine():
     if settings.DATABASE_URL:
-        url = settings.DATABASE_URL
+        url = normalize_database_url(settings.DATABASE_URL)
     else:
-        # Absolute file path wrapped in sqlite:/// URI
         url = f"sqlite:///{_DEFAULT_DB_PATH}"
+
     if url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
         eng = create_engine(url, connect_args=connect_args)
-        # Phase 7.23B: Switch SQLite to WAL journal mode for crash safety.
+
+        # SQLite-only crash/concurrency tuning. Never register these hooks
+        # against PostgreSQL or another SQLAlchemy dialect.
         @event.listens_for(eng, "connect")
         def _set_wal(dbapi_conn, _rec):
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
             dbapi_conn.execute("PRAGMA synchronous=NORMAL")
     else:
-        # Phase 9E: Production PostgreSQL configuration
+        # PostgreSQL production/staging configuration.
         eng = create_engine(
             url,
             pool_size=5,
@@ -55,12 +66,6 @@ def _engine():
             pool_pre_ping=True,
         )
 
-    if url.startswith("sqlite"):
-        @event.listens_for(eng, "connect")
-        def _set_wal(dbapi_conn, _rec):
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
-
     return eng
 
 
@@ -69,9 +74,9 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
 def get_database_path() -> str:
-    """Return the absolute filesystem path of the active database."""
+    """Return the configured database URL or local SQLite path."""
     if settings.DATABASE_URL:
-        return settings.DATABASE_URL
+        return normalize_database_url(settings.DATABASE_URL)
     return _DEFAULT_DB_PATH
 
 
@@ -87,15 +92,9 @@ def get_db():
 def _run_alembic_migrations() -> None:
     """Run Alembic migrations against the current engine.
 
-    Called from init_db() to apply versioned schema migrations at startup.
-    This is the PRIMARY schema management path — Alembic owns the
-    authoritative schema definition.
-
-    Uses Alembic's ``Config.attributes`` to pass the current engine to
-    env.py. This avoids module-global state and ensures Alembic reuses
-    the same connection — critical for in-memory SQLite tests.
-    CLI-driven ``alembic upgrade head`` (without Config.attributes) falls
-    back to creating its own engine from the URL.
+    Alembic is the authoritative schema-management path. The current engine
+    is passed through Config.attributes so programmatic startup and in-memory
+    tests reuse the same connectable.
     """
     import logging
     from alembic.config import Config
@@ -104,8 +103,6 @@ def _run_alembic_migrations() -> None:
     logger = logging.getLogger(__name__)
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
-    # Alembic's official mechanism for sharing a connection.
-    # env.py reads config.attributes['connectable'] when present.
     alembic_cfg.attributes["connectable"] = engine
     command.upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations applied successfully")
@@ -120,12 +117,7 @@ def _run_alembic_migrations() -> None:
 # Startup sequence:
 #   1. Alembic upgrade head       — versioned, authoritative schema DDL
 #   2. Data backfill (idempotent) — strategy-leg attribution backfill
-#   3. Composite indexes         — SQLite-only pipeline query indexes
-#
-# Removed in Phase 10.1B:
-#   - Base.metadata.create_all() — no longer in production startup
-#   - ensure_column()            — all 15 legacy columns are in baseline
-#   - _existing_columns()        — no longer needed
+#   3. Composite indexes           — SQLite-only pipeline query indexes
 #
 # CLI tools (candle_backfill, run_backfill, run_daily, etc.) may still
 # call Base.metadata.create_all() for their own database setup — those
@@ -151,12 +143,8 @@ def init_db():
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
     logger = logging.getLogger(__name__)
-
-    # Step 1: Alembic migrations (sole schema management mechanism).
-    # This MUST succeed — if it fails, the application should not start.
     _run_alembic_migrations()
 
-    # Step 2: Idempotent data backfill — strategy-leg attribution.
     # Conservative one-time backfill for pre-existing, provably unambiguous
     # executions. Rows already present are never duplicated.
     from app.services.leg_exposure import backfill_all_exposures
@@ -167,9 +155,8 @@ def init_db():
     finally:
         session.close()
 
-    # Step 3: Composite indexes for pipeline infrastructure queries.
-    # These are NOT in the Alembic baseline (composite + covering indexes)
-    # and use CREATE INDEX IF NOT EXISTS for idempotent execution.
+    # These indexes are intentionally SQLite-only and are not part of the
+    # cross-dialect Alembic schema.
     if engine.dialect.name == "sqlite":
         with engine.begin() as conn:
             for stmt in [
@@ -185,7 +172,6 @@ def init_db():
 # Database health check (Phase 7.21)
 # ---------------------------------------------------------------------------
 
-# Tables that should exist in the historical-data schema.
 _HISTORICAL_TABLES = [
     "nifty_candles",
     "contract_specs",
@@ -195,17 +181,7 @@ _HISTORICAL_TABLES = [
 
 
 def check_database_health() -> dict:
-    """Return a diagnostic snapshot of the production database.
-
-    Designed to be called before any backfill to confirm the database
-    is accessible, correctly located, and has the expected schema.
-
-    Returns
-    -------
-    dict
-        A machine-readable health report with path, size, row counts,
-        and accessibility status.
-    """
+    """Return a diagnostic snapshot of the active database."""
     from sqlalchemy import inspect as sa_inspect, func, select
 
     db_path = get_database_path()
@@ -221,12 +197,10 @@ def check_database_health() -> dict:
         "newest_record": None,
     }
 
-    # File check
     if os.path.isfile(db_path):
         report["file_exists"] = True
         report["file_size_bytes"] = os.path.getsize(db_path)
 
-    # Schema check
     try:
         insp = sa_inspect(engine)
         existing_tables = set(insp.get_table_names())
@@ -240,7 +214,6 @@ def check_database_health() -> dict:
         report["schema_error"] = str(e)
         return report
 
-    # Row counts and date range
     db = SessionLocal()
     try:
         from app.models import NiftyCandle, ContractSpec, OptionCandle, OptionGreeks
@@ -254,7 +227,6 @@ def check_database_health() -> dict:
             count = db.scalar(select(func.count(model.id))) or 0
             report["row_counts"][label] = count
 
-        # Date range from nifty_candles (if any data)
         nifty_oldest = db.scalar(
             select(NiftyCandle.open_time).order_by(NiftyCandle.open_time.asc()).limit(1)
         )
