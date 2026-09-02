@@ -256,6 +256,72 @@ class TestHealthEndpoints:
         assert data["status"] == "ready"
         assert data["checks"]["database"] == "ok"
 
+    def test_readiness_route_is_registered(self):
+        """Verify /readiness is in the actual FastAPI route table.
+
+        Regression test: a previous deployment served a completely different
+        application because the Railway service had an orphaned domain pointing
+        to an old service. This test ensures the route table itself is correct
+        regardless of deployment configuration.
+        """
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "methods"):
+                for method in route.methods:
+                    routes.append((method.upper(), route.path))
+        assert ("GET", "/readiness") in routes, (
+            "/readiness route not found in app routes — "
+            f"registered routes: {[r for r in routes if r[1] == '/health']}"
+        )
+
+    def test_app_title_is_strikenova(self):
+        """Ensure the FastAPI app is the StrikeNova Options Dashboard.
+
+        Regression: a misconfigured Railway service was serving 'ET Verdict'
+        instead of StrikeNova because of an orphaned public domain.
+        """
+        assert app.title == "Options Dashboard API"
+
+
+# ---------------------------------------------------------------------------
+# Staging URL integrity (Phase J)
+# ---------------------------------------------------------------------------
+
+
+class TestStagingUrlIntegrity:
+    """Verify no documentation references the orphaned staging domain.
+
+    Regression: Railway's staging-backend.up.railway.app was an orphaned
+    domain serving 'ET Verdict' instead of StrikeNova. All staging
+    references must use the corrected domain.
+    """
+
+    ORPHANED_HOST = "staging-backend.up.railway.app"
+
+    def test_no_orphaned_staging_url_in_docs(self):
+        import glob
+        import os
+
+        docs_dir = os.path.join(
+            os.path.dirname(__file__), "..", "..", "docs"
+        )
+        if not os.path.isdir(docs_dir):
+            pytest.skip("docs directory not found")
+
+        violations = []
+        for fpath in glob.glob(os.path.join(docs_dir, "**", "*.md"), recursive=True):
+            try:
+                with open(fpath, encoding="utf-8") as f:
+                    for i, line in enumerate(f, 1):
+                        if self.ORPHANED_HOST in line:
+                            violations.append(f"{os.path.basename(fpath)}:{i}")
+            except UnicodeDecodeError:
+                continue
+        assert not violations, (
+            f"Orphaned staging URL '{self.ORPHANED_HOST}' found in: {violations}. "
+            "Use staging-backend-staging-8159.up.railway.app instead."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Security: no _state references in production code

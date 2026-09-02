@@ -13,6 +13,7 @@ from app.brokers.domain.errors import BrokerError, BrokerErrorCode
 from app.brokers.gateway import gateway
 from app.routers.deps import get_session_id
 from app.services import token_store
+from app.services.platform_session import is_platform_session_token
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,22 @@ def require_token(session_id: str | None) -> str:
     Raises 401 if session is invalid/expired (not logged in).
     Raises 403 if session is valid but no broker token is available
     (Google/email session without broker connection).
+
+    Platform session tokens (email:..., google:...) are NEVER returned
+    as broker credentials — they are identified and rejected with 403
+    before they can be passed to any broker adapter.
     """
     token = token_store.get_token(session_id)
+
+    # DEFENSIVE: detect platform session tokens that the token store
+    # returns from its in-memory cache.  These are NOT broker tokens
+    # and must NEVER be passed to Upstox.
+    if is_platform_session_token(token):
+        raise HTTPException(
+            status_code=403,
+            detail="No broker token available. Connect your broker to view market data.",
+        )
+
     if token:
         return token
 
@@ -88,13 +103,22 @@ async def call_upstox(coro, *, session_id: str | None = None):
 
     The coroutine comes from a broker ADAPTER, so failures arrive as
     canonical BrokerError — never a provider exception.
+
+    DEFENSIVE: Only clears tokens that are real broker credentials.
+    Platform session tokens (email:..., google:...) are never cleared
+    by broker error handling — clearing a platform token would destroy
+    the user's StrikeNova authentication.
     """
     try:
         return await coro
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
             if session_id:
-                token_store.clear_token(session_id)
+                # Defense-in-depth: only clear REAL broker tokens.
+                # Platform session tokens must survive broker failures.
+                existing_token = token_store.get_token(session_id)
+                if not is_platform_session_token(existing_token):
+                    token_store.clear_token(session_id)
             raise HTTPException(status_code=401, detail="Upstox session expired. Please log in again.") from e
         raise HTTPException(status_code=502, detail=f"Upstox API error ({e.status_code}): {e.message}") from e
 
@@ -156,6 +180,13 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
     # get_token() returns None for platform-only sessions (Google/email)
     # and real broker tokens for broker sessions.
     token = token_store.get_token(session_id)
+
+    # Platform session tokens (email:..., google:...) are NOT broker tokens.
+    # Reject with 4401 — the same code used for expired broker sessions.
+    if is_platform_session_token(token):
+        await websocket.close(code=4401)
+        return
+
     if not token:
         await websocket.close(code=4401)
         return
@@ -239,7 +270,7 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
 
                 # Check token validity periodically
                 current_token = token_store.get_token(session_id)
-                if not current_token:
+                if is_platform_session_token(current_token) or not current_token:
                     await websocket.close(code=4401)
                     return
 
@@ -271,7 +302,10 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                         last_push = time.time()
                     except BrokerError as e:
                         if e.code in BrokerErrorCode.SESSION_CODES:
-                            token_store.clear_token(session_id)
+                            # Defense-in-depth: only clear real broker tokens
+                            existing = token_store.get_token(session_id)
+                            if not is_platform_session_token(existing):
+                                token_store.clear_token(session_id)
                             await websocket.close(code=4401)
                             return
 
@@ -285,7 +319,7 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
             )
             while True:
                 token = token_store.get_token(session_id)
-                if not token:
+                if is_platform_session_token(token) or not token:
                     await websocket.close(code=4401)
                     return
                 try:
@@ -293,7 +327,10 @@ async def chain_ws(websocket: WebSocket, symbol: str, expiry_date: str = Query(.
                     chain = await adapter.get_option_chain(symbol, expiry_date)
                 except BrokerError as e:
                     if e.code in BrokerErrorCode.SESSION_CODES:
-                        token_store.clear_token(session_id)
+                        # Defense-in-depth: only clear real broker tokens
+                        existing = token_store.get_token(session_id)
+                        if not is_platform_session_token(existing):
+                            token_store.clear_token(session_id)
                         await websocket.close(code=4401)
                     else:
                         await websocket.close(code=4502)
