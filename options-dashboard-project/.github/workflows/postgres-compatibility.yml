@@ -59,6 +59,7 @@ jobs:
           tests/test_migration_failure_injection.py
           tests/test_migration_large_rehearsal.py
           tests/test_postgres_app_integration.py
+          tests/test_postgres_tool_helpers.py
 
       - name: Run application-level PostgreSQL integration tests
         env:
