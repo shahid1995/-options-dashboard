@@ -1,0 +1,98 @@
+name: StrikeNova Status Gate
+
+on:
+  push:
+    paths:
+      - "options-dashboard-project/backend/**"
+      - "options-dashboard-project/frontend/**"
+      - "options-dashboard-project/docs/superpowers/**"
+      - ".github/workflows/strikenova-status-gate.yml"
+  pull_request:
+    paths:
+      - "options-dashboard-project/backend/**"
+      - "options-dashboard-project/frontend/**"
+      - "options-dashboard-project/docs/superpowers/**"
+      - ".github/workflows/strikenova-status-gate.yml"
+
+jobs:
+  status-gate:
+    name: Status tracker and master plan validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify status tracker exists
+        run: |
+          TRACKER="options-dashboard-project/docs/superpowers/STRIKENOVA_IMPLEMENTATION_STATUS.md"
+          if [ ! -f "$TRACKER" ]; then
+            echo "::error::Status tracker missing: $TRACKER"
+            exit 1
+          fi
+          echo "Status tracker found."
+
+      - name: Verify master plan exists
+        run: |
+          PLAN="options-dashboard-project/docs/superpowers/plans/2026-09-02-strikenova-architecture-blueprint-v1-master-implementation-plan.md"
+          if [ ! -f "$PLAN" ]; then
+            echo "::error::Master plan missing: $PLAN"
+            exit 1
+          fi
+          echo "Master plan found."
+
+      - name: Verify execution protocol exists
+        run: |
+          PROTOCOL="options-dashboard-project/docs/superpowers/STRIKENOVA_EXECUTION_PROTOCOL.md"
+          if [ ! -f "$PROTOCOL" ]; then
+            echo "::error::Execution protocol missing: $PROTOCOL"
+            exit 1
+          fi
+          echo "Execution protocol found."
+
+      - name: Check master plan SHA in tracker
+        run: |
+          TRACKER="options-dashboard-project/docs/superpowers/STRIKENOVA_IMPLEMENTATION_STATUS.md"
+          PLAN="options-dashboard-project/docs/superpowers/plans/2026-09-02-strikenova-architecture-blueprint-v1-master-implementation-plan.md"
+          PLAN_SHA=$(git log -1 --format="%h" -- "$PLAN")
+          TRACKER_SHA_LINE=$(grep -i "Master Plan SHA" "$TRACKER" || true)
+          if [ -z "$TRACKER_SHA_LINE" ]; then
+            echo "::error::Tracker does not contain a Master Plan SHA line."
+            exit 1
+          fi
+          TRACKER_SHA=$(echo "$TRACKER_SHA_LINE" | grep -oP '[0-9a-f]{7,40}' | head -1)
+          if [ "$TRACKER_SHA" != "$PLAN_SHA" ]; then
+            echo "::error::Master plan SHA drift: tracker says $TRACKER_SHA, current plan HEAD is $PLAN_SHA"
+            exit 1
+          fi
+          echo "Master plan SHA synchronized: $PLAN_SHA"
+
+      - name: Detect implementation changes without tracker updates
+        run: |
+          TRACKER="options-dashboard-project/docs/superpowers/STRIKENOVA_IMPLEMENTATION_STATUS.md"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          # Check if implementation files changed but tracker didn't
+          IMPL_CHANGED=$(git diff --name-only "$BASE" "$HEAD" -- \
+            "options-dashboard-project/backend/" \
+            "options-dashboard-project/frontend/" 2>/dev/null || true)
+          TRACKER_CHANGED=$(git diff --name-only "$BASE" "$HEAD" -- "$TRACKER" 2>/dev/null || true)
+          if [ -n "$IMPL_CHANGED" ] && [ -z "$TRACKER_CHANGED" ]; then
+            echo "::warning::Implementation files changed but status tracker was not updated."
+            echo "Changed files:"
+            echo "$IMPL_CHANGED"
+          else
+            echo "Tracker status: OK"
+          fi
