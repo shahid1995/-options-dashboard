@@ -63,6 +63,8 @@ def _get_session():
 
     Uses the centralized path resolution from ``app.db`` so the same
     database file is used regardless of process working directory.
+    SQLite-only connection arguments are applied only to SQLite URLs;
+    PostgreSQL receives an empty connect_args mapping.
     """
     db_url = settings.DATABASE_URL or f"sqlite:///{_DEFAULT_DB_PATH}"
     connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
