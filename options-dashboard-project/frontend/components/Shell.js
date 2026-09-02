@@ -385,7 +385,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
       // Ignore
     }
     setAuthUser(null);
-    router.push("/");
+    router.replace("/");
   }, [router]);
 
   const activeKey = getActiveKey(pathname);

@@ -713,7 +713,7 @@ export default function SettingsPage() {
 
   const handleLogout = useCallback(async () => {
     await logout();
-    router.push("/");
+    router.replace("/");
   }, [logout, router]);
 
   if (loading) {

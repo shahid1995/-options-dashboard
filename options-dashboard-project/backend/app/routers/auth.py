@@ -673,13 +673,15 @@ def me(session_id: str | None = Depends(get_session_id), db: Session = Depends(g
 
 @router.post("/logout")
 def logout(session_id: str | None = Depends(get_session_id), db: Session = Depends(get_db)):
-    if token_store.get_token(session_id) is None:
-        raise HTTPException(status_code=401, detail="Not logged in")
+    # Idempotent: safe to call even if session is already revoked, expired,
+    # or never existed. Always returns the same successful response so that
+    # repeated logout calls, browser retries, or race conditions do not leak
+    # information about whether a session was valid.
+    if session_id:
+        revoke_session(db, session_id)
+        db.commit()
+        token_store.clear_token(session_id)
 
-    revoke_session(db, session_id)
-    db.commit()
-
-    token_store.clear_token(session_id)
     response = JSONResponse({"ok": True})
     response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
     return response

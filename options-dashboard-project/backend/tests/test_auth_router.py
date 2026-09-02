@@ -166,10 +166,38 @@ def test_logout_via_header(client, db_session):
     assert token_store.get_token(session_id) is None
 
 
-def test_logout_requires_valid_session(client):
-    token_store.set_token("tok-xyz")
+def test_logout_no_session_is_idempotent(client):
+    """Logout without a session returns 200 (idempotent, no information leak)."""
     resp = client.post("/auth/logout")
-    assert resp.status_code == 401
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+def test_logout_is_idempotent(client, db_session):
+    """Calling logout twice returns 200 both times and session stays revoked."""
+    from tests.test_helpers import create_test_identity
+    session_id, _ = create_test_identity(db_session, "tok-idem")
+
+    # First logout
+    resp1 = client.post("/auth/logout", headers={"X-Session-Id": session_id})
+    assert resp1.status_code == 200
+    assert resp1.json() == {"ok": True}
+
+    # Second logout (same session) - must not fail
+    resp2 = client.post("/auth/logout", headers={"X-Session-Id": session_id})
+    assert resp2.status_code == 200
+    assert resp2.json() == {"ok": True}
+
+    # Session still invalid
+    status = client.get("/auth/status", headers={"X-Session-Id": session_id})
+    assert status.json()["logged_in"] is False
+
+
+def test_logout_already_expired_session(client, db_session):
+    """Logout of an expired/invalid session returns 200 (idempotent)."""
+    resp = client.post("/auth/logout", headers={"X-Session-Id": "totally-fake-session-xyz"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
 
 
 def test_health(client):
