@@ -129,13 +129,15 @@ A calendar date, a commit existing, or code merely being present is **not** suff
 
 Use this section to record every completed/failed milestone with concrete evidence. Keep the newest entry first.
 
-### 2026-09-02 — Tracker mechanism established
+### 2026-09-02 — Plan/status synchronization mechanism established
 
 - **Active day:** Day 3
 - **Status:** IN PROGRESS
 - **Branch:** `feat/strikenova-day3-security`
 - **Master plan revision:** `21d107d9f833b7ec71d5c9d556fe4e9797cf61fe`
-- **Evidence:** Master plan reviewed before creating this tracker; status gate and execution protocol added in the same change.
+- **Commits:** `811fbd5fa13306140788b77f48bbabdc1258cb68` (tracker), `415501045b990268a3aff4c9190243a3de8a49f2` (protocol), `8707dc09dbd41cab7a661e908713ef497210f276` (CI guard)
+- **Evidence:** Master plan reviewed before establishing the mechanism; status ledger, execution protocol and CI synchronization guard created.
+- **Mechanism:** implementation/config/workflow changes require the status ledger to change; master-plan changes require the status ledger to change; CI compares the recorded plan blob SHA with the checked-out plan SHA.
 - **Production impact:** None. No deployment, merge, production PostgreSQL cutover, or production data modification.
 - **Next action:** Continue Day 3 only after checking both the master plan and this status file.
 
