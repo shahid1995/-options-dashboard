@@ -65,42 +65,49 @@ def login(
 ):
     """Redirect the browser to the broker's OAuth login page.
 
-    BYOB path: if the user is authenticated and has stored credentials
-    for this broker, use their per-user API key for the OAuth URL.
-    Fallback: use platform-level settings.UPSTOX_API_KEY (backward compat).
+    BYOB path: the user MUST be authenticated AND have stored credentials
+    for this broker.  No platform-level credential fallback.
 
-    The user MUST be authenticated (have a valid session) to initiate
-    BYOB OAuth.  This avoids the OAuth-state-to-user-identity problem
-    entirely (authenticated-first flow).
+    Day 3 security fix: unauthenticated users cannot initiate OAuth.
+    This eliminates the OAuth-state-to-user-identity problem entirely.
     """
     broker_id = broker.upper()
 
-    # Try to resolve user's per-user credentials (BYOB path)
+    # Day 3: Require authenticated session — no anonymous OAuth initiation.
+    if not session_id or token_store.get_token(session_id) is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Log in first to connect a broker.",
+        )
+
+    # Resolve user's per-user credentials (BYOB path).
+    # Day 3: No platform key fallback — user must have stored credentials.
     user_credentials: dict = {}
-    if session_id:
-        token = token_store.get_token(session_id)
-        if token is not None:
-            # User is authenticated — try to find their broker credentials
-            db = SessionLocal()
-            try:
-                session = get_active_session(db, session_id)
-                if session is not None:
-                    try:
-                        user_credentials = resolve_user_credentials(
-                            session.user_id, broker_id, db
-                        )
-                    except ValueError:
-                        pass  # No stored credentials — fall back to platform key
-            finally:
-                db.close()
+    db = SessionLocal()
+    try:
+        session = get_active_session(db, session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Session expired or invalid. Please log in again.",
+            )
+        try:
+            user_credentials = resolve_user_credentials(
+                session.user_id, broker_id, db
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No {broker_id} credentials found. "
+                    f"Store your broker API key/secret via POST /auth/connect first."
+                ),
+            )
+    finally:
+        db.close()
 
     # Phase 10.2B-3: Embed session_id in signed OAuth state for callback binding.
-    # This eliminates the race condition where the callback couldn't identify
-    # which user initiated the OAuth flow.
-    if session_id and token_store.get_token(session_id):
-        state = token_store.create_oauth_state(session_id=session_id, broker=broker_id)
-    else:
-        state = token_store.create_oauth_state()  # fallback: no session binding
+    state = token_store.create_oauth_state(session_id=session_id, broker=broker_id)
 
     adapter = gateway.create(broker_id, **user_credentials)
     return RedirectResponse(adapter.get_authorization_url(state))
@@ -133,27 +140,44 @@ async def callback(
         raise HTTPException(status_code=400, detail="Missing authorization code")
 
     bound_session_id = state_data.get("session_id", "")
-    broker_id = state_data.get("broker", broker.upper())
+    # Day 3: broker comes ONLY from the signed state, never from the query param.
+    broker_id = state_data.get("broker", "UPSTOX")
 
     # Resolve user's per-user credentials from the bound session.
     # Deterministic: we know exactly which session initiated this OAuth flow.
+    # Day 3: credentials are mandatory — no platform fallback in callback.
     user_credentials: dict = {}
     user_id_for_connection: str | None = None
 
-    if bound_session_id:
-        pre_db = SessionLocal()
+    if not bound_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth state missing session binding. Please log in and try again.",
+        )
+
+    pre_db = SessionLocal()
+    try:
+        session = get_active_session(pre_db, bound_session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Session expired or invalid. Please log in and try again.",
+            )
+        user_id_for_connection = session.user_id
         try:
-            session = get_active_session(pre_db, bound_session_id)
-            if session is not None:
-                user_id_for_connection = session.user_id
-                try:
-                    user_credentials = resolve_user_credentials(
-                        user_id_for_connection, broker_id, pre_db
-                    )
-                except ValueError:
-                    pass  # No stored credentials — will use platform key fallback
-        finally:
-            pre_db.close()
+            user_credentials = resolve_user_credentials(
+                user_id_for_connection, broker_id, pre_db
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No {broker_id} credentials found for this user. "
+                    f"Store your broker API key/secret via POST /auth/connect first."
+                ),
+            )
+    finally:
+        pre_db.close()
 
     try:
         # Create adapter with USER's credentials — both exchange and profile
@@ -212,15 +236,6 @@ async def callback(
         )
     finally:
         db.close()
-
-    # Phase 7.24.8: Also persist the token for CLI tools.
-    try:
-        from app.services.upstox_token_manager import UpstoxTokenManager
-
-        _mgr = UpstoxTokenManager()
-        _mgr.save(access_token, expires_at=datetime.now(timezone.utc) + timedelta(hours=24))
-    except Exception:
-        logger.debug("Could not persist token to cache (non-critical)")
 
     # Send the user back to the dashboard. The session ID is passed in the
     # URL fragment because it is not sent to servers as a query parameter.

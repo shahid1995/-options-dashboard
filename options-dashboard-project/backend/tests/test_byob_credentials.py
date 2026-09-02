@@ -672,14 +672,12 @@ class TestResolveNonDefaultFallback:
 class TestCallbackWithoutActiveSession:
     """Verify callback behavior when no active StrikeNova session exists."""
 
-    def test_callback_falls_back_to_platform_credentials(self, db, user):
-        """When no active session exists, callback uses platform credentials.
+    def test_callback_rejects_when_no_active_session(self, db, user):
+        """Day 3: When no active session exists, callback must REJECT.
 
-        This is the backward-compatible fallback: unauthenticated users
-        (or expired sessions) get platform-level credentials, not another
-        user's credentials.
+        The platform credential fallback is removed. Callbacks now require
+        a valid bound session with stored credentials.
         """
-        # Verify no active sessions exist for this user
         from app.identity import UserSession
         active = (
             db.query(UserSession)
@@ -695,8 +693,9 @@ class TestCallbackWithoutActiveSession:
         with pytest.raises(ValueError, match="No UPSTOX credentials found"):
             resolve_user_credentials(user.id, "UPSTOX", db)
 
-        # The callback would fall back to {} (platform credentials)
-        # This is the documented backward-compatible behavior
+        # Day 3: callback must not fall back to platform credentials.
+        # The callback will raise HTTPException(status_code=400) when
+        # bound_session_id is empty or session is expired.
 
     def test_callback_does_not_leak_other_users_credentials(self, db):
         """When user has no session, callback cannot select another user's creds."""

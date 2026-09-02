@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import settings
 from app.db import Base, get_db
+from app.identity import create_session_record
 from app.main import app
 from app.services import token_store, upstox
 
@@ -52,12 +54,39 @@ def client(db_session):
         auth_mod.SessionLocal = _orig_session_local
 
 
-def test_login_redirects_to_upstox_with_state(client):
+def test_login_requires_authentication(client):
+    """GET /auth/login without a session returns 401 (Day 3 security fix)."""
     resp = client.get("/auth/login", follow_redirects=False)
+    assert resp.status_code == 401
+    assert "Authentication required" in resp.json()["detail"]
+
+
+def test_login_redirects_to_upstox_with_state(client, db_session):
+    """GET /auth/login with valid session + credentials redirects to OAuth."""
+    from tests.test_helpers import create_test_identity
+    from app.identity import store_credentials, User
+
+    user_id = str(uuid4())
+    session_id = token_store.set_token("tok-login-test")
+    user = User(
+        id=user_id, status="active", identity_source="upstox",
+        broker_provider="UPSTOX", broker_user_id="login-test-user",
+    )
+    db_session.add(user)
+    db_session.flush()
+    create_session_record(db_session, user_id, session_id)
+    store_credentials(db_session, user_id, "UPSTOX", "user-api-key", "user-api-secret")
+
+    resp = client.get(
+        "/auth/login",
+        headers={"X-Session-Id": session_id},
+        follow_redirects=False,
+    )
     assert resp.status_code == 307
     location = resp.headers["location"]
     assert location.startswith(f"{upstox.BASE_URL}/login/authorization/dialog")
     assert "state=" in location
+    assert "client_id=user-api-key" in location
 
 
 def test_callback_with_error_redirects_to_frontend(client):
@@ -81,14 +110,41 @@ def test_callback_with_forged_state_returns_400(client):
     assert resp.json()["detail"] == "Invalid or expired OAuth state"
 
 
-def test_callback_without_code_returns_400(client):
-    state = token_store.create_oauth_state()
+def test_callback_without_code_returns_400(client, db_session):
+    """Callback with state but no code returns 400."""
+    from app.identity import User
+    user_id = str(uuid4())
+    session_id = token_store.set_token("tok-cb-test")
+    user = User(
+        id=user_id, status="active", identity_source="upstox",
+        broker_provider="UPSTOX", broker_user_id="cb-test-user",
+    )
+    db_session.add(user)
+    db_session.flush()
+    create_session_record(db_session, user_id, session_id)
+
+    state = token_store.create_oauth_state(session_id=session_id, broker="UPSTOX")
     resp = client.get("/auth/callback", params={"state": state}, follow_redirects=False)
     assert resp.status_code == 400
     assert resp.json()["detail"] == "Missing authorization code"
 
 
-def test_callback_with_code_sets_session_cookie_and_redirects(client, monkeypatch):
+def test_callback_with_code_sets_session_cookie_and_redirects(client, db_session, monkeypatch):
+    """Callback with signed state + credentials completes OAuth."""
+    from app.identity import User, store_credentials
+    from uuid import uuid4 as _uuid4
+
+    user_id = str(_uuid4())
+    session_id = token_store.set_token("tok-callback-user")
+    user = User(
+        id=user_id, status="active", identity_source="upstox",
+        broker_provider="UPSTOX", broker_user_id="callback-user-1",
+    )
+    db_session.add(user)
+    db_session.flush()
+    create_session_record(db_session, user_id, session_id)
+    store_credentials(db_session, user_id, "UPSTOX", "user-cb-key", "user-cb-secret")
+
     mock_adapter = AsyncMock()
     mock_adapter.exchange_authorization_code = AsyncMock(return_value="tok-xyz")
     mock_adapter.get_profile = AsyncMock(
@@ -108,7 +164,7 @@ def test_callback_with_code_sets_session_cookie_and_redirects(client, monkeypatc
     mock_gw.create.return_value = mock_adapter
     monkeypatch.setattr("app.routers.auth.gateway", mock_gw)
 
-    state = token_store.create_oauth_state()
+    state = token_store.create_oauth_state(session_id=session_id, broker="UPSTOX")
     resp = client.get(
         "/auth/callback", params={"code": "auth-code", "state": state}, follow_redirects=False
     )
@@ -116,10 +172,10 @@ def test_callback_with_code_sets_session_cookie_and_redirects(client, monkeypatc
     assert resp.status_code == 307
     location = resp.headers["location"]
     assert location.startswith(f"{settings.FRONTEND_URL}/dashboard#session_id=")
-    session_id = resp.cookies.get("session_id")
-    assert session_id
-    assert location == f"{settings.FRONTEND_URL}/dashboard#session_id={session_id}"
-    assert token_store.get_token(session_id) == "tok-xyz"
+    callback_session_id = resp.cookies.get("session_id")
+    assert callback_session_id
+    assert location == f"{settings.FRONTEND_URL}/dashboard#session_id={callback_session_id}"
+    assert token_store.get_token(callback_session_id) == "tok-xyz"
 
 
 def test_status_logged_out(client):
