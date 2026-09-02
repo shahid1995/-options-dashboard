@@ -263,86 +263,50 @@ class TestDeduplication:
 
     def test_duplicate_within_tolerance(self, db):
         now = datetime.now(timezone.utc)
-        # Insert a snapshot
         snap = {
-            "symbol": "NIFTY",
-            "expiry": "2026-08-28",
-            "spot": 24230.5,
-            "methodology": "GEX_STANDARD_V1",
-            "signConvention": "NAIVE_DEALER_CONVENTION",
-            "callGex": 100.0,
-            "putGex": -100.0,
-            "netGex": 0.0,
-            "availabilityStatus": "available",
-            "validStrikeCount": 2,
-            "totalStrikeCount": 2,
-            "capturedAt": now.isoformat(),
-            "strikeData": "[]",
-            "expiryData": "[]",
+            "symbol": "NIFTY", "expiry": "2026-08-28", "spot": 24230.5,
+            "methodology": "GEX_STANDARD_V1", "signConvention": "NAIVE_DEALER_CONVENTION",
+            "callGex": 100.0, "putGex": -100.0, "netGex": 0.0,
+            "availabilityStatus": "available", "validStrikeCount": 2, "totalStrikeCount": 2,
+            "capturedAt": now.isoformat(), "strikeData": "[]", "expiryData": "[]",
             "methodologyMetadata": "{}",
         }
         record_gex_snapshot(db, snap)
-
-        # Check duplicate within 60s
         dup_id = _is_duplicate(db, "NIFTY", "2026-08-28", now + timedelta(seconds=30))
         assert dup_id is not None
 
     def test_not_duplicate_outside_tolerance(self, db):
         now = datetime.now(timezone.utc)
         snap = {
-            "symbol": "NIFTY",
-            "expiry": "2026-08-28",
-            "spot": 24230.5,
-            "methodology": "GEX_STANDARD_V1",
-            "signConvention": "NAIVE_DEALER_CONVENTION",
-            "callGex": 100.0,
-            "putGex": -100.0,
-            "netGex": 0.0,
-            "availabilityStatus": "available",
-            "validStrikeCount": 2,
-            "totalStrikeCount": 2,
-            "capturedAt": now.isoformat(),
-            "strikeData": "[]",
-            "expiryData": "[]",
+            "symbol": "NIFTY", "expiry": "2026-08-28", "spot": 24230.5,
+            "methodology": "GEX_STANDARD_V1", "signConvention": "NAIVE_DEALER_CONVENTION",
+            "callGex": 100.0, "putGex": -100.0, "netGex": 0.0,
+            "availabilityStatus": "available", "validStrikeCount": 2, "totalStrikeCount": 2,
+            "capturedAt": now.isoformat(), "strikeData": "[]", "expiryData": "[]",
             "methodologyMetadata": "{}",
         }
         record_gex_snapshot(db, snap)
-
-        # Check not duplicate after 60s
         dup_id = _is_duplicate(db, "NIFTY", "2026-08-28", now + timedelta(seconds=61))
         assert dup_id is None
 
     def test_different_symbol_not_duplicate(self, db):
         now = datetime.now(timezone.utc)
         snap = {
-            "symbol": "NIFTY",
-            "expiry": "2026-08-28",
-            "spot": 24230.5,
-            "methodology": "GEX_STANDARD_V1",
-            "signConvention": "NAIVE_DEALER_CONVENTION",
-            "callGex": 100.0,
-            "putGex": -100.0,
-            "netGex": 0.0,
-            "availabilityStatus": "available",
-            "validStrikeCount": 2,
-            "totalStrikeCount": 2,
-            "capturedAt": now.isoformat(),
-            "strikeData": "[]",
-            "expiryData": "[]",
+            "symbol": "NIFTY", "expiry": "2026-08-28", "spot": 24230.5,
+            "methodology": "GEX_STANDARD_V1", "signConvention": "NAIVE_DEALER_CONVENTION",
+            "callGex": 100.0, "putGex": -100.0, "netGex": 0.0,
+            "availabilityStatus": "available", "validStrikeCount": 2, "totalStrikeCount": 2,
+            "capturedAt": now.isoformat(), "strikeData": "[]", "expiryData": "[]",
             "methodologyMetadata": "{}",
         }
         record_gex_snapshot(db, snap)
-
         dup_id = _is_duplicate(db, "BANKNIFTY", "2026-08-28", now)
         assert dup_id is None
 
     def test_capture_returns_duplicate_status(self, db, service):
         chain = _make_chain()
-        # First capture
         r1 = service.capture_once(db, chain, expiry="2026-08-28")
         assert r1["status"] == "captured"
-
-        # Second capture immediately → duplicate
         r2 = service.capture_once(db, chain, expiry="2026-08-28")
         assert r2["status"] == "duplicate"
         assert r2["snapshot_id"] == r1["snapshot_id"]
@@ -365,25 +329,15 @@ class TestRetention:
     def test_prune_removes_old_snapshots(self, db):
         old_time = datetime.now(timezone.utc) - timedelta(days=100)
         snap = {
-            "symbol": "NIFTY",
-            "expiry": "2026-08-28",
-            "spot": 24230.5,
-            "methodology": "GEX_STANDARD_V1",
-            "signConvention": "NAIVE_DEALER_CONVENTION",
-            "callGex": 100.0,
-            "putGex": -100.0,
-            "netGex": 0.0,
-            "availabilityStatus": "available",
-            "validStrikeCount": 2,
-            "totalStrikeCount": 2,
-            "capturedAt": old_time.isoformat(),
-            "strikeData": "[]",
-            "expiryData": "[]",
+            "symbol": "NIFTY", "expiry": "2026-08-28", "spot": 24230.5,
+            "methodology": "GEX_STANDARD_V1", "signConvention": "NAIVE_DEALER_CONVENTION",
+            "callGex": 100.0, "putGex": -100.0, "netGex": 0.0,
+            "availabilityStatus": "available", "validStrikeCount": 2, "totalStrikeCount": 2,
+            "capturedAt": old_time.isoformat(), "strikeData": "[]", "expiryData": "[]",
             "methodologyMetadata": "{}",
         }
         record_gex_snapshot(db, snap)
         assert count_gex_snapshots(db) == 1
-
         deleted = run_retention_cleanup(db)
         assert deleted == 1
         assert count_gex_snapshots(db) == 0
@@ -391,24 +345,14 @@ class TestRetention:
     def test_prune_preserves_recent(self, db):
         recent_time = datetime.now(timezone.utc) - timedelta(days=10)
         snap = {
-            "symbol": "NIFTY",
-            "expiry": "2026-08-28",
-            "spot": 24230.5,
-            "methodology": "GEX_STANDARD_V1",
-            "signConvention": "NAIVE_DEALER_CONVENTION",
-            "callGex": 100.0,
-            "putGex": -100.0,
-            "netGex": 0.0,
-            "availabilityStatus": "available",
-            "validStrikeCount": 2,
-            "totalStrikeCount": 2,
-            "capturedAt": recent_time.isoformat(),
-            "strikeData": "[]",
-            "expiryData": "[]",
+            "symbol": "NIFTY", "expiry": "2026-08-28", "spot": 24230.5,
+            "methodology": "GEX_STANDARD_V1", "signConvention": "NAIVE_DEALER_CONVENTION",
+            "callGex": 100.0, "putGex": -100.0, "netGex": 0.0,
+            "availabilityStatus": "available", "validStrikeCount": 2, "totalStrikeCount": 2,
+            "capturedAt": recent_time.isoformat(), "strikeData": "[]", "expiryData": "[]",
             "methodologyMetadata": "{}",
         }
         record_gex_snapshot(db, snap)
-
         deleted = run_retention_cleanup(db)
         assert deleted == 0
         assert count_gex_snapshots(db) == 1
@@ -428,7 +372,6 @@ class TestConfiguration:
     """Test configuration values."""
 
     def test_capture_interval_default(self):
-        # Default should be 60 seconds
         interval = get_capture_interval_seconds()
         assert interval == 60
 
@@ -447,17 +390,11 @@ class TestNumericalIntegrity:
     def test_end_to_end_values_preserved(self, db, service):
         chain = _make_chain(spot=24230.5)
         expiry = "2026-08-28"
-
-        # Capture
         result = service.capture_once(db, chain, expiry=expiry)
         assert result["status"] == "captured"
-
-        # Retrieve from DB
         snapshots = get_gex_snapshots(db, symbol="NIFTY", expiry=expiry, limit=1)
         assert len(snapshots) == 1
         snap = snapshots[0]
-
-        # Verify numerical integrity
         assert snap["spot"] == 24230.5
         assert snap["callGex"] is not None
         assert snap["putGex"] is not None
@@ -465,41 +402,32 @@ class TestNumericalIntegrity:
         assert math.isfinite(snap["callGex"])
         assert math.isfinite(snap["putGex"])
         assert math.isfinite(snap["netGex"])
-
-        # Verify formula: raw_gex = gamma * OI * spot^2 * 0.01
         expected_call_24200 = 0.003 * 10000 * 24230.5 ** 2 * 0.01
         expected_put_24200 = -(0.002 * 8000 * 24230.5 ** 2 * 0.01)
         expected_call_24300 = 0.001 * 5000 * 24230.5 ** 2 * 0.01
         expected_put_24300 = -(0.004 * 12000 * 24230.5 ** 2 * 0.01)
-
         expected_total_call = expected_call_24200 + expected_call_24300
         expected_total_put = expected_put_24200 + expected_put_24300
-
         assert snap["callGex"] == pytest.approx(expected_total_call, rel=1e-10)
         assert snap["putGex"] == pytest.approx(expected_total_put, rel=1e-10)
         assert snap["netGex"] == pytest.approx(expected_total_call + expected_total_put, rel=1e-10)
 
     def test_no_lot_size_in_persisted_gex(self, db, service):
-        """Lot size must not affect persisted GEX values."""
         chain = _make_chain(spot=24230.5)
-        result = service.capture_once(db, chain, expiry="2026-08-28")
-
+        service.capture_once(db, chain, expiry="2026-08-28")
         snapshots = get_gex_snapshots(db, symbol="NIFTY", limit=1)
         snap = snapshots[0]
-
-        # Verify methodology metadata confirms no lot-size factor
         meta = snap.get("methodologyMetadata", {})
         assert meta.get("lotSizeFactorApplied") is False
 
     def test_sign_convention_preserved(self, db, service):
         chain = _make_chain()
         service.capture_once(db, chain, expiry="2026-08-28")
-
         snapshots = get_gex_snapshots(db, symbol="NIFTY", limit=1)
         snap = snapshots[0]
         assert snap["signConvention"] == "NAIVE_DEALER_CONVENTION"
-        assert snap["callGex"] > 0  # call GEX is positive
-        assert snap["putGex"] < 0  # put GEX is negative
+        assert snap["callGex"] > 0
+        assert snap["putGex"] < 0
 
 
 # ---------------------------------------------------------------------------
@@ -509,8 +437,9 @@ class TestNumericalIntegrity:
 class TestExistingApis:
     """Verify existing GEX snapshot APIs are not broken.
 
-    These tests use the production database via TestClient.
-    They verify API contracts, not database state.
+    These tests verify API contracts without requiring the production
+    database.  Authentication is mocked at the dependency boundary so an
+    invalid request can reach FastAPI/Pydantic validation deterministically.
     """
 
     def _make_client(self):
@@ -518,21 +447,26 @@ class TestExistingApis:
         return TestClient(app)
 
     @patch("app.routers.gex.token_store")
-    def test_post_snapshots_validates_input(self, mock_token_store):
-        """POST /gex/snapshots rejects invalid input."""
+    @patch("app.routers.deps._resolve_user")
+    def test_post_snapshots_validates_input(self, mock_resolve_user, mock_token_store):
+        """POST /gex/snapshots rejects invalid input without production DB access."""
+        from app.routers.deps import AuthenticatedUser
+
         mock_token_store.get_token.return_value = "fake-token"
+        mock_resolve_user.return_value = AuthenticatedUser(
+            user_id="test-user", access_token="fake-token"
+        )
         client = self._make_client()
         resp = client.post(
             "/gex/snapshots",
-            json={"symbol": ""},  # invalid: missing required fields
+            json={"symbol": ""},
             headers={"X-Session-Id": "test-session"},
         )
-        # Should return 400, 401 (auth gate), or 422 for invalid input
-        assert resp.status_code in (400, 401, 422)
+        assert resp.status_code == 422
+        mock_resolve_user.assert_called_once()
 
     @patch("app.routers.gex.token_store")
     def test_get_snapshots_requires_auth(self, mock_token_store):
-        """GET /gex/snapshots requires authentication."""
         mock_token_store.get_token.return_value = None
         client = self._make_client()
         resp = client.get("/gex/snapshots?symbol=NIFTY")
@@ -540,7 +474,6 @@ class TestExistingApis:
 
     @patch("app.routers.gex.token_store")
     def test_get_latest_requires_auth(self, mock_token_store):
-        """GET /gex/snapshots/latest requires authentication."""
         mock_token_store.get_token.return_value = None
         client = self._make_client()
         resp = client.get("/gex/snapshots/latest?symbol=NIFTY")
@@ -548,7 +481,6 @@ class TestExistingApis:
 
     @patch("app.routers.gex.token_store")
     def test_count_requires_auth(self, mock_token_store):
-        """GET /gex/snapshots/count requires authentication."""
         mock_token_store.get_token.return_value = None
         client = self._make_client()
         resp = client.get("/gex/snapshots/count")
@@ -563,13 +495,8 @@ class TestHistoricalGexUntouched:
     """Verify capture does not modify historical_gex."""
 
     def test_capture_does_not_touch_historical_gex(self, db, service):
-        # Count historical_gex before
         before = db.execute(text("SELECT COUNT(*) FROM historical_gex")).scalar() or 0
-
-        # Capture a live snapshot
         chain = _make_chain()
         service.capture_once(db, chain, expiry="2026-08-28")
-
-        # Count historical_gex after
         after = db.execute(text("SELECT COUNT(*) FROM historical_gex")).scalar() or 0
         assert before == after
