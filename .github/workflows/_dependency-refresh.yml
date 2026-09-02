@@ -5,10 +5,11 @@ on:
     branches: ["feat/strikenova-day2-postgres"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh-frontend-lockfile:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,10 +27,10 @@ jobs:
         run: |
           npm install --save-exact next@15.5.25 react@19.2.8 react-dom@19.2.8
 
-      - name: Upload refreshed manifests
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-security-refresh
-          path: |
-            options-dashboard-project/frontend/package.json
-            options-dashboard-project/frontend/package-lock.json
+      - name: Commit refreshed manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add options-dashboard-project/frontend/package.json options-dashboard-project/frontend/package-lock.json
+          git commit -m "security(frontend): upgrade Next.js and React baseline"
+          git push origin HEAD:${GITHUB_REF_NAME}
