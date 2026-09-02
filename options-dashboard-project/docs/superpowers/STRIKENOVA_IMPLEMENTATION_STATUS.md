@@ -33,15 +33,24 @@
 
 ### Day 3 — Tenant and Credential Safety Review
 
-**Status:** IN PROGRESS
+**Status:** PASS
 
-| Item | Status |
-|------|--------|
-| OAuth identity binding | TBD |
-| Platform credential fallback removal | TBD |
-| OAuth state security | TBD |
-| Cross-user isolation | TBD |
-| Credential encryption | TBD |
-| Credential serialization isolation | TBD |
-| Broker/platform separation | TBD |
-| Logout/revocation idempotency | TBD |
+| Item | Evidence |
+|------|----------|
+| OAuth identity binding | Commit `40fdbf3` — `/auth/login` requires authenticated session (401 without), callback requires bound session |
+| Platform credential fallback removal | `settings.UPSTOX_API_KEY` no longer used as fallback in BYOB OAuth path |
+| OAuth state security | HMAC-signed, single-use, session-bound; legacy unsigned states rejected |
+| Callback broker override prevention | Broker comes from signed state only, query param ignored |
+| Callback session-mismatch rejection | Empty/expired/wrong-session state rejected with 400 |
+| Cross-user OAuth state isolation | 19 Day 3 security tests pass including cross-user state reuse/replay |
+| Credential encryption at rest | Fernet (AES-128-CBC + HMAC-SHA256) via `app.crypto.encrypt/decrypt` |
+| Credential serialization isolation | Never in responses, logs, or error messages — verified by tests |
+| Broker/platform separation | Platform session never confused with broker token — verified by existing + Day 3 tests |
+| Logout/revocation idempotency | Idempotent (200 for valid/expired/fake/no session) — verified by tests |
+| UpstoxTokenManager file persistence | Removed from OAuth callback (Day 3 hardening) |
+| Day 3 security tests | 19/19 pass — `tests/test_day3_security.py` |
+| Auth/BYOB/security tests | 312/312 pass |
+| Frontend tests | 1453/1453 pass |
+| Frontend build | PASS |
+| Production untouched | Confirmed — no DATABASE_URL, Railway, or Vercel changes |
+| Commit SHA | `40fdbf3` |
