@@ -1,7 +1,7 @@
 # StrikeNova Implementation Status Tracker
 
 > **Master Plan SHA:** `0a244c0` (docs: add StrikeNova master day-wise implementation plan)
-> **Last Updated:** 2026-09-03 (Day 4 PASS — CI verified)
+> **Last Updated:** 2026-09-03 (Day 5 implementation complete, pending CI verification)
 
 ## Phase 0 — Security Emergency
 
@@ -102,3 +102,37 @@
 | PostgreSQL 16 CI evidence | `postgres:16` image, `SELECT version()` verified in CI, Alembic migrations applied, compatibility + migration safety tests pass |
 | Master-plan SHA sync | Tracker `0a244c0` matches plan HEAD — verified by CI step |
 | **DAY 4 — OFFICIALLY PASS** | Remote commit `6757ad9`, GitHub Actions runs `33668656898` + `33668656876` GREEN, all gates satisfied |
+
+---
+
+## Day 5 — Alembic Authority & Schema Drift
+
+**Status:** IN PROGRESS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish Alembic as sole authoritative production schema mechanism |
+| Migration audit | Single head `b2c3d4e5f6a7`; init_db uses Alembic (no create_all); 7 migration files |
+| Alembic head authority | 21 tests: single head verified, multiple heads detected, deterministic, no credentials in config |
+| Production schema authority | init_db() has no create_all/ensure_column; uses Alembic upgrade; CLI tools documented separately |
+| Revision-state validation | `validate_migration_state()` function added — returns status (current/behind/uninitialised/error) |
+| Drift detection | Tests verify: current DB matches head, behind DB detected, empty DB detected, unavailable DB handled |
+| Alembic upgrade idempotent | Verified: upgrade head twice produces correct state |
+| alembic_version single row | Verified: exactly 1 row after upgrade |
+| Files changed | `app/db.py` (+79 lines), `test_day5_alembic_authority.py` (+new, 21 tests), `.github/workflows/postgres-compatibility.yml` (+1 line) |
+| Day 5 focused tests | 21 passed, 0 failed — `pytest tests/test_day5_alembic_authority.py -v` |
+| Alembic/migration tests | 17/17 passed |
+| Day 4 regression | 25/25+1skipped passed |
+| Day 3 security | 19/19 passed |
+| Phase 9 security | 25/25 passed |
+| Broader regression | 663 passed, 0 new failures across 664 tests |
+| CI gate | Day 5 tests added to `postgres-compatibility.yml` workflow |
+| PostgreSQL 16 | Via CI `postgres:16` service container — pending push |
+| Expand/Migrate/Contract | Policy documented in test file and status tracker |
+| Security: no credentials | `validate_migration_state()` masks sensitive error patterns |
+| `git diff --check` | Clean — no whitespace issues |
+| Production isolation | No Railway/Vercel/production DB changes |
+| Commit SHA | Pending |
+| Remote push | Pending |
+| GitHub Actions | Pending |
+| **DAY 5 — GATE STATUS** | OPEN — awaiting push and CI verification |

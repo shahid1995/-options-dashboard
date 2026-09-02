@@ -117,6 +117,85 @@ def validate_production_config() -> None:
 validate_production_config()
 
 
+# ---------------------------------------------------------------------------
+# Migration state validation (Day 5)
+# ---------------------------------------------------------------------------
+
+
+def validate_migration_state() -> dict:
+    """Validate Alembic migration state against the expected head.
+
+    Returns a dict with:
+    - "status": "current" | "behind" | "uninitialised" | "error"
+    - "expected_head": the single expected Alembic head revision
+    - "actual_revision": the revision stamped in the database (or None)
+    - "alembic_heads": list of heads from the migration script directory
+    - "error": error message if validation failed
+
+    Never raises — always returns a result dict.
+    Credentials are never included in the output.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    result: dict = {
+        "status": "error",
+        "expected_head": None,
+        "actual_revision": None,
+        "alembic_heads": [],
+        "error": None,
+    }
+
+    try:
+        from alembic.config import Config as AlembicConfig
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
+
+        alembic_cfg = AlembicConfig("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+        script = ScriptDirectory.from_config(alembic_cfg)
+        heads = script.get_heads()
+        result["alembic_heads"] = list(heads)
+
+        if len(heads) != 1:
+            result["status"] = "error"
+            result["error"] = (
+                f"Expected exactly 1 Alembic head, got {len(heads)}: {heads}"
+            )
+            return result
+
+        result["expected_head"] = heads[0]
+
+        with engine.connect() as conn:
+            mc = MigrationContext.configure(conn)
+            current_rev = mc.get_current_revision()
+            result["actual_revision"] = current_rev
+
+        if current_rev is None:
+            result["status"] = "uninitialised"
+            result["error"] = "No alembic_version record found"
+        elif current_rev == heads[0]:
+            result["status"] = "current"
+        else:
+            result["status"] = "behind"
+            result["error"] = (
+                f"Database revision {current_rev} != expected head {heads[0]}"
+            )
+
+    except Exception as e:
+        result["status"] = "error"
+        # Mask any potential credentials in the error message
+        error_str = str(e)
+        for sensitive in ["password", "secret", "token"]:
+            if sensitive in error_str.lower():
+                error_str = "Database connection error (details masked)"
+                break
+        result["error"] = error_str
+        logger.warning("Migration state validation failed: %s", result["error"])
+
+    return result
+
+
 
 def get_database_path() -> str:
     """Return the configured database URL or local SQLite path."""

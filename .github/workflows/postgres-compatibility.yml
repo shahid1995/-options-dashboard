@@ -58,3 +58,4 @@ jobs:
           tests/test_migration_hardening.py
           tests/test_migration_failure_injection.py
           tests/test_migration_large_rehearsal.py
+          tests/test_day5_alembic_authority.py
