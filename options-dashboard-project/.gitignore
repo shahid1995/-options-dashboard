@@ -2,8 +2,6 @@
 .env
 .env.local
 .env.*.local
-.env.*
-!.env.example
 
 # Token cache — must never be committed
 .token_cache/
