@@ -10,8 +10,10 @@ node_modules/
 coverage/
 .next/
 
-# Env
+# Env — never commit local credentials
 .env
+.env.*
+!.env.example
 
 # Paper journal database (local SQLite fallback; production uses DATABASE_URL)
 *.db
