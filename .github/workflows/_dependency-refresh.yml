@@ -1,0 +1,32 @@
+name: Temporary dependency refresh
+
+on:
+  push:
+    branches: ["feat/strikenova-day2-postgres"]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-frontend-lockfile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: options-dashboard-project/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Refresh frontend security baseline
+        run: npm install --save-exact recharts@3.10.1 react-is@19.2.8
+      - name: Commit refreshed manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "security(frontend): upgrade Recharts baseline"
+          git push origin HEAD:${GITHUB_REF_NAME}
