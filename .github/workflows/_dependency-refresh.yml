@@ -1,0 +1,35 @@
+name: Temporary dependency refresh
+
+on:
+  push:
+    branches: ["feat/strikenova-day2-postgres"]
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-frontend-lockfile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: options-dashboard-project/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Refresh Next.js security baseline
+        run: |
+          npm install --save-exact next@15.5.25 react@19.2.8 react-dom@19.2.8
+
+      - name: Upload refreshed manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-security-refresh
+          path: |
+            options-dashboard-project/frontend/package.json
+            options-dashboard-project/frontend/package-lock.json
