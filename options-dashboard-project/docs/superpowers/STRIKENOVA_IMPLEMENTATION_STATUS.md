@@ -1,7 +1,7 @@
 # StrikeNova Implementation Status Tracker
 
 > **Master Plan SHA:** `0a244c0` (docs: add StrikeNova master day-wise implementation plan)
-> **Last Updated:** 2026-09-02 (remote verification complete)
+> **Last Updated:** 2026-09-03 (Day 4 implementation complete, pending CI verification)
 
 ## Phase 0 — Security Emergency
 
@@ -63,3 +63,39 @@
 | Day 3 commit SHAs | `40fdbf3` → `a4046ce` → `958b0ba` — all on remote |
 | Remote verification date | 2026-09-02 |
 | **DAY 3 — OFFICIALLY PASS** | Remote commits confirmed, GitHub Actions run `33660812984` GREEN, all gates satisfied |
+
+---
+
+# Phase 1 — Infrastructure Foundation
+
+## Day 4 — PostgreSQL Production Baseline
+
+**Status:** IN PROGRESS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Make PostgreSQL the explicit production database target |
+| `IS_PRODUCTION` property | Added to `Settings` — detects `RAILWAY_ENVIRONMENT`, `RAILWAY_SERVICE_NAME`, `PRODUCTION` env vars |
+| `validate_production_config()` | Added to `app.db` — logs warnings when production lacks DATABASE_URL or uses SQLite |
+| Dialect-aware health check | `check_database_health()` now includes `dialect` field; `file_exists`/`file_size_bytes` only for SQLite |
+| Connection pool config | Already present: `pool_size=5`, `max_overflow=10`, `pool_timeout=30`, `pool_recycle=1800`, `pool_pre_ping=True` |
+| DB readiness endpoint | `/readiness` checks DB + token store; returns 200/503; no secrets exposed |
+| Files changed | `config.py` (+15 lines), `db.py` (+67/-6 lines), `test_day4_postgres_foundation.py` (+347 lines, untracked) |
+| Day 4 focused tests | 25 passed, 1 skipped (PG-specific), 0 failed — `pytest tests/test_day4_postgres_foundation.py -v` |
+| Backend regression | 1,682 passed, 36 failed (all pre-existing), 8 skipped across 12 test subsets |
+| Pre-existing failures | `test_dot_in_unsigned_state_not_created`, `test_engine_url_is_absolute`, `test_capabilities_matrix_is_complete_and_session_aware`, `test_phase724_8c_rate_limiter.py` (33 tests) — all verified against clean Day 3 baseline |
+| New failures introduced | **0** — zero Day 4 regressions |
+| Production config tests | `IS_PRODUCTION` false in test env, true with Railway vars, `validate_production_config` warns on missing/SQLite URL |
+| Security: no credentials in diff | Verified — no passwords, secrets, or tokens in implementation or tests |
+| Security: health check no secrets | `test_health_check_no_credentials_in_report` passes |
+| Security: readiness no secrets | `test_readiness_no_connection_string` passes |
+| `git diff --check` | Clean — no whitespace issues |
+| Production isolation | No Railway/Vercel/production DB changes. No deployment. No merge. |
+| Docker/PostgreSQL locally | Not available — Docker, psql, pg_isready not found |
+| PostgreSQL 16 verification | Via CI workflow `postgres-compatibility.yml` (postgres:16 service container) — pending push and CI run |
+| Master-plan SHA | `0a244c0` — unchanged |
+| Timeout diagnosis | Previous regression timeouts caused by running full 186-test suite in one command; resolved by running subsets |
+| Commit SHA | Pending |
+| Remote push | Pending |
+| GitHub Actions | Pending |
+| **DAY 4 — GATE STATUS** | OPEN — awaiting push, CI verification, and PostgreSQL 16 CI evidence |

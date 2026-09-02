@@ -73,6 +73,21 @@ class Settings(BaseSettings):
             url = url.split(",")[0].strip()
         return url
 
+    @property
+    def IS_PRODUCTION(self) -> bool:
+        """Detect production environments (e.g. Railway).
+
+        Returns True when common production environment indicators are set.
+        This is used to enforce that production always uses PostgreSQL and
+        never silently falls back to SQLite.
+        """
+        import os as _os
+        return bool(
+            _os.environ.get("RAILWAY_ENVIRONMENT")
+            or _os.environ.get("RAILWAY_SERVICE_NAME")
+            or _os.environ.get("PRODUCTION")
+        )
+
     class Config:
         env_file = ".env"
 

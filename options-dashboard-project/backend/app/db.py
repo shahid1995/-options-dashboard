@@ -73,6 +73,51 @@ engine = _engine()
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
+# ---------------------------------------------------------------------------
+# Production safety validation (Day 4)
+# ---------------------------------------------------------------------------
+
+
+def validate_production_config() -> None:
+    """Log warnings when production configuration is unsafe.
+
+    Called once at module import time.  Never crashes the application —
+    misconfigurations are logged as warnings so that operators can fix
+    them before a real production deployment.
+
+    Checks:
+    - Production must have DATABASE_URL set
+    - Production DATABASE_URL must not point to SQLite
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not settings.IS_PRODUCTION:
+        return
+
+    if not settings.DATABASE_URL:
+        logger.warning(
+            "Production environment detected but DATABASE_URL is not set. "
+            "The application will fall back to local SQLite, which is "
+            "unsuitable for production. Set DATABASE_URL to a PostgreSQL "
+            "connection string."
+        )
+        return
+
+    normalized = normalize_database_url(settings.DATABASE_URL)
+    if normalized.startswith("sqlite"):
+        logger.warning(
+            "Production environment detected but DATABASE_URL points to "
+            "SQLite (connection string masked). Production must use "
+            "PostgreSQL. Update DATABASE_URL to a PostgreSQL connection string."
+        )
+
+
+validate_production_config()
+
+
+
 def get_database_path() -> str:
     """Return the configured database URL or local SQLite path."""
     if settings.DATABASE_URL:
@@ -181,14 +226,20 @@ _HISTORICAL_TABLES = [
 
 
 def check_database_health() -> dict:
-    """Return a diagnostic snapshot of the active database."""
+    """Return a diagnostic snapshot of the active database.
+
+    Day 4: report includes the active dialect name and conditionally
+    includes file-specific information only for SQLite databases.
+    PostgreSQL reports omit file_exists/file_size_bytes since they are
+    meaningless for client-server databases.
+    """
     from sqlalchemy import inspect as sa_inspect, func, select
 
+    dialect_name = engine.dialect.name
     db_path = get_database_path()
     report: dict = {
         "database_path": db_path,
-        "file_exists": False,
-        "file_size_bytes": 0,
+        "dialect": dialect_name,
         "accessible": False,
         "tables_present": [],
         "tables_missing": [],
@@ -197,9 +248,13 @@ def check_database_health() -> dict:
         "newest_record": None,
     }
 
-    if os.path.isfile(db_path):
-        report["file_exists"] = True
-        report["file_size_bytes"] = os.path.getsize(db_path)
+    # File-specific fields are only meaningful for SQLite.
+    if dialect_name == "sqlite":
+        report["file_exists"] = False
+        report["file_size_bytes"] = 0
+        if os.path.isfile(db_path):
+            report["file_exists"] = True
+            report["file_size_bytes"] = os.path.getsize(db_path)
 
     try:
         insp = sa_inspect(engine)
