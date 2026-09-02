@@ -2,53 +2,75 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getSessionId } from "@/lib/session";
-import { getStatus } from "@/lib/api";
+import { getMe } from "@/lib/api";
 
 /**
  * Central auth guard for the (app) route group.
  *
- * On mount, checks whether a valid StrikeNova session exists.
- * If not, redirects to the public landing page (/).
+ * /auth/me is the authoritative platform-identity check. Broker connectivity
+ * is deliberately not part of this decision: a logged-in user may have no
+ * broker connected.
  *
- * This prevents:
- * - Unauthenticated users from seeing protected page shells
- * - Stale "Not logged in" messages in the page body
- * - Protected data from being briefly rendered before auth check completes
- *
- * Note: broker-dependent failures (BROKER_AUTH_REQUIRED) do NOT trigger
- * this guard. Only a missing/invalid platform session causes redirect.
+ * Authentication failures redirect to the public landing page. Network or
+ * server failures do not log the user out; they render a retryable state
+ * because an outage is not evidence that the session is invalid.
  */
 export default function AuthGate({ children }) {
-  const [checking, setChecking] = useState(true);
+  const [state, setState] = useState("checking");
+  const [error, setError] = useState("");
+  const [retryKey, setRetryKey] = useState(0);
   const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
+    const verify = async () => {
       try {
         const session = getSessionId();
         if (!session) {
           if (!cancelled) router.replace("/");
           return;
         }
-        const status = await getStatus();
+
+        await getMe();
         if (!cancelled) {
-          if (!status.logged_in) {
-            router.replace("/");
-          } else {
-            setChecking(false);
-          }
+          setError("");
+          setState("authenticated");
         }
-      } catch {
-        if (!cancelled) router.replace("/");
+      } catch (err) {
+        if (cancelled) return;
+
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          router.replace("/");
+          return;
+        }
+
+        setError("We couldn't verify your session. Check your connection and try again.");
+        setState("error");
       }
-    })();
+    };
 
-    return () => { cancelled = true; };
-  }, [router]);
+    verify();
+    return () => {
+      cancelled = true;
+    };
+  }, [router, retryKey]);
 
-  if (checking) return null;
+  if (state === "checking") return null;
+
+  if (state === "error") {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+        <div style={{ textAlign: "center", maxWidth: 440 }}>
+          <p style={{ fontSize: 14, marginBottom: 16 }}>{error}</p>
+          <button type="button" onClick={() => setRetryKey((value) => value + 1)}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return children;
 }
