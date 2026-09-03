@@ -15,12 +15,17 @@ institution identity claims, no fabricated historical evidence.
 
 Classification priority (documented; exactly one label per evaluation)
 ----------------------------------------------------------------------
-1. **Conflicting evidence** — a usable price direction plus any opposing
-   source (Day-20 positioning label, Day-22 institutional direction — a MIXED
-   institutional read counts as opposing — or a proximate Day-21
-   CONFLICTED_INTERACTION level) => ``PARTIAL`` + ``MIXED`` +
-   ``CONFLICTING_DIRECTION`` + regime ``UNKNOWN``.  Conflicts are never hidden
-   inside a clean regime read.
+1. **Conflicting evidence** — a usable price direction plus any genuinely
+   opposing source: a Day-20 positioning label whose mapped direction opposes
+   price, a Day-22 institutional direction (BULLISH/BEARISH) opposing price,
+   or a proximate Day-21 CONFLICTED_INTERACTION level whose directional
+   implication opposes price (a conflicted SUPPORT implies a bearish
+   breakdown — opposing only a RISING price; a conflicted RESISTANCE implies
+   a bullish breakout — opposing only a FALLING price).  A Day-22 MIXED
+   institutional read carries **no** directional implication — it neither
+   opposes nor corroborates, so it never triggers ``CONFLICTING_DIRECTION``
+   by itself.  Result: ``PARTIAL`` + ``MIXED`` + ``CONFLICTING_DIRECTION`` +
+   regime ``UNKNOWN``.  Conflicts are never hidden inside a clean regime read.
 2. **TRENDING** — actual directional price-window evidence:
    >= ``TREND_MIN_MOVES`` nonzero moves, all the same sign (measured flats
    allowed).  A single price observation is never a trend.
@@ -35,8 +40,15 @@ Classification priority (documented; exactly one label per evaluation)
 5. **LOW_VOLATILITY** — explicit ``volatility < LOW_VOLATILITY_THRESHOLD``.
 6. **RISK_ON / RISK_OFF** — a usable price direction, no opposing source, and
    at least one corroborating directional source (positioning /
-   institutional / level).  Positioning or institutional evidence alone is
-   never a regime claim — price evidence is mandatory.
+   institutional / level).  Level corroboration requires an actual
+   directional interpretation (kind + strike-relative geometry + constructive
+   state + price direction): RISK_ON is corroborated by a constructive
+   SUPPORT at/below spot or a constructive RESISTANCE BELOW spot (already
+   broken out); RISK_OFF by a constructive RESISTANCE at/above spot or a
+   constructive SUPPORT ABOVE spot (broken floor overhead).  Merely having a
+   support below or a resistance above is never directional evidence, and
+   positioning/institutional evidence alone is never a regime claim — price
+   evidence is mandatory.
 7. **UNKNOWN** — usable evidence present but nothing above classified:
    ``SUCCESS`` + ``direction = UNKNOWN`` + regime ``UNKNOWN`` + strength 0.0
    (an honest measured "cannot classify", never a fabricated regime).
@@ -284,26 +296,61 @@ _CONSTRUCTIVE_STATES = (
 
 def _level_corroborates(levels: tuple[LevelClassification, ...], price_dir: int,
                         spot: float) -> bool:
-    """Constructive proximate level consistent with the price direction:
-    rising price backed by a proximate constructive SUPPORT at/below spot or
-    RESISTANCE at/above spot; falling price mirrored."""
+    """A level corroborates RISK_ON/RISK_OFF only when its kind, strike-
+    relative geometry, state and the price direction form an actual
+    directional interpretation (Day-21 kind semantics).  Merely having a
+    support below or a resistance above is never directional evidence:
+
+    * RISK_ON (rising): constructive SUPPORT at/below spot (buyers' floor) or
+      constructive RESISTANCE BELOW spot (already broken out — bullish).
+    * RISK_OFF (falling): constructive RESISTANCE at/above spot (sellers'
+      ceiling) or constructive SUPPORT ABOVE spot (broken floor overhead —
+      bearish).
+    """
     for lvl in levels:
         if lvl.state not in _CONSTRUCTIVE_STATES:
             continue
-        if lvl.kind is LevelKind.SUPPORT and lvl.strike <= spot and price_dir > 0:
+        if price_dir > 0:
+            if lvl.kind is LevelKind.SUPPORT and lvl.strike <= spot:
+                return True
+            if lvl.kind is LevelKind.RESISTANCE and lvl.strike < spot:
+                return True
+        else:
+            if lvl.kind is LevelKind.RESISTANCE and lvl.strike >= spot:
+                return True
+            if lvl.kind is LevelKind.SUPPORT and lvl.strike > spot:
+                return True
+    return False
+
+
+def _level_opposes(levels: tuple[LevelClassification, ...], price_dir: int) -> bool:
+    """Kind-aware Day-21 conflict semantics: a conflicted SUPPORT implies
+    price broke DOWN through it (bearish); a conflicted RESISTANCE implies
+    price broke UP through it (bullish).  A level conflict opposes the price
+    direction only when that directional implication opposes it — a support
+    breakdown is never ``CONFLICTING_DIRECTION`` against a falling price, and
+    a resistance breakout is never ``CONFLICTING_DIRECTION`` against a rising
+    price."""
+    for lvl in levels:
+        if lvl.state is not LevelState.CONFLICTED_INTERACTION:
+            continue
+        if lvl.kind is LevelKind.SUPPORT and price_dir > 0:
             return True
-        if lvl.kind is LevelKind.RESISTANCE and lvl.strike >= spot and price_dir > 0:
-            return True
-        if lvl.kind is LevelKind.RESISTANCE and lvl.strike >= spot and price_dir < 0:
-            return True
-        if lvl.kind is LevelKind.SUPPORT and lvl.strike <= spot and price_dir < 0:
+        if lvl.kind is LevelKind.RESISTANCE and price_dir < 0:
             return True
     return False
 
 
-def _conflicted_proximate(levels: tuple[LevelClassification, ...]) -> LevelClassification | None:
+def _opposing_conflicted_level(levels: tuple[LevelClassification, ...],
+                               price_dir: int) -> LevelClassification | None:
+    """The proximate conflicted level whose directional implication opposes
+    the price direction (for evidence magnitude), if any."""
     for lvl in levels:
-        if lvl.state is LevelState.CONFLICTED_INTERACTION:
+        if lvl.state is not LevelState.CONFLICTED_INTERACTION:
+            continue
+        if lvl.kind is LevelKind.SUPPORT and price_dir > 0:
+            return lvl
+        if lvl.kind is LevelKind.RESISTANCE and price_dir < 0:
             return lvl
     return None
 
@@ -500,11 +547,10 @@ def evaluate_regime(inp: RegimeInput) -> IntelligenceResult:
 
     # -- conflicting evidence (highest priority; never hidden) ---------------
     if price_dir is not None:
-        conflicted_level = _conflicted_proximate(proximate)
+        conflicted_level = _opposing_conflicted_level(proximate, price_dir)
         opposing = (
             _oppose(positioning_dir, price_dir)
             or _oppose(inp.institutional_direction, price_dir)
-            or inp.institutional_direction is IntelligenceDirection.MIXED
             or conflicted_level is not None
         )
         if opposing:

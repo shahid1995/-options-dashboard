@@ -376,11 +376,161 @@ class TestConflicts:
         assert r.status is IntelligenceStatus.PARTIAL
         assert r.direction is IntelligenceDirection.MIXED
 
-    def test_mixed_institutional_is_opposing(self):
+    def test_mixed_institutional_is_not_auto_opposing(self):
+        # MIXED carries no directional implication: neither opposing (no
+        # CONFLICTING_DIRECTION fabricated) nor corroborating — with no other
+        # corroborator the honest read is UNKNOWN
         r = evaluate_regime(_inp(spot_change=10.0,
                                  inst_dir=IntelligenceDirection.MIXED))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime.label is RegimeLabel.UNKNOWN
+        assert not any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                       for i in r.issues)
+
+    def test_mixed_institutional_does_not_block_clean_read(self):
+        # a MIXED institutional read neither opposes nor corroborates — the
+        # remaining clean corroborator still produces RISK_ON
+        r = evaluate_regime(_inp(spot_change=10.0,
+                                 positioning=PositioningClassification.LONG_BUILDUP,
+                                 inst_dir=IntelligenceDirection.MIXED))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime.label is RegimeLabel.RISK_ON
+        assert r.signal_strength == pytest.approx(1 / 3, rel=1e-9)  # positioning only
+
+    def test_falling_mixed_institutional_unknown(self):
+        r = evaluate_regime(_inp(spot_change=-10.0,
+                                 inst_dir=IntelligenceDirection.MIXED))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime.label is RegimeLabel.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# 5b. Kind-aware level conflict matrix (Day-21 semantics authoritative)
+# ---------------------------------------------------------------------------
+
+
+class TestLevelConflictMatrix:
+    """Day-21 kind semantics: a conflicted SUPPORT implies price broke DOWN
+    through it (bearish); a conflicted RESISTANCE implies price broke UP
+    through it (bullish).  A conflict opposes price only when its directional
+    implication opposes the price direction."""
+
+    def test_rising_conflicted_resistance_not_opposing(self):
+        # resistance BELOW spot broken up through + price rising: bullish
+        # implication consistent with price — no CONFLICTING_DIRECTION
+        lvl = _lvl(240.0, LevelKind.RESISTANCE,
+                   LevelState.CONFLICTED_INTERACTION, 0.6)
+        r = evaluate_regime(_inp(spot=250.0, spot_change=10.0, levels=(lvl,)))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime.label is RegimeLabel.UNKNOWN  # conflicted != corroboration
+        assert not any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                       for i in r.issues)
+
+    def test_rising_conflicted_support_opposing(self):
+        # SUPPORT ABOVE spot broken down through + price now rising: bearish
+        # implication opposes rising price -> conflict
+        lvl = _lvl(260.0, LevelKind.SUPPORT,
+                   LevelState.CONFLICTED_INTERACTION, 0.6)
+        r = evaluate_regime(_inp(spot=250.0, spot_change=10.0, levels=(lvl,)))
         assert r.status is IntelligenceStatus.PARTIAL
         assert r.direction is IntelligenceDirection.MIXED
+        assert any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                   for i in r.issues)
+
+    def test_falling_conflicted_support_not_opposing(self):
+        # conflicted SUPPORT + falling price: bearish implication consistent
+        # with price — a support breakdown is NOT conflict against a falling
+        # tape
+        lvl = _lvl(260.0, LevelKind.SUPPORT,
+                   LevelState.CONFLICTED_INTERACTION, 0.6)
+        r = evaluate_regime(_inp(spot=250.0, spot_change=-10.0, levels=(lvl,)))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime.label is RegimeLabel.UNKNOWN
+        assert not any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                       for i in r.issues)
+
+    def test_falling_conflicted_resistance_opposing(self):
+        # resistance BELOW spot broken up through + price now falling: bullish
+        # implication opposes falling price -> conflict
+        lvl = _lvl(240.0, LevelKind.RESISTANCE,
+                   LevelState.CONFLICTED_INTERACTION, 0.6)
+        r = evaluate_regime(_inp(spot=250.0, spot_change=-10.0, levels=(lvl,)))
+        assert r.status is IntelligenceStatus.PARTIAL
+        assert r.direction is IntelligenceDirection.MIXED
+        assert any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                   for i in r.issues)
+
+
+# ---------------------------------------------------------------------------
+# 5c. Level corroboration matrix (directional interpretation only)
+# ---------------------------------------------------------------------------
+
+
+class TestLevelCorroborationMatrix:
+    """A level corroborates RISK_ON/RISK_OFF only when kind + strike-relative
+    geometry + state + price direction form an actual directional
+    interpretation.  Level existence is never directional evidence by itself.
+
+    RISK_ON (rising): constructive SUPPORT at/below spot (buyers' floor) or
+    constructive RESISTANCE BELOW spot (already broken out — bullish).
+    RISK_OFF (falling): constructive RESISTANCE at/above spot (sellers'
+    ceiling) or constructive SUPPORT ABOVE spot (broken floor overhead).
+    """
+
+    def _eval(self, price: float, lvl: LevelClassification):
+        return evaluate_regime(_inp(spot=250.0, spot_change=price, levels=(lvl,)))
+
+    def test_rising_support_below_corroborates(self):
+        lvl = _lvl(240.0, LevelKind.SUPPORT, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(10.0, lvl).regime.label is RegimeLabel.RISK_ON
+
+    def test_rising_support_above_not_corroboration(self):
+        lvl = _lvl(260.0, LevelKind.SUPPORT, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(10.0, lvl).regime.label is RegimeLabel.UNKNOWN
+
+    def test_rising_resistance_below_corroborates(self):
+        # resistance below spot already broken out — bullish
+        lvl = _lvl(240.0, LevelKind.RESISTANCE, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(10.0, lvl).regime.label is RegimeLabel.RISK_ON
+
+    def test_rising_resistance_above_not_corroboration(self):
+        # an overhead ceiling is not bullish corroboration
+        lvl = _lvl(260.0, LevelKind.RESISTANCE, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(10.0, lvl).regime.label is RegimeLabel.UNKNOWN
+
+    def test_falling_support_below_not_corroboration(self):
+        # support beneath a falling tape is not bearish corroboration
+        lvl = _lvl(240.0, LevelKind.SUPPORT, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(-10.0, lvl).regime.label is RegimeLabel.UNKNOWN
+
+    def test_falling_support_above_corroborates(self):
+        # broken floor overhead — bearish structural context
+        lvl = _lvl(260.0, LevelKind.SUPPORT, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(-10.0, lvl).regime.label is RegimeLabel.RISK_OFF
+
+    def test_falling_resistance_below_not_corroboration(self):
+        lvl = _lvl(240.0, LevelKind.RESISTANCE, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(-10.0, lvl).regime.label is RegimeLabel.UNKNOWN
+
+    def test_falling_resistance_above_corroborates(self):
+        lvl = _lvl(260.0, LevelKind.RESISTANCE, LevelState.STRENGTHENING, 0.6)
+        assert self._eval(-10.0, lvl).regime.label is RegimeLabel.RISK_OFF
+
+    def test_level_existence_alone_never_corroborates(self):
+        # level exists but its directional implication is wrong for the tape
+        support_below = _lvl(240.0, LevelKind.SUPPORT, LevelState.STATIC, 0.6)
+        r = evaluate_regime(_inp(spot=250.0, spot_change=-10.0,
+                                 levels=(support_below,)))
+        assert r.regime.label is RegimeLabel.UNKNOWN
+        ceiling_above = _lvl(260.0, LevelKind.RESISTANCE, LevelState.STATIC, 0.6)
+        r2 = evaluate_regime(_inp(spot=250.0, spot_change=10.0,
+                                  levels=(ceiling_above,)))
+        assert r2.regime.label is RegimeLabel.UNKNOWN
+        assert all(
+            not any(i.code is IntelligenceIssueCode.CONFLICTING_DIRECTION
+                    for i in r.issues)
+            for r in (r, r2)
+        )
 
     def test_level_breakdown_opposes_price(self):
         lvl = _lvl(200.0, LevelKind.SUPPORT, LevelState.CONFLICTED_INTERACTION, 0.6)

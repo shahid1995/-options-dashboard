@@ -45,18 +45,26 @@ convention; missing stays `None`, a measured 0.0 stays zero):
   `classification_direction()` mapping (UNCLASSIFIED ⇒ None).
 - Proximate levels (same documented rule as Day-22:
   `abs(strike − spot)/spot <= LEVEL_PROXIMITY_FRACTION = 0.10`):
-  constructive corroboration when the level kind/state supports `price_dir`
-  (rising price with a proximate constructive SUPPORT below or RESISTANCE
-  above; falling price mirrored); a proximate Day-21 `CONFLICTED_INTERACTION`
-  level is opposing evidence.
-- A Day-22 `MIXED` institutional direction is opposing evidence.
+  constructive corroboration requires an actual directional interpretation
+  (see the RISK_ON/RISK_OFF rule below — level existence is never directional
+  evidence).  Day-21 `CONFLICTED_INTERACTION` is kind-aware: a conflicted
+  SUPPORT implies a bearish breakdown, a conflicted RESISTANCE implies a
+  bullish breakout — opposing only when that implication opposes `price_dir`.
+- A Day-22 `MIXED` institutional direction carries **no** directional
+  implication: it neither corroborates nor opposes (it never triggers
+  `CONFLICTING_DIRECTION` by itself).
 
 ## Classification (deterministic priority — one regime label per evaluation)
 
-1. **Conflicting evidence** — `price_dir` present and any opposing
-   source (positioning, institutional, level) ⇒ `PARTIAL` + `direction=MIXED`
-   + `regime=UNKNOWN` + structured `CONFLICTING_DIRECTION` issue.  Opposing
-   evidence is never hidden inside a clean regime read.
+1. **Conflicting evidence** — `price_dir` present and any genuinely opposing
+   source: positioning whose mapped direction opposes price; a BULLISH/BEARISH
+   institutional direction opposing price; or a proximate Day-21
+   `CONFLICTED_INTERACTION` level whose directional implication opposes price
+   (a support breakdown is never a conflict against a falling price; a
+   resistance breakout is never a conflict against a rising price).  A `MIXED`
+   institutional read is never auto-opposing.  Result: `PARTIAL` +
+   `direction=MIXED` + `regime=UNKNOWN` + structured `CONFLICTING_DIRECTION`
+   issue.  Opposing evidence is never hidden inside a clean regime read.
 2. **TRENDING** — requires actual directional price-window evidence:
    `len(nonzero) >= TREND_MIN_MOVES (3)` and every nonzero move the same sign
    (zeros are measured flats, allowed).  Flat/insufficient price evidence
@@ -77,12 +85,18 @@ convention; missing stays `None`, a measured 0.0 stays zero):
    (bounded ≥ 0); confidence 0.85.  Boundaries are exclusive: a measured
    0.30 / 0.15 falls through (documented and boundary-tested).
 6. **RISK_ON / RISK_OFF** — `price_dir` present, no opposing source, and at
-   least one corroborating directional source (positioning,
-   institutional, level).  Day-20/22 bullish/bearish evidence alone is never
-   a regime claim — price evidence is mandatory.  RISK_ON ⇒ BULLISH,
-   RISK_OFF ⇒ BEARISH.  Strength = `agreeing_sources / 3` (deterministic
-   count over the three corroborator types); confidence 0.90 with ≥2
-   corroborators, 0.75 with exactly one.
+   least one corroborating directional source (positioning, institutional,
+   level).  Day-20/22 bullish/bearish evidence alone is never a regime claim
+   — price evidence is mandatory.  **Level corroboration is directional
+   only**: RISK_ON (rising) is corroborated by a constructive SUPPORT
+   at/below spot (buyers' floor) or a constructive RESISTANCE BELOW spot
+   (already broken out); RISK_OFF (falling) by a constructive RESISTANCE
+   at/above spot (sellers' ceiling) or a constructive SUPPORT ABOVE spot
+   (broken floor overhead).  Merely having a support below or resistance
+   above is never corroboration.  RISK_ON ⇒ BULLISH, RISK_OFF ⇒ BEARISH.
+   Strength = `agreeing_sources / 3` (deterministic count over the three
+   corroborator types); confidence 0.90 with ≥2 corroborators, 0.75 with
+   exactly one.
 7. **UNKNOWN** — evidence present but nothing above classified (e.g. a single
    price move with no corroborators, mid-band volatility, no price window and
    no vol).  `SUCCESS` + `direction = UNKNOWN` + `regime = UNKNOWN` +
