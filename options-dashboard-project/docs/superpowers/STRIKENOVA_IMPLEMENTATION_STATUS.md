@@ -614,4 +614,35 @@
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 19 gate | **PASS** — Deterministic Intelligence Contract Foundation Gate satisfied |
 
+---
+
+## Day 20 — Positioning Intelligence + Flow/Divergence Intelligence
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | First two intelligence engines on the hardened Day-19 contract: **Positioning Intelligence** (OI concentration, ΔOI, volume, CE/PE asymmetry, strike-level facts, change-based chain classification) and **Flow/Divergence Intelligence** (CE–PE net flow, directional imbalance, price-flow/delta/vega divergence patterns) |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-positioning-flow-intelligence.md` (approved plan commit `35e8b44`) |
+| Implementation SHA | `965ec07` (on top of plan commit `35e8b44`) |
+| Contract discipline | **Day-19 `app/intelligence/contracts.py` NOT modified** — engines consume it as the authoritative envelope and stay within its EvidenceType vocabulary (MARKET_OBSERVATION / QUANT_DERIVED / QUALITY_ASSESSMENT) |
+| Positioning | `app/intelligence/positioning.py`: raw `StrikePositioning` rows → `compute_metrics` (totals/ratios/asymmetry/concentration facts — measured only, never auto-interpreted as S/R) → change-based `classify_chain` (LONG_BUILDUP / SHORT_BUILDUP / SHORT_COVERING / LONG_UNWINDING / UNCLASSIFIED from net ΔOI × price direction) → `evaluate_positioning` → `IntelligenceResult` |
+| Flow | `app/intelligence/flow.py`: `FlowInput` (CE/PE ΔOI, volumes, signed delta/vega shifts as explicit inputs — Greeks never computed) → `compute_flow_metrics` (net_ce_pe_flow, directional_imbalance, price_flow_relation, delta_divergence, vega_pattern tri-states) → `evaluate_flow` (primary = net_delta_shift, deterministic fallback to net_ce_pe_flow) |
+| Interpretation rules | Golden chain (NIFTY 5-strike) independent arithmetic verified: totals 258k/141k, pcr_oi 0.5465…, net ΔOI +2200, asymmetry +1200, vols 8800/7900, pcr_vol 0.8977…; price +100 ⇒ LONG_BUILDUP ⇒ BULLISH, strength 2_200/1_000_000, confidence 0.90; sign table for all four classifications; balanced ⇒ NEUTRAL strength 0; conflicting CE/PE legs ⇒ MIXED + `CONFLICTING_DIRECTION` (never forced); missing price/ΔOI leg ⇒ PARTIAL + structured issues; empty input ⇒ UNAVAILABLE |
+| Missing vs zero | `None` stays `None` (never coerced to zero — side totals, ratios with measured-zero denominators, net flows, imbalance with zero total volume all return None); measured 0.0 stays a legitimate zero (balanced flow ⇒ 0.0 imbalance, zero OI ⇒ 0.0 totals) — dedicated tests |
+| Quality/provenance | Exact supplied Day-12 `QualityResult` preserved (`is` identity tested); missing quality ⇒ non-SUCCESS with `MISSING_QUALITY` issue; Day-9 `Provenance` preserved verbatim; never recomputed |
+| Purity | No wall clock / randomness / DB / network / filesystem / broker imports (module-level AST guards in the test file — the Day-14 glob covers only app/quant); no unconditional static-level rules anywhere in the classification path |
+| Tests | `tests/test_day20_positioning_flow.py` — 80 tests (input validation incl. signed ΔOI and genuinely-aware timestamps, golden metrics, classification sign table, interpretation envelopes, flow tri-state tables, conflicting/zero/missing behaviour, determinism, Day-19 serialization round-trip, extremes, purity AST) |
+| RED evidence | RED confirmed: modules absent → import collection error; GREEN 80/80 (fixes during GREEN: ΔOI signed validation, UNAVAILABLE-evidence contract rule, test-helper sentinels for quality=None) |
+| Focused regression | Days 9–20 (12 files): **908 passed**; Days 14–20: **672 passed** |
+| Security/session regression | 129 passed, 2 failed = **pre-existing** (same two token/OAuth tests reproduced **identically at the clean Day-19 baseline `25d3265`** in a fresh worktree; Day-20 diff adds only pure intelligence engines) |
+| Days 4–7 + Alembic/migration | 120 passed, 2 skipped |
+| Static checks | `py_compile` OK on all changed files; `git diff --check` clean; unused imports removed; AST guards green; secret scan clean (0 hits) |
+| PostgreSQL 16 | CI run `33745745432` — success (`postgres:16`) on `965ec07` |
+| Status Gate | CI run `33745745469` — **success** on `965ec07` |
+| Schema migrations | **NONE** — pure application-layer intelligence engines; no contract/DB changes |
+| Scope | Positioning + flow/divergence only: NO dynamic S/R, NO institutional/regime/event/expiry/trap engines, NO synthesis, NO opportunity/strategy/risk/execution, no AI/ML/backtesting, no frontend/API changes, no Day-21+ work |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 20 gate | **PASS** — Positioning + Flow/Divergence Intelligence Gate satisfied |
+
 **Day 19 remediation (`96122a4`) — PASS:** independent review found two contract-hardening gaps; both fixed with regression tests (95/95 focused): (1) `SUCCESS` now **requires** the preserved Day-12 `QualityResult` — `quality=None` on SUCCESS is rejected (PARTIAL/UNAVAILABLE/INVALID unchanged; exact instance preserved via `is`); (2) timestamp awareness now uses genuine `utcoffset()` semantics — a tzinfo whose `utcoffset()` returns None is rejected, fixed-offset aware datetimes accepted, naive rejected. Regression re-run: Days 9–19 **828 passed**; Days 14–19 **592 passed**; security/session 129 passed + the same 2 pre-existing failures (reproduced identically at clean baseline `909a40e` in a fresh worktree); Days 4–7 + Alembic/migration **120 passed, 2 skipped**; `py_compile`/`git diff --check` clean; secret scan 0 hits; no wall-clock/random/IO introduced (module AST guard green). CI: Status Gate `33744325245` success, PostgreSQL compatibility `33744325276` success on `96122a4`. Diff = only `app/intelligence/contracts.py` + `test_day19_intelligence_contract.py`.
