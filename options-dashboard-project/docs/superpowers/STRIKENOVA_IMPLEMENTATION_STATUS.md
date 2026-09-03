@@ -645,4 +645,37 @@
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 20 gate | **PASS** — Positioning + Flow/Divergence Intelligence Gate satisfied |
 
+---
+
+## Day 21 — Dynamic Support/Resistance Intelligence Engine
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Deterministic evidence-weighted **dynamic S/R engine** on the Day-19 contract — candidate levels from measurable option-chain structure, never the "highest OI = level" folklore |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-dynamic-support-resistance.md` |
+| Implementation SHA | `044f111` |
+| Reuse | Input rows reuse the Day-20 `StrikePositioning` type (same package); Day-19 `contracts.py` and all earlier contracts untouched; no GEX/gamma-wall duplication (see limitations) |
+| Layering | Raw rows → `derive_chain_context` (per-side maxima) → per-strike candidates/shares → typed `LevelClassification` (kind/state/strength) → `build_clusters` → per-level `IntelligenceResult` (positional: `direction=NEUTRAL` always) |
+| Candidate/classification rules | SUPPORT: `put_share >= 0.5` of chain max put OI AND ≥1 corroborator (strengthening/active put ΔOI, put volume activity ≥0.5 share, price approach, put-heavy asymmetry). RESISTANCE: call mirror. Static concentration with NO corroborator ⇒ UNCLASSIFIED/STATIC (measured fact, never a level claim — the highest-OI-alone guard, tested). Both sides corroborated ⇒ UNCLASSIFIED/MIXED_EVIDENCE, never forced |
+| Interaction states | Kind-aware: approach ⇒ CONFIRMED_INTERACTION; support with price below and falling (break-down) ⇒ CONFLICTED_INTERACTION; resistance with price above and rising (break-up) ⇒ CONFLICTED; price missing ⇒ no interaction. Strengthening/weakening measured on the classifying side's ΔOI; documented state priority conflict > confirm > strengthen > weaken > static |
+| Level strength | Bounded `clamp(mean(present), 0, 1)` of the classifying side's present normalized shares (side share, \|ΔOI\| share, volume share) + interaction term (confirm 1.0 / conflict 0.0 / **excluded when no price interaction — missing ≠ 0**); equal visible weights, no opaque 0–100 score |
+| Confidence | Completeness table (documented): 0.90 side-Δ + price present; 0.65 side-Δ missing; 0.50 price missing; 0.80 otherwise. `level_strength != confidence != quality` |
+| Clustering | Same-kind classified levels merge when strike gap `<= CLUSTER_STRIKE_DISTANCE = 50.0` (inclusive, tested at the boundary); representative = strongest member, tie-break lower strike; different kinds never merge; same-kind strikes never chain through a different-kind strike |
+| Quality/provenance | Exact supplied Day-12 `QualityResult` preserved (`is`); INSUFFICIENT state or missing quality ⇒ non-SUCCESS with `INSUFFICIENT_QUALITY`/`MISSING_QUALITY`; Day-9 `Provenance` preserved verbatim; never recomputed |
+| Golden values | Hand arithmetic: 4-strike chain — 100 RESISTANCE / 200 SUPPORT / 300 RESISTANCE (strength mean(0.5, 0.6, 0.125) = 1.225/3 ≈ 0.40833) / 400 UNCLASSIFIED; strength 1.0 level at the max-share support; all literals independent of the implementation |
+| Tests | `tests/test_day21_levels_engine.py` — 52 tests (input/context, golden classification + strengths, highest-OI guard, dynamic states, balanced evidence, missing-data incl. one-sided chains and zero-vs-missing, clustering + boundary/tie-breaks, interpretation envelopes, determinism, serialization round-trip, extremes, purity AST, no-fabrication) |
+| RED evidence | RED confirmed: module absent → import collection error; GREEN 52/52 (fixes during GREEN: |ΔOI| chain maxima must use absolute magnitudes; interaction conflicts made kind-aware so a falling price below a resistance is not a resistance conflict) |
+| Focused regression | Days 9–21 (13 files): **960 passed**; Days 14–21: **724 passed** |
+| Security/session regression | 129 passed, 2 failed = **pre-existing** (same two token/OAuth tests reproduced **identically at the clean Day-20 baseline `558d656`** in a fresh worktree; Day-21 diff adds only the pure levels engine) |
+| Days 4–7 + Alembic/migration | 120 passed, 2 skipped |
+| Static checks | `py_compile` OK; `git diff --check` clean; unused imports removed; AST purity guards green (no clock/random/DB/network/filesystem/broker imports; no datetime.now/time.time/uuid/random tokens); secret scan clean (0 hits) |
+| PostgreSQL 16 | CI run `33746836698` — success (`postgres:16`) on `044f111` |
+| Status Gate | CI run `33746836631` — **success** on `044f111` |
+| Schema migrations | **NONE** — pure application-layer intelligence engine |
+| Scope | Dynamic S/R only: NO institutional/regime/event/expiry/trap/synthesis/opportunity/strategy/risk/execution, no AI/ML/backtesting, no frontend/API/DB changes, no Day-22+ work |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 21 gate | **PASS** — Dynamic Support/Resistance Intelligence Gate satisfied |
+
 **Day 19 remediation (`96122a4`) — PASS:** independent review found two contract-hardening gaps; both fixed with regression tests (95/95 focused): (1) `SUCCESS` now **requires** the preserved Day-12 `QualityResult` — `quality=None` on SUCCESS is rejected (PARTIAL/UNAVAILABLE/INVALID unchanged; exact instance preserved via `is`); (2) timestamp awareness now uses genuine `utcoffset()` semantics — a tzinfo whose `utcoffset()` returns None is rejected, fixed-offset aware datetimes accepted, naive rejected. Regression re-run: Days 9–19 **828 passed**; Days 14–19 **592 passed**; security/session 129 passed + the same 2 pre-existing failures (reproduced identically at clean baseline `909a40e` in a fresh worktree); Days 4–7 + Alembic/migration **120 passed, 2 skipped**; `py_compile`/`git diff --check` clean; secret scan 0 hits; no wall-clock/random/IO introduced (module AST guard green). CI: Status Gate `33744325245` success, PostgreSQL compatibility `33744325276` success on `96122a4`. Diff = only `app/intelligence/contracts.py` + `test_day19_intelligence_contract.py`.
