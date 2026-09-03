@@ -1,7 +1,7 @@
 # StrikeNova Implementation Status Tracker
 
 > **Master Plan SHA:** `0a244c0` (docs: add StrikeNova master day-wise implementation plan)
-> **Last Updated:** 2026-09-03 (Day 5 PASS — CI verified)
+> **Last Updated:** 2026-09-03 (Day 5 PASS — evidence closure complete, CI verified on d7f99fa)
 
 ## Phase 0 — Security Emergency
 
@@ -151,5 +151,7 @@
 | Day 5 focused tests | 24 passed, 0 failed, 5.34s |
 | Alembic/migration regression | 86 passed, 1 skipped, 15.97s (includes Day 4 + Day 3 + Phase 9 tests) |
 | Production isolation | No Railway/Vercel/production DB changes |
-| Commit SHA (closure) | Pending push |
-| GitHub Actions (closure) | Pending push — PostgreSQL compat + Status Gate verification required |
+| Commit SHA (closure) | `d7f99fa` — `test(day5): close migration revision-state evidence gaps` |
+| GitHub Actions — Status Gate (closure) | Run ID `33713961573` — conclusion: **success** — SHA `d7f99fa` |
+| GitHub Actions — PostgreSQL compat (closure) | Run ID `33713961599` — conclusion: **success** — SHA `d7f99fa` — `postgres:16` image |
+| Final Day 5 remote HEAD | `d7f99fa` — all evidence fresh on this SHA |
