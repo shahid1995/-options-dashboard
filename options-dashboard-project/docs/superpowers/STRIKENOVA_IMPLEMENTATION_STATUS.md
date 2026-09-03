@@ -201,4 +201,11 @@
 | Broker session persistence | Verified: `get_token()` DB fallback works after cache clear |
 | OAuth state | HMAC-signed; TTL enforced; `_pending_states` in-memory (documented limitation) |
 | No blocking async | `google_auth` is sync def (FastAPI threadpool); `callback` is async with no blocking calls |
-| Session lifecycle | TTL 24h; expired/revoked sessions rejected; hash indexed | |
+| Session lifecycle | TTL 24h; expired/revoked sessions rejected; hash indexed |
+| Commit SHA | `3abd077` (rebased to `b3f495f`) |
+| Day 7 focused tests | 16/16 passed, 9.92s |
+| Regression | 139 passed, 1 skipped, 0 failed across Day 3 + Phase 9 + Day 4 + Day 5 + Day 6 + Alembic + DB migration |
+| GitHub Actions — Status Gate | Run ID `33718175231` — conclusion: **success** — SHA `b3f495f` |
+| GitHub Actions — PostgreSQL compat | Run ID `33718175253` — conclusion: **success** — SHA `b3f495f` — `postgres:16` |
+| Final Day 7 remote HEAD | `b3f495f` |
+| Day 7 gate | **PASS** — Session Persistence Hardening verified | |
