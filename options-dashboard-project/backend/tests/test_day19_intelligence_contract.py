@@ -45,7 +45,7 @@ import ast
 import dataclasses
 import json
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -75,6 +75,21 @@ from app.intelligence.contracts import (
 
 _REF = datetime(2026, 9, 3, 10, 0, 0, tzinfo=timezone.utc)
 _REF2 = datetime(2026, 9, 3, 10, 5, 0, tzinfo=timezone.utc)
+# IST-style fixed offset (UTC+5:30) — a genuinely aware, non-UTC tz.
+_FIXED_OFFSET = timezone(timedelta(hours=5, minutes=30))
+
+
+class _NoneOffsetTZ(tzinfo):
+    """A tzinfo whose ``utcoffset()`` returns None — not genuinely aware."""
+
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
+    def tzname(self, dt):
+        return "NONE_OFFSET"
 
 
 def _prov(*, source: str = "STRIKENOVA_QUANT", ts: datetime = _REF) -> Provenance:
@@ -302,6 +317,27 @@ class TestValidation:
         with pytest.raises(ValueError):
             MarketRegime(label=RegimeLabel.RANGING, reference_timestamp=naive)
 
+    def test_none_offset_tzinfo_rejected_as_not_genuinely_aware(self):
+        # a tzinfo whose utcoffset() returns None is NOT genuinely aware
+        fake_aware = datetime(2026, 9, 3, 10, 0, 0, tzinfo=_NoneOffsetTZ())
+        assert fake_aware.tzinfo is not None  # would fool a naive check
+        with pytest.raises(ValueError):
+            _result(reference_timestamp=fake_aware)
+        with pytest.raises(ValueError):
+            _evidence(ts=fake_aware)
+        with pytest.raises(ValueError):
+            MarketRegime(label=RegimeLabel.RANGING, reference_timestamp=fake_aware)
+
+    def test_fixed_offset_aware_timestamp_accepted(self):
+        aware = datetime(2026, 9, 3, 15, 30, 0, tzinfo=_FIXED_OFFSET)
+        r = _result(reference_timestamp=aware)
+        assert r.reference_timestamp == aware
+        assert r.reference_timestamp.utcoffset() is not None
+        e = _evidence(ts=aware)
+        assert e.reference_timestamp == aware
+        regime = MarketRegime(label=RegimeLabel.RANGING, reference_timestamp=aware)
+        assert regime.reference_timestamp == aware
+
     def test_non_finite_evidence_value_rejected(self):
         with pytest.raises(ValueError):
             _evidence(value=float("inf"))
@@ -420,6 +456,59 @@ class TestStatusConsistency:
         codes = {i.code for i in r.issues}
         assert IntelligenceIssueCode.MISSING_EVIDENCE in codes
         assert IntelligenceIssueCode.MISSING_QUALITY in codes
+
+
+# ---------------------------------------------------------------------------
+# 3b. SUCCESS must preserve the Day-12 quality assessment
+# ---------------------------------------------------------------------------
+
+
+class TestSuccessRequiresQuality:
+    def test_success_with_missing_quality_rejected(self):
+        with pytest.raises(ValueError):
+            _result(quality=None)
+
+    def test_success_with_valid_quality_accepted(self):
+        q = _quality(QualityState.GOOD, 82)
+        r = _result(quality=q)
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert isinstance(r.quality, QualityResult)
+
+    def test_exact_quality_instance_preserved(self):
+        q = _quality(QualityState.EXCELLENT, 99)
+        r = _result(quality=q)
+        assert r.quality is q  # same object, never copied/rewrapped
+
+    def test_partial_preserves_supplied_quality(self):
+        q = _quality(QualityState.DEGRADED, 64)
+        r = _result(
+            status=IntelligenceStatus.PARTIAL,
+            quality=q,
+            issues=(_issue(code=IntelligenceIssueCode.PARTIAL_EVIDENCE),),
+        )
+        assert r.quality is q
+        assert r.quality.quality_score == 64
+        assert r.quality.quality_state is QualityState.DEGRADED
+
+    def test_unavailable_without_quality_valid_when_reason_explains(self):
+        r = _result(
+            status=IntelligenceStatus.UNAVAILABLE,
+            direction=None, signal_strength=None, confidence=None,
+            time_horizon=None, observation=None, evidence=(), quality=None,
+            issues=(_issue(code=IntelligenceIssueCode.MISSING_QUALITY,
+                           message="no Day-12 quality assessment supplied"),),
+        )
+        assert r.status is IntelligenceStatus.UNAVAILABLE
+        assert r.quality is None
+        assert any(i.code is IntelligenceIssueCode.MISSING_QUALITY for i in r.issues)
+
+    def test_success_round_trip_preserves_quality(self):
+        q = _quality(QualityState.GOOD, 88)
+        r = _result(quality=q)
+        rebuilt = IntelligenceResult.from_dict(r.to_dict())
+        assert rebuilt == r
+        assert rebuilt.quality == q
+        assert rebuilt.quality.quality_state is QualityState.GOOD
 
 
 # ---------------------------------------------------------------------------
@@ -547,9 +636,19 @@ class TestMissingData:
         assert r.issues[0].code is IntelligenceIssueCode.MISSING_QUALITY
 
     def test_missing_quality_never_becomes_zero_score(self):
-        r = _result(quality=None)  # SUCCESS with no quality context is allowed
-        assert r.quality is None
-        d = r.to_dict()
+        # missing quality can never yield a SUCCESS claim (or a fabricated
+        # score) — the result must be non-SUCCESS with an explicit reason
+        with pytest.raises(ValueError):
+            _result(quality=None)
+        unavailable = _result(
+            status=IntelligenceStatus.UNAVAILABLE,
+            direction=None, signal_strength=None, confidence=None,
+            time_horizon=None, observation=None, evidence=(), quality=None,
+            issues=(_issue(code=IntelligenceIssueCode.MISSING_QUALITY,
+                           message="no Day-12 quality assessment supplied"),),
+        )
+        assert unavailable.quality is None
+        d = unavailable.to_dict()
         assert d["quality"] is None
         assert "quality_score" not in d
 

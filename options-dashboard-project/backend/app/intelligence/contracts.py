@@ -21,9 +21,11 @@ Design rules
      as strength or confidence.
 2. **No fabrication.**  Missing evidence/values stay missing.  ``SUCCESS``
    requires complete evidence with finite values, an observation, direction,
-   strength, confidence, horizon, provenance and a reference timestamp, and
-   zero issues.  A ``None``-valued evidence entry can never underpin
-   ``SUCCESS``; missing data is never coerced to zero, NEUTRAL or success.
+   strength, confidence, horizon, provenance, a genuinely aware reference
+   timestamp, the preserved Day-12 :class:`QualityResult` and zero issues.
+   A ``None``-valued evidence entry can never underpin ``SUCCESS``; missing
+   data — including a missing quality assessment — is never coerced to zero,
+   NEUTRAL or EXCELLENT and never becomes success.
 3. **Status/issue consistency.**  ``PARTIAL`` requires evidence + issues;
    ``UNAVAILABLE``/``INVALID`` forbid interpretation fields and require
    structured issues that preserve the reason.
@@ -201,12 +203,18 @@ def _require_range_or_none(value: float | None, name: str) -> None:
 
 
 def _require_aware_or_none(ts: datetime | None, name: str) -> None:
-    if ts is not None and ts.tzinfo is None:
-        raise ValueError(f"{name} must be timezone-aware when present")
+    if ts is not None and not _is_aware(ts):
+        raise ValueError(f"{name} must be genuinely timezone-aware when present")
 
 
 def _is_aware(ts: datetime | None) -> bool:
-    return ts is not None and ts.tzinfo is not None
+    """Genuine Python datetime awareness: tzinfo exists AND its ``utcoffset``
+    is not ``None`` (a tzinfo whose ``utcoffset()`` returns None is naive in
+    effect and must not pass as aware).  Deterministic — never reads the wall
+    clock and never synthesizes an offset."""
+    if ts is None or ts.tzinfo is None:
+        return False
+    return ts.tzinfo.utcoffset(ts) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +416,12 @@ class IntelligenceResult:
             if self.provenance is None:
                 raise ValueError("SUCCESS requires provenance")
             if not _is_aware(self.reference_timestamp):
-                raise ValueError("SUCCESS requires an aware reference_timestamp")
+                raise ValueError("SUCCESS requires a genuinely aware reference_timestamp")
+            if self.quality is None:
+                raise ValueError(
+                    "SUCCESS requires the preserved Day-12 QualityResult — "
+                    "missing quality never becomes success"
+                )
             if self.issues:
                 raise ValueError("SUCCESS must carry no issues")
         elif status is IntelligenceStatus.PARTIAL:
@@ -516,8 +529,8 @@ def _fmt(value) -> object:
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, datetime):
-        if value.tzinfo is None:  # defensive: naive timestamps never serialize
-            raise ValueError("cannot serialize a naive datetime")
+        if not _is_aware(value):  # defensive: naive timestamps never serialize
+            raise ValueError("cannot serialize a non-genuinely-aware datetime")
         return value.isoformat()
     if dataclasses.is_dataclass(value):
         return {f.name: _fmt(getattr(value, f.name)) for f in dataclasses.fields(value)}
