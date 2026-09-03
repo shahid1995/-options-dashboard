@@ -88,8 +88,10 @@ Direction of dependency: `app.intelligence` may import `app.market_data`
   (mirrors `QuantIssue`).
 - `IntelligenceResult` — `calculation_id` (required), `status`, `direction`,
   `signal_strength` (0..1), `confidence` (0..1), `time_horizon`, `observation`,
-  `evidence: tuple[...]`, `regime`, `quality: QualityResult | None` (the whole
-  Day-12 envelope preserved — score, state and issues), `provenance`,
+  `evidence: tuple[...]`, `regime`,  `quality: QualityResult | None` (the whole
+  Day-12 envelope preserved — score, state and issues; **required for
+  `SUCCESS`** — a successful intelligence result must carry the canonical
+  Day-12 assessment, never a synthetic/fabricated one), `provenance`,
   `reference_timestamp`, `contract_version` (defaults to the module constant
   `INTELLIGENCE_CONTRACT_VERSION = "1.0.0"`), `model_version`,
   `calculation_version`, `issues: tuple[IntelligenceIssue, ...]`.
@@ -108,7 +110,13 @@ Direction of dependency: `app.intelligence` may import `app.market_data`
    - `PARTIAL` ⇒ non-empty evidence + at least one structured issue.
    - `UNAVAILABLE` / `INVALID` ⇒ direction/strength/confidence/horizon all
      `None` + at least one structured issue (reason never lost).
-   - `SUCCESS` ⇒ zero issues.
+   - `SUCCESS` ⇒ zero issues, and `quality` is the preserved Day-12
+     `QualityResult` (never `None`, never recomputed, never converted to
+     EXCELLENT/GOOD when missing).
+
+   Remediation note (`96122a4`): timestamps are validated by genuine
+   `utcoffset()` awareness semantics — a tzinfo whose `utcoffset()` returns
+   `None` is rejected along with fully naive datetimes.
 4. **Field validity**: non-finite numbers rejected; strength/confidence outside
    [0,1] rejected; enum instances type-checked (raw strings rejected); timestamps
    must be timezone-aware when present; `source_reference_id`, `metric_name`,
