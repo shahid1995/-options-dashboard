@@ -511,3 +511,38 @@
 | Scope | Pricing + IV only: NO GEX/gamma walls/flip, NO scenario/portfolio, NO intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no DB changes, no frontend changes |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 16 gate | **PASS** — IV & Pricing Engine Gate satisfied |
+
+---
+
+## Day 17 — GEX Calculation & Gamma Profile Foundation
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish the authoritative, deterministic **GEX Calculation Engine** on the Day-14 boundary — the reusable backend/shared GEX foundation for later Gamma Flip / Walls / historical GEX work — plus a deterministic **gamma-profile aggregation** layer |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-gex-engine.md` |
+| Implementation SHA | `faa83fe` |
+| Canonical formula | `Raw GEX = gamma × OI × spot² × 0.01` — the approved GEX_V1_0_SPEC §6 formula, preserved exactly by the existing `live_gex.py`/`gex.js`; golden values cross-checked against the pre-existing Phase-8A `live_gex._raw_gex/_signed_gex` implementation (agreement exact) |
+| OI units | **Contracts — never lots.** OI = 100 is used directly as 100 (regression: NIFTY lot 65 must not multiply; raw(0.002, 100, 24000) = 1,152,000, not 74,880,000). No lot-size field anywhere in the formula path |
+| Sign convention | `NAIVE_DEALER_CONVENTION` (spec §6.1): Call = +Raw, Put = −Raw, call_sign +1 / put_sign −1 — explicit modeling convention, never a claim about observed dealer positions; methodology `GEX_STANDARD_V1` |
+| Greeks source separation | Every GEX input requires an explicit `greeks_source` label (`BROKER`/`MODEL`, the Day-9 vocabulary); preserved on the result via new additive `QuantResult.greeks_source`; the profile builder **rejects mixed broker/model rows** with a deterministic error |
+| Missing vs zero | Missing gamma/OI/source ⇒ UNAVAILABLE/INVALID (never fabricated 0); legitimately zero gamma/OI ⇒ valid 0.0 contribution (spec §10 only bans NaN/inf/non-numeric gamma and negative OI) |
+| Boundary integration | `GexCalculationEngine` runs through `QuantitativeEngineBoundary` (provenance + INSUFFICIENT-quality gates first) and returns `QuantResult` `{raw_gex, signed_gex}` with quality/provenance/timestamps/versions/contract-version preserved |
+| Contracts (additive) | `OptionMarketData` += `gamma`, `open_interest`, `greeks_source` (optional trailing, validated finite non-negative); `QuantResult` += `greeks_source`; no member/ordering changes — Days 14–16 unaffected |
+| Profile foundation | `build_gamma_profile`: strike rows (`strike/call_gex/put_gex/net_gex`) sorted ascending, totals (`total_call/put/net_gex`; missing side ⇒ None), per-row structured exclusions (missing/INVALID input, missing provenance, INSUFFICIENT quality, unknown source), duplicate rows each contribute, uniform-spot and uniform-source guards, conservation Σ nets = total net |
+| Golden values | 12 independent fixtures (ATM/OTM/ITM/zero-OI/zero-gamma/NIFTY-scale/tiny-gamma) from hand arithmetic — never from the production functions |
+| Invariants | Doubling OI doubles GEX; doubling gamma doubles GEX; GEX ∝ spot² (4× at S×2); γ=0 ⇒ 0; OI=0 ⇒ 0 (all tested independently) |
+| Tests | `tests/test_day17_gex_engine.py` — 74 tests (goldens, OI-unit regression, sign convention, engine/boundary contract, invariants, profile aggregation + exclusions, determinism, numerical safety, security/purity AST) |
+| RED evidence | RED confirmed: module absent → import collection error before implementation; GREEN 74/74 |
+| Focused regression | 670 passed (74 Day 17 + 596 Days 9–16); Days 14–17 re-run: 434/434 |
+| Legacy quant + GEX regression | 391 passed, 7 skipped (historical greeks, phase719a/723b, IV history, valuation, GEX final/history/historical/reliability/security) |
+| Security/session regression | 153 passed, 2 failed = **pre-existing** (same two token/OAuth tests reproduced at clean baseline `79d4551`/`a21b195` during the Day-16 independent verification; Day-17 diff touches no auth code) |
+| Days 4–7 + Alembic/migration | 103 passed, 1 skipped |
+| Static checks | `py_compile` OK on changed files; `git diff --check` clean; AST wall-clock/IO/quality guards auto-extended over `gex.py` (Day-14 glob, green); secret scan clean |
+| PostgreSQL 16 | CI run `33741140309` — **success** (`postgres:16`) on `faa83fe` |
+| Status Gate | CI run `33741140263` — **success** on `faa83fe` |
+| Schema migrations | **NONE** — pure application-layer quant code + additive contract fields |
+| Scope | GEX calc + gamma profile only: NO Gamma Flip/zero-crossing/walls, NO historical GEX persistence/ΔGEX, NO scenarios/portfolio, NO intelligence/execution/backtest/ML/AI, no Redis/Kafka/microservices, no DB/frontend changes, no legacy GEX modification (`live_gex.py`/`gex.js` untouched) |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 17 gate | **PASS** — GEX Calculation & Gamma Profile Foundation Gate satisfied |
