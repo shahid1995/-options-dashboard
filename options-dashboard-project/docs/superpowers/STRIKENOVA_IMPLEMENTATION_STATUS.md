@@ -180,4 +180,8 @@
 | `git diff --check` | Clean |
 | Findings | No P0/P1 issues requiring immediate optimization; composite index candidates identified for future phases |
 | Remaining risks | Composite indexes not yet added (need PostgreSQL benchmark evidence); SQLite-only composite indexes not ported to PostgreSQL |
-| Day 6 gate | PASS — Performance Baseline established |
+| Commit SHA | `4914427` — `perf(day6): PostgreSQL performance baseline` |
+| GitHub Actions — Status Gate | Run ID `33714990943` — conclusion: **success** — SHA `4914427` |
+| GitHub Actions — PostgreSQL compat | Run ID `33714990949` — conclusion: **success** — SHA `4914427` — `postgres:16` |
+| Final Day 6 remote HEAD | `4914427` |
+| Day 6 gate | **PASS** — Performance Baseline established |
