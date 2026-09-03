@@ -115,12 +115,12 @@
 | Migration audit | Single head `b2c3d4e5f6a7`; init_db uses Alembic (no create_all); 7 migration files |
 | Alembic head authority | 21 tests: single head verified, multiple heads detected, deterministic, no credentials in config |
 | Production schema authority | init_db() has no create_all/ensure_column; uses Alembic upgrade; CLI tools documented separately |
-| Revision-state validation | `validate_migration_state()` function added — returns status (current/behind/uninitialised/error) |
+| Revision-state validation | `validate_migration_state()` function added — returns status (current/behind/uninitialised/unknown/error) |
 | Drift detection | Tests verify: current DB matches head, behind DB detected, empty DB detected, unavailable DB handled |
 | Alembic upgrade idempotent | Verified: upgrade head twice produces correct state |
 | alembic_version single row | Verified: exactly 1 row after upgrade |
-| Files changed | `app/db.py` (+79 lines), `test_day5_alembic_authority.py` (+new, 21 tests), `.github/workflows/postgres-compatibility.yml` (+1 line) |
-| Day 5 focused tests | 21 passed, 0 failed — `pytest tests/test_day5_alembic_authority.py -v` |
+| Files changed | `app/db.py` (+31/-4), `test_day5_alembic_authority.py` (+220/-16, now 24 tests), `.github/workflows/postgres-compatibility.yml` (+1 line) |
+| Day 5 focused tests | 24 passed, 0 failed — `pytest tests/test_day5_alembic_authority.py -v` |
 | Alembic/migration tests | 17/17 passed |
 | Day 4 regression | 25/25+1skipped passed |
 | Day 3 security | 19/19 passed |
@@ -139,3 +139,17 @@
 | PostgreSQL 16 CI evidence | `postgres:16` image, Day 5 `test_day5_alembic_authority.py` included in CI test run |
 | Master-plan SHA sync | Tracker `0a244c0` matches plan HEAD — verified by CI step |
 | **DAY 5 — OFFICIALLY PASS** | Remote commit `6c0a11d`, GitHub Actions runs `33669849166` + `33669849311` GREEN, all gates satisfied |
+
+### Day 5 Evidence Closure (2026-09-03)
+
+| Item | Evidence |
+|------|----------|
+| Unknown revision detection | `test_unknown_revision_detected` — PASS: revision `aaaa00000000` not in migration graph → status `unknown` |
+| Ahead-of-head detection | `test_ahead_revision_detected` — PASS: revision `ffff99999999` not in graph → status `unknown` |
+| Behind-in-chain detection | `test_behind_revision_in_chain_detected` — PASS: real chain revision `a1b2c3d4e5f6` → status `behind` |
+| validate_migration_state() upgrade | Now walks migration graph chain; distinguishes `behind` (in graph) from `unknown` (not in graph) |
+| Day 5 focused tests | 24 passed, 0 failed, 5.34s |
+| Alembic/migration regression | 86 passed, 1 skipped, 15.97s (includes Day 4 + Day 3 + Phase 9 tests) |
+| Production isolation | No Railway/Vercel/production DB changes |
+| Commit SHA (closure) | Pending push |
+| GitHub Actions (closure) | Pending push — PostgreSQL compat + Status Gate verification required |

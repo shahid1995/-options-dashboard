@@ -166,6 +166,29 @@ def validate_migration_state() -> dict:
 
         result["expected_head"] = heads[0]
 
+        # Collect every revision ID in the migration graph by walking
+        # backwards from head.  This lets us distinguish "behind" (revision
+        # is in the graph but not the head) from "unknown" (revision is not
+        # in the graph at all).
+        all_revisions: set = set()
+        try:
+            rev_map = script.revision_map
+            # Walk the full chain from each head backwards
+            for h in heads:
+                rev = rev_map.get_revision(h)
+                while rev is not None:
+                    all_revisions.add(rev.revision)
+                    if not rev.down_revision:
+                        break
+                    downs = rev.down_revision
+                    if isinstance(downs, (list, tuple)):
+                        rev = rev_map.get_revision(downs[0])
+                    else:
+                        rev = rev_map.get_revision(downs)
+        except Exception:
+            # If graph walking fails, fall back to checking only against head
+            all_revisions = set(heads)
+
         with engine.connect() as conn:
             mc = MigrationContext.configure(conn)
             current_rev = mc.get_current_revision()
@@ -176,10 +199,16 @@ def validate_migration_state() -> dict:
             result["error"] = "No alembic_version record found"
         elif current_rev == heads[0]:
             result["status"] = "current"
-        else:
+        elif current_rev in all_revisions:
             result["status"] = "behind"
             result["error"] = (
                 f"Database revision {current_rev} != expected head {heads[0]}"
+            )
+        else:
+            result["status"] = "unknown"
+            result["error"] = (
+                f"Database revision {current_rev} is not present in the "
+                f"migration graph (expected one of: {sorted(all_revisions)})"
             )
 
     except Exception as e:

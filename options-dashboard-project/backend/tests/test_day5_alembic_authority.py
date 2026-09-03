@@ -258,9 +258,10 @@ class TestRevisionStateValidation:
             os.unlink(tmp_path)
 
     def test_behind_database_detected(self):
-        """A database stamped to an older revision is detected as behind."""
+        """A database stamped to an older revision in the chain is detected as behind."""
         from alembic.config import Config
         from alembic.script import ScriptDirectory
+        from alembic import command as alembic_command
 
         cfg = Config(
             os.path.join(
@@ -275,15 +276,9 @@ class TestRevisionStateValidation:
             tmp_db = f"sqlite:///{tmp_path}"
             engine = create_engine(tmp_db, connect_args={"check_same_thread": False})
 
-            # Create alembic_version table and insert a fake old revision
-            # (simulating a database that was migrated with an older version)
-            with engine.begin() as conn:
-                conn.execute(text(
-                    "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
-                ))
-                conn.execute(text(
-                    "INSERT INTO alembic_version (version_num) VALUES ('old0000000000')"
-                ))
+            # Stamp to a real earlier revision in the migration chain
+            cfg.set_main_option("sqlalchemy.url", tmp_db)
+            alembic_command.stamp(cfg, "a0deb75ad22f")
 
             # Get expected head
             script = ScriptDirectory.from_config(cfg)
@@ -298,11 +293,14 @@ class TestRevisionStateValidation:
             assert actual_rev != expected_head, (
                 f"Database revision should be behind, but matches head: {actual_rev}"
             )
-            assert actual_rev == "old0000000000", f"Expected fake old revision, got: {actual_rev}"
+            assert actual_rev == "a0deb75ad22f", f"Expected earlier chain revision, got: {actual_rev}"
 
             engine.dispose()
         finally:
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows: file may still be held momentarily
 
     def test_empty_database_detected(self):
         """A database with no alembic_version table is detected as uninitialised."""
@@ -488,7 +486,59 @@ class TestValidateMigrationState:
             os.unlink(tmp_path)
 
     def test_status_is_behind_when_db_has_old_revision(self):
-        """When database has an old revision, status must be 'behind'."""
+        """When database has a real earlier revision in the chain, status must be 'behind'."""
+        import app.db as db_module
+        from app.db import validate_migration_state
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import sessionmaker
+        from alembic.config import Config
+        from alembic import command as alembic_command
+
+        cfg = Config(
+            os.path.join(
+                os.path.dirname(__file__), "..", "alembic.ini"
+            )
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            tmp_db = f"sqlite:///{tmp_path}"
+            engine = create_engine(tmp_db, connect_args={"check_same_thread": False})
+
+            # Stamp to a real earlier revision in the migration chain
+            cfg.set_main_option("sqlalchemy.url", tmp_db)
+            alembic_command.stamp(cfg, "a0deb75ad22f")
+
+            original_engine = db_module.engine
+            original_session = db_module.SessionLocal
+            try:
+                db_module.engine = engine
+                db_module.SessionLocal = sessionmaker(bind=engine)
+                result = validate_migration_state()
+                assert result["status"] == "behind", (
+                    f"Expected 'behind', got '{result["status"]}': {result}"
+                )
+                assert result["error"] is not None
+                assert "a0deb75ad22f" in result["error"]
+            finally:
+                db_module.engine = original_engine
+                db_module.SessionLocal = original_session
+
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows: file may still be held momentarily
+
+    def test_unknown_revision_detected(self):
+        """A revision not present in the migration graph must be 'unknown'.
+
+        This covers the case where the database was migrated by a different
+        branch or version that no longer exists locally.
+        """
         import app.db as db_module
         from app.db import validate_migration_state
         from sqlalchemy import create_engine, text
@@ -501,13 +551,14 @@ class TestValidateMigrationState:
             tmp_db = f"sqlite:///{tmp_path}"
             engine = create_engine(tmp_db, connect_args={"check_same_thread": False})
 
-            # Create alembic_version with a fake old revision
+            # Insert a revision that does NOT exist in the migration graph
             with engine.begin() as conn:
                 conn.execute(text(
                     "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"
                 ))
                 conn.execute(text(
-                    "INSERT INTO alembic_version (version_num) VALUES ('old0000000000')"
+                    "INSERT INTO alembic_version (version_num) VALUES ("
+                    "'aaaa00000000')"
                 ))
 
             original_engine = db_module.engine
@@ -516,18 +567,149 @@ class TestValidateMigrationState:
                 db_module.engine = engine
                 db_module.SessionLocal = sessionmaker(bind=engine)
                 result = validate_migration_state()
-                assert result["status"] == "behind", (
-                    f"Expected 'behind', got '{result["status"]}': {result}"
+                assert result["status"] == "unknown", (
+                    f"Expected 'unknown' for revision not in graph, "
+                    f"got '{result["status"]}': {result}"
                 )
                 assert result["error"] is not None
-                assert "old0000000000" in result["error"]
+                assert "aaaa00000000" in result["error"]
             finally:
                 db_module.engine = original_engine
                 db_module.SessionLocal = original_session
 
             engine.dispose()
         finally:
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows: file may still be held momentarily
+
+    def test_ahead_revision_detected(self):
+        """A revision ahead of the head must be 'ahead' or 'unknown'.
+
+        Simulates a database that was migrated beyond the repository's
+        authoritative head (e.g. a newer version was applied).
+        """
+        import app.db as db_module
+        from app.db import validate_migration_state
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import sessionmaker
+        from alembic.script import ScriptDirectory
+        from alembic.config import Config
+
+        cfg = Config(
+            os.path.join(
+                os.path.dirname(__file__), "..", "alembic.ini"
+            )
+        )
+        script = ScriptDirectory.from_config(cfg)
+        expected_head = script.get_heads()[0]
+
+        # Simulate: database reports a revision that doesn't match head.
+        # With a real Alembic upgradable database, we stamp to head then
+        # mock the revision to a value that IS in the graph but is not the
+        # head. This tests the distinction: it IS in the graph, but the
+        # database state doesn't match the expected authoritative head.
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            tmp_db = f"sqlite:///{tmp_path}"
+            engine = create_engine(tmp_db, connect_args={"check_same_thread": False})
+
+            # Upgrade fully so alembic_version table exists
+            from alembic import command as alembic_command
+            cfg.set_main_option("sqlalchemy.url", tmp_db)
+            alembic_command.upgrade(cfg, "head")
+
+            # Now mock the revision to a fake 'ahead' value not in graph
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "UPDATE alembic_version SET version_num = 'ffff99999999'"
+                ))
+
+            original_engine = db_module.engine
+            original_session = db_module.SessionLocal
+            try:
+                db_module.engine = engine
+                db_module.SessionLocal = sessionmaker(bind=engine)
+                result = validate_migration_state()
+                # Revision is not in the graph → must not be 'current'
+                assert result["status"] != "current", (
+                    f"Revision ahead-of-head must not be 'current': {result}"
+                )
+                # Should be identified as unknown (not in migration graph)
+                assert result["status"] == "unknown", (
+                    f"Expected 'unknown' for ahead-of-head revision, "
+                    f"got '{result["status"]}': {result}"
+                )
+            finally:
+                db_module.engine = original_engine
+                db_module.SessionLocal = original_session
+
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows: file may still be held momentarily
+
+    def test_behind_revision_in_chain_detected(self):
+        """A real revision in the migration chain (behind head) must be 'behind'.
+
+        This confirms the 'behind' status correctly identifies a revision
+        that is in the migration graph but not at the authoritative head.
+        """
+        import app.db as db_module
+        from app.db import validate_migration_state
+        from sqlalchemy import create_engine, text
+        from sqlalchemy.orm import sessionmaker
+        from alembic.config import Config
+        from alembic import command as alembic_command
+        from alembic.script import ScriptDirectory
+
+        cfg = Config(
+            os.path.join(
+                os.path.dirname(__file__), "..", "alembic.ini"
+            )
+        )
+        script = ScriptDirectory.from_config(cfg)
+        head = script.get_heads()[0]
+
+        # Find a real earlier revision in the chain
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            tmp_db = f"sqlite:///{tmp_path}"
+            engine = create_engine(tmp_db, connect_args={"check_same_thread": False})
+
+            # Stamp to a specific earlier revision
+            cfg.set_main_option("sqlalchemy.url", tmp_db)
+            alembic_command.stamp(cfg, "a1b2c3d4e5f6")
+
+            original_engine = db_module.engine
+            original_session = db_module.SessionLocal
+            try:
+                db_module.engine = engine
+                db_module.SessionLocal = sessionmaker(bind=engine)
+                result = validate_migration_state()
+                assert result["status"] == "behind", (
+                    f"Expected 'behind' for earlier chain revision, "
+                    f"got '{result["status"]}': {result}"
+                )
+                assert result["actual_revision"] == "a1b2c3d4e5f6"
+                assert result["expected_head"] == head
+            finally:
+                db_module.engine = original_engine
+                db_module.SessionLocal = original_session
+
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except PermissionError:
+                pass  # Windows: file may still be held momentarily
 
     def test_no_credentials_in_output(self):
         """validate_migration_state output must never contain credentials."""
