@@ -17,20 +17,30 @@ Rules locked by these tests
    corroborator (strengthening/active put ΔOI, put volume activity, price
    interaction, or put-heavy asymmetry).  RESISTANCE is the call-side mirror.
 3. Dynamic states are distinct: STATIC / STRENGTHENING / WEAKENING /
-   CONFIRMED_INTERACTION / CONFLICTED_INTERACTION / MIXED_EVIDENCE /
-   INSUFFICIENT_EVIDENCE.  No historical touches or price reactions are ever
-   fabricated.
-4. level_strength != confidence != data quality; strength is a bounded
+   APPROACHING / CONFLICTED_INTERACTION / MIXED_EVIDENCE /
+   INSUFFICIENT_EVIDENCE.  Price approaching a level is a weak interaction
+   (APPROACHING), never confirmation — CONFIRMED_INTERACTION is reserved for
+   future explicit historical-touch evidence and is never produced by current
+   inputs.  No historical touches or price reactions are ever fabricated.
+4. APPROACHING contributes nothing to level strength (approach is not
+   confirmation); missing interaction is not zero; CONFLICTED contributes a
+   documented 0.0 because a demonstrably broken level is an observed weak
+   level.
+4. APPROACHING contributes nothing to level strength (approach is not
+   confirmation); missing interaction is not zero; CONFLICTED contributes a
+   documented 0.0 because a demonstrably broken level is an observed weak
+   level.
+5. level_strength != confidence != data quality; strength is a bounded
    equal-mean of PRESENT normalized components (missing component != 0);
    confidence is a documented completeness table; the exact Day-12
    QualityResult and Day-9 Provenance are preserved verbatim.
-5. Balanced CE/PE evidence => MIXED_EVIDENCE / UNCLASSIFIED — never forced.
-6. Nearby same-kind levels merge deterministically by strike distance
+6. Balanced CE/PE evidence => MIXED_EVIDENCE / UNCLASSIFIED — never forced.
+7. Nearby same-kind levels merge deterministically by strike distance
    (CLUSTER_STRIKE_DISTANCE, inclusive boundary); different kinds never merge.
-7. Deterministic, repeatable, pure: no wall clock / random / DB / network /
+8. Deterministic, repeatable, pure: no wall clock / random / DB / network /
    filesystem / broker imports (AST-guarded — the Day-14 glob covers only
    app/quant).
-8. Golden expectations are independent hand arithmetic — never produced by
+9. Golden expectations are independent hand arithmetic — never produced by
    calling the engine under test.
 """
 
@@ -219,7 +229,7 @@ class TestGoldenClassification:
     def test_strike_200_support_strength_golden(self):
         by = {c.strike: c for c in classify_levels(_inp())}
         # mean(put_share 1.0, |put_d| share 1.0, put_vol share 1.0,
-        #      interaction confirm 1.0)
+        #      interaction APPROACHING excluded — approach never confirms)
         assert by[200.0].strength == pytest.approx(1.0, rel=1e-9)
 
     def test_strike_300_resistance_strength_golden(self):
@@ -299,15 +309,81 @@ class TestDynamicStates:
         assert by[100.0].kind is LevelKind.SUPPORT
         assert by[100.0].state is LevelState.WEAKENING
 
-    def test_confirmed_interaction(self):
-        # price at 250 falling toward support at 200 (approach from above)
+    def test_approaching_support_is_not_confirmed(self):
+        # price at 250 falling toward support at 200 (approach from above):
+        # approach proves only movement toward the level — never that it was
+        # tested/rejected, so it is APPROACHING, not confirmation
         rows = (
             _row(200.0, call_oi=400, put_oi=1_800, put_d=100.0, put_vol=1_000),
             _row(400.0, call_oi=1_000, put_oi=100),
         )
         by = {c.strike: c for c in classify_levels(
             _inp(rows=rows, spot=250.0, spot_change=-10.0))}
-        assert by[200.0].state is LevelState.CONFIRMED_INTERACTION
+        assert by[200.0].kind is LevelKind.SUPPORT
+        assert by[200.0].state is LevelState.APPROACHING
+        assert by[200.0].state is not LevelState.CONFIRMED_INTERACTION
+
+    def test_approaching_resistance_is_not_confirmed(self):
+        # price at 150 rising toward resistance at 200 (approach from below)
+        rows = (
+            _row(200.0, call_oi=1_800, put_oi=400, call_d=100.0, call_vol=1_000),
+            _row(400.0, call_oi=100, put_oi=1_000),
+        )
+        by = {c.strike: c for c in classify_levels(
+            _inp(rows=rows, spot=150.0, spot_change=10.0))}
+        assert by[200.0].kind is LevelKind.RESISTANCE
+        assert by[200.0].state is LevelState.APPROACHING
+        assert by[200.0].state is not LevelState.CONFIRMED_INTERACTION
+
+    def test_approach_from_wrong_side_is_no_interaction(self):
+        # support at 200 approached from BELOW (price rising up through a
+        # broken level): the load-bearing side is above, so this is neither
+        # approach nor confirmation — only the ΔOI dynamics stand
+        rows = (
+            _row(200.0, call_oi=400, put_oi=1_800, put_d=100.0),
+            _row(400.0, call_oi=1_000, put_oi=100),
+        )
+        by = {c.strike: c for c in classify_levels(
+            _inp(rows=rows, spot=180.0, spot_change=10.0))}
+        assert by[200.0].kind is LevelKind.SUPPORT
+        assert by[200.0].state is LevelState.STRENGTHENING
+        assert by[200.0].state not in (LevelState.CONFIRMED_INTERACTION,
+                                       LevelState.APPROACHING,
+                                       LevelState.CONFLICTED_INTERACTION)
+
+    def test_no_confirmation_ever_fabricated(self):
+        # no Day-21 input can emit CONFIRMED_INTERACTION: no historical
+        # touch/rejection evidence interface exists, so confirmation is never
+        # fabricated — an approach yields APPROACHING at most
+        rows = (
+            _row(200.0, call_oi=400, put_oi=1_800, put_d=100.0, put_vol=1_000),
+            _row(400.0, call_oi=1_000, put_oi=100),
+        )
+        for inp in (
+            _inp(rows=rows, spot=250.0, spot_change=-10.0),   # approaching
+            _inp(rows=rows, spot=200.0, spot_change=-10.0),   # exact touch, moving
+            _inp(rows=rows, spot=250.0, spot_change=None),    # no price context
+            _inp(rows=rows, spot=180.0, spot_change=10.0),    # wrong-side move
+        ):
+            for c in classify_levels(inp):
+                assert c.state is not LevelState.CONFIRMED_INTERACTION
+
+    def test_approaching_does_not_inflate_strength(self):
+        # support 200: put_share .6, |put_d| share .6, put_vol share .5
+        rows = (
+            _row(200.0, call_oi=100, put_oi=1_200, put_d=300.0, put_vol=500.0),
+            _row(400.0, call_oi=120, put_oi=2_000, put_d=500.0, put_vol=1_000.0),
+        )
+        approaching = {c.strike: c for c in classify_levels(
+            _inp(rows=rows, spot=250.0, spot_change=-10.0))}
+        no_price = {c.strike: c for c in classify_levels(
+            _inp(rows=rows, spot=250.0, spot_change=None))}
+        # approach is NOT confirmation: it adds nothing to the strength mean
+        assert approaching[200.0].state is LevelState.APPROACHING
+        assert no_price[200.0].state is LevelState.STRENGTHENING
+        assert approaching[200.0].strength == pytest.approx(
+            no_price[200.0].strength, rel=1e-9)
+        assert approaching[200.0].strength == pytest.approx(1.7 / 3.0, rel=1e-9)
 
     def test_conflicted_interaction_support_break_below(self):
         # support at 300 but price (250) is BELOW it and still falling
@@ -406,9 +482,10 @@ class TestMissingData:
         by = {c.strike: c for c in classify_levels(
             _inp(rows=rows, spot=250.0, spot_change=None))}
         assert by[200.0].state is LevelState.STRENGTHENING
-        # missing interaction is never confirmed/conflicted
+        # missing price context is never an interaction (approach/conflict)
         assert by[200.0].state not in (
-            LevelState.CONFIRMED_INTERACTION, LevelState.CONFLICTED_INTERACTION)
+            LevelState.CONFIRMED_INTERACTION, LevelState.CONFLICTED_INTERACTION,
+            LevelState.APPROACHING)
 
     def test_missing_price_lowers_confidence_not_strength(self):
         rows = (

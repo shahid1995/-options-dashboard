@@ -56,8 +56,10 @@ reports static/insufficient states when dynamic confirmation is absent.
    `None` when a component is missing.
 4. **Classification layer** — deterministic per-strike rule table →
    `LevelKind` (`SUPPORT | RESISTANCE | UNCLASSIFIED`) and `LevelState`
-   (`STATIC | STRENGTHENING | WEAKENING | CONFIRMED_INTERACTION |
-   CONFLICTED_INTERACTION | MIXED_EVIDENCE | INSUFFICIENT_EVIDENCE`).
+   (`STATIC | STRENGTHENING | WEAKENING | APPROACHING |
+   CONFLICTED_INTERACTION | MIXED_EVIDENCE | INSUFFICIENT_EVIDENCE`;
+   `CONFIRMED_INTERACTION` remains only as a reserved vocabulary member —
+   current inputs never produce it, see interaction semantics below).
 5. **Interpretation layer** — `evaluate_levels(inp) -> tuple[IntelligenceResult, ...]`
    (one per classified level cluster; Day-19 envelope; **no direction claim** —
    a level is positional, not directional, so `direction=NEUTRAL`; level
@@ -82,17 +84,22 @@ Thresholds (module constants): `CONCENTRATION_THRESHOLD = 0.5`,
   standing asymmetry; explicitly no dynamic confirmation — documented
   limitation, never fabricated).
 
-**Price interaction** (deterministic, single-snapshot; no historical touches):
-with `d = strike − spot`, `approach` when `sign(spot_change) == sign(d)` and
-`spot_change != 0`. For a SUPPORT strike, `CONFLICTED_INTERACTION` when price
-is below the strike and still falling (`spot < strike`, `spot_change < 0`);
-for RESISTANCE when price is above the strike and still rising
-(`spot > strike`, `spot_change > 0`). Otherwise `NO_INTERACTION`.
-Interaction is only *confirmation evidence* when corroborated; price reaction
-history is never fabricated.
+**Price interaction** (deterministic, single-snapshot; no historical touches).
+An *approach* means price moving TOWARD the level from its load-bearing side:
+for a SUPPORT strike, `spot > strike` and `spot_change < 0` (falling into
+support from above); for a RESISTANCE strike, `spot < strike` and
+`spot_change > 0` (rising into resistance from below). An approach proves
+movement only — never that the level was tested, respected, rejected or
+confirmed — so it maps to `APPROACHING` and **never** to confirmation.
+`CONFLICTED_INTERACTION` requires genuine breakout/breakdown evidence: for a
+SUPPORT strike price below the strike and still falling
+(`spot < strike`, `spot_change < 0`); for RESISTANCE price above the strike
+and still rising (`spot > strike`, `spot_change > 0`). Missing price context,
+wrong-side moves (e.g. rising up through a support from below) and exact-touch
+prices are `NO_INTERACTION`.
 
 **Level state priority** (documented): `CONFLICTED_INTERACTION` >
-`CONFIRMED_INTERACTION` > `STRENGTHENING` > `WEAKENING` > `STATIC` >
+`APPROACHING` > `STRENGTHENING` > `WEAKENING` > `STATIC` >
 `INSUFFICIENT_EVIDENCE` (strengthening/weakening measured on the classifying
 side's ΔOI; MIXED_EVIDENCE replaces the kind when both sides classify).
 
@@ -101,11 +108,12 @@ side's ΔOI; MIXED_EVIDENCE replaces the kind when both sides classify).
 `level_strength = clamp(mean(components), 0, 1)` where components are the
 **present** normalized shares of the classifying side — side share,
 `|side ΔOI| share` (strengthening sign kept positive), side volume share —
-plus the interaction component (`1.0` on CONFIRMED_INTERACTION,
-`0.0` on CONFLICTED_INTERACTION, **excluded** when there is no price
-interaction: missing component ≠ zero). Documented equal-weight mean; no
-magical 0–100 scale; strength is the deterministic magnitude of the level
-evidence.
+plus the interaction component (`0.0` on CONFLICTED_INTERACTION — treated as
+a documented observed component: the level was demonstrably broken through;
+**excluded** for `NO_INTERACTION` and for `APPROACHING`: approach is not
+confirmation and missing interaction is not zero). Documented equal-weight
+mean; no magical 0–100 scale; strength is the deterministic magnitude of the
+level evidence.
 
 ## Confidence (separate from strength and quality)
 
@@ -146,7 +154,7 @@ tests (the Day-14 glob covers only `app/quant`).
 
 Independent golden fixtures (hand arithmetic). Coverage (30 areas): highest-OI-
 alone guard, PE-concentration→support, CE-concentration→resistance,
-strengthening/weakening ΔOI, volume evidence, price confirmation/conflict,
+strengthening/weakening ΔOI, volume evidence, price approach/conflict,
 balanced CE/PE, multiple candidates, nearby clustering + boundary conditions,
 missing OI/ΔOI/volume/price, one-sided chains, insufficient quality, missing
 provenance, provenance/quality preservation, determinism, finite values,

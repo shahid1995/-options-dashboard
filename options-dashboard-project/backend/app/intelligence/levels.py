@@ -18,12 +18,22 @@ Core principle
 **A high-OI strike is a measured concentration fact, NOT automatically
 support or resistance.**  Static concentration alone never classifies: a
 level requires significant side concentration AND at least one corroborating
-component (strengthening/active ΔOI, volume activity, price interaction or
+component (strengthening/active ΔOI, volume activity, price approach or
 side asymmetry).  Corroboration by standing asymmetry alone yields a
 ``STATIC`` level — explicitly no dynamic confirmation (historical price
 reactions are never fabricated: no canonical historical-touch interface
 exists, and gamma-wall level evidence is deferred because no canonical
 gamma-wall interface exists — Day-17 explicitly excluded gamma walls).
+
+Price interaction semantics
+---------------------------
+Price moving TOWARD a level is a weak interaction (``APPROACHING``): it
+proves movement, not that the level was tested, respected, rejected or
+confirmed.  ``CONFIRMED_INTERACTION`` is therefore **reserved** for a future
+explicit historical-touch/rejection evidence interface and is never produced
+by current Day-21 inputs.  A level the price demonstrably moved THROUGH
+(support breakdown below / resistance breakout above) is
+``CONFLICTED_INTERACTION``.  Missing price context is never an interaction.
 
 Rules
 -----
@@ -35,7 +45,9 @@ Rules
 3. Levels are **positional, not directional**: interpretation results always
    carry ``direction=NEUTRAL``.  ``level_strength != confidence != quality``.
    Strength is the equal mean of PRESENT normalized components (missing
-   component != 0, no hidden weights); confidence is a documented
+   component != 0, no hidden weights); ``APPROACHING`` contributes nothing
+   (approach is not confirmation); ``CONFLICTED`` contributes a documented
+   0.0 (an observed, demonstrably-broken level).  Confidence is a documented
    completeness table.
 4. The exact supplied Day-12 :class:`QualityResult` and Day-9
    :class:`Provenance` are preserved verbatim; quality is never recomputed.
@@ -114,12 +126,17 @@ class LevelState(str, Enum):
 
     ``STATIC`` — concentration (+ standing asymmetry) only: the data supports
     a measured level but no dynamic confirmation exists (never fabricated).
-    ``MIXED_EVIDENCE`` — balanced CE and PE evidence at the same strike.
+    ``APPROACHING`` — price moving toward the level (weak interaction; never
+    confirmation).  ``CONFIRMED_INTERACTION`` is **reserved** for a future
+    explicit historical-touch/rejection evidence interface; current Day-21
+    inputs never produce it.  ``MIXED_EVIDENCE`` — balanced CE and PE
+    evidence at the same strike.
     """
 
     STATIC = "STATIC"
     STRENGTHENING = "STRENGTHENING"
     WEAKENING = "WEAKENING"
+    APPROACHING = "APPROACHING"
     CONFIRMED_INTERACTION = "CONFIRMED_INTERACTION"
     CONFLICTED_INTERACTION = "CONFLICTED_INTERACTION"
     MIXED_EVIDENCE = "MIXED_EVIDENCE"
@@ -127,10 +144,14 @@ class LevelState(str, Enum):
 
 
 class _Interaction(str, Enum):
-    """Internal price-interaction classification for one strike."""
+    """Internal price-interaction classification for one strike.
+
+    ``APPROACHING`` — price moving toward the level (weak; never confirms).
+    ``CONFLICTED`` — price demonstrably through the level (breakdown/out).
+    """
 
     NONE = "NONE"
-    CONFIRMED = "CONFIRMED"
+    APPROACHING = "APPROACHING"
     CONFLICTED = "CONFLICTED"
 
 
@@ -274,14 +295,23 @@ class LevelClassification:
     strength: float | None = None
 
 
-def _approaching(strike: float, spot, spot_change) -> bool:
-    """Price converging on the strike (any side)."""
+def _approaching_for_kind(kind: LevelKind, strike: float, spot,
+                          spot_change) -> bool:
+    """Kind-aware approach: price moving TOWARD the level from its
+    load-bearing side — a support approached from above (falling) or a
+    resistance approached from below (rising).  An approach is a weak
+    interaction only: it proves movement, never that the level was tested or
+    rejected.  Moves away from the level, wrong-side moves, exact-touch
+    prices and missing price context are not approaches."""
     if spot is None or spot_change is None or spot_change == 0.0:
         return False
-    if spot == 0.0 or strike == spot:
+    if spot == strike:
         return False
-    d = strike - spot
-    return (spot_change > 0.0) == (d > 0.0)
+    if kind is LevelKind.SUPPORT:
+        return spot > strike and spot_change < 0.0
+    if kind is LevelKind.RESISTANCE:
+        return spot < strike and spot_change > 0.0
+    return False
 
 
 def _conflict_for_kind(kind: LevelKind, strike: float, spot, spot_change) -> bool:
@@ -300,8 +330,8 @@ def _conflict_for_kind(kind: LevelKind, strike: float, spot, spot_change) -> boo
 def _interaction(kind: LevelKind, strike: float, spot, spot_change) -> _Interaction:
     if _conflict_for_kind(kind, strike, spot, spot_change):
         return _Interaction.CONFLICTED
-    if _approaching(strike, spot, spot_change):
-        return _Interaction.CONFIRMED
+    if _approaching_for_kind(kind, strike, spot, spot_change):
+        return _Interaction.APPROACHING
     return _Interaction.NONE
 
 
@@ -317,7 +347,10 @@ def _classify_strike(row: StrikePositioning, ctx: ChainContext,
     call_vol_share = _share(row.call_volume, ctx.max_call_volume)
     put_vol_share = _share(row.put_volume, ctx.max_put_volume)
 
-    approaching = _approaching(row.strike, spot, spot_change)
+    support_approach = _approaching_for_kind(LevelKind.SUPPORT, row.strike,
+                                              spot, spot_change)
+    resistance_approach = _approaching_for_kind(LevelKind.RESISTANCE,
+                                                 row.strike, spot, spot_change)
 
     def side_dynamic(delta, delta_share, activity_share):
         """STRENGTHENING / WEAKENING / None for the classifying side."""
@@ -336,14 +369,14 @@ def _classify_strike(row: StrikePositioning, ctx: ChainContext,
     call_corroborated = (
         call_dynamic is not None
         or (call_vol_share is not None and call_vol_share >= ACTIVITY_THRESHOLD)
-        or approaching
+        or resistance_approach
         or (row.call_oi is not None and row.put_oi is not None
             and row.call_oi > row.put_oi)  # call-heavy standing asymmetry
     )
     put_corroborated = (
         put_dynamic is not None
         or (put_vol_share is not None and put_vol_share >= ACTIVITY_THRESHOLD)
-        or approaching
+        or support_approach
         or (row.put_oi is not None and row.call_oi is not None
             and row.put_oi > row.call_oi)  # put-heavy standing asymmetry
     )
@@ -380,12 +413,13 @@ def _classify_strike(row: StrikePositioning, ctx: ChainContext,
 
 
 def _pick_state(interaction: _Interaction, dynamic: LevelState | None) -> LevelState:
-    """Documented state priority: conflict > confirm > strengthen > weaken >
-    static."""
+    """Documented state priority: conflict > approaching > ΔOI dynamic >
+    static.  ``CONFIRMED_INTERACTION`` is reserved for future explicit
+    historical-touch evidence and is never produced by current inputs."""
     if interaction is _Interaction.CONFLICTED:
         return LevelState.CONFLICTED_INTERACTION
-    if interaction is _Interaction.CONFIRMED:
-        return LevelState.CONFIRMED_INTERACTION
+    if interaction is _Interaction.APPROACHING:
+        return LevelState.APPROACHING
     if dynamic is not None:
         return dynamic
     return LevelState.STATIC
@@ -393,18 +427,18 @@ def _pick_state(interaction: _Interaction, dynamic: LevelState | None) -> LevelS
 
 def _strength(components) -> float | None:
     """Bounded equal-mean of PRESENT components (missing != 0).  Interaction
-    contributes 1.0 on confirmation, 0.0 on conflict, and is excluded when
-    there is no price interaction."""
+    contributes 0.0 only on conflict — treated as a documented observed
+    component (the level was demonstrably broken through).  NONE and
+    APPROACHING are excluded: approach is a weak interaction, never
+    confirmation, so it adds nothing; missing interaction is not zero."""
     present = []
     for comp in components:
         if comp is None:
             continue
         if isinstance(comp, _Interaction):
-            if comp is _Interaction.CONFIRMED:
-                present.append(1.0)
-            elif comp is _Interaction.CONFLICTED:
+            if comp is _Interaction.CONFLICTED:
                 present.append(0.0)
-            # NONE: excluded — no interaction evidence, not a zero
+            # NONE / APPROACHING: excluded — see docstring
             continue
         present.append(float(comp))
     if not present:
