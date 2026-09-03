@@ -230,4 +230,30 @@
 | Schema migrations | **NONE** — no new migration required |
 | Security | No secrets, no credentials, no leakage |
 | Production isolation | No Railway/Vercel/production changes |
-| Day 8 gate | **PASS** — Infrastructure Phase Gate satisfied | |
+| Day 8 gate | **PASS** — Infrastructure Phase Gate satisfied |
+
+---
+
+## Day 9 — Canonical Market-Data Contracts
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish canonical market-data domain contracts as stable boundary between broker adapters and downstream subsystems |
+| Contract module | `app/market_data/contracts.py` — 8 dataclasses + 4 enums |
+| Contracts | `NormalizedInstrument`, `MarketObservation`, `PriceQuote`, `OptionChainRow`, `OptionChainObservation`, `GreeksObservation`, `Provenance` |
+| Enums | `Side` (CALL/PUT), `DataMode` (6 modes), `QualityState` (4 levels), `ContractVersion` (semver) |
+| Key design rules | Frozen dataclasses; dual timestamps (market vs received); OI in contracts not lots; broker vs model Greek separation via source; IV as canonical decimal; no broker payload leakage; contract versioning |
+| Tests | `tests/test_day9_market_data_contracts.py` — 42 tests, 0.30s |
+| Regression | 183 passed, 0 failed across Day 9 + broker domain tests |
+| Broader regression | 155 passed, 1 skipped (Days 4–8 + security + migration) |
+| PostgreSQL 16 | CI run `33722821554` — success — `postgres:16` |
+| Status Gate | CI run `33722821574` — success — SHA `fe33215` |
+| Security | No secrets, no credentials, no broker tokens in contracts |
+| Diff hygiene | `git diff --check` clean |
+| Production isolation | No Railway/Vercel/production changes |
+| Schema migrations | **NONE** — contracts are pure domain dataclasses, no DB change |
+| Production code changes | New `app/market_data/` package only — no modification to existing code |
+| Compatibility | No parallel models; existing `InstrumentIdentity` in `brokers.domain.models` remains broker-layer identity; `NormalizedInstrument` is market-data layer equivalent |
+| Day 9 gate | **PASS** — Canonical Market-Data Contract Gate satisfied |
