@@ -580,3 +580,36 @@
 | Scope | Scenario/grid/portfolio foundation only: NO intelligence/opportunity/strategy/execution/backtest/ML/AI, NO Gamma Flip/Walls/ΔGEX, no Redis/Kafka/microservices, no DB tables/migrations, no frontend changes (`scenario.js`/`payoff.js` untouched), no legacy engine modification |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 18 gate | **PASS** — Scenario & Time Analysis / Portfolio Sensitivity Gate satisfied |
+
+---
+
+## Day 19 — Deterministic Intelligence Contract Foundation
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish the canonical, broker-neutral **Intelligence Contract** — the deterministic interface between the Quantitative Core (Days 14-18) and every future Intelligence Engine — implementing the contract only, with zero engines |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-intelligence-contract.md` |
+| Implementation SHA | `909a40e` |
+| Package | New `app/intelligence/` (contracts only): `contracts.py` (frozen dataclasses + vocabulary enums) — verified no existing signal/intelligence code existed in the backend before this day |
+| Contract surface | `IntelligenceResult` (calculation_id, status, direction, signal_strength, confidence, time_horizon, observation, evidence, regime, quality, provenance, reference_timestamp, contract/model/calculation versions, issues) + `IntelligenceEvidence`, `IntelligenceObservation`, `MarketRegime`, `IntelligenceIssue` |
+| Vocabulary | `IntelligenceStatus` (SUCCESS/PARTIAL/UNAVAILABLE/INVALID), `IntelligenceDirection` (BULLISH/BEARISH/NEUTRAL/MIXED/UNKNOWN — MIXED/UNKNOWN never collapse into NEUTRAL), `TimeHorizon` (INTRADAY/SHORT_TERM/SWING/EXPIRY/UNKNOWN), `EvidenceType`, `RegimeLabel` (type-only; Day 23 owns detection and may extend additively) |
+| Separation | signal_strength (0..1, how strong the signal is) ≠ confidence (0..1, how valid the interpretation is) ≠ data quality (the whole Day-12 `QualityResult` envelope: score + state + structured issues, preserved — never recomputed, never a float) — locked by dedicated tests incl. high-quality/low-confidence and degraded-quality/high-confidence cases |
+| No fabrication | SUCCESS requires non-empty evidence with finite values, observation, direction, strength, confidence, horizon, provenance and an aware reference timestamp, zero issues; `None`-valued evidence can never underpin SUCCESS; missing evidence/quality stay explicit via structured codes (MISSING_EVIDENCE, MISSING_QUALITY, …) |
+| Status rules | PARTIAL ⇒ evidence + issues; UNAVAILABLE/INVALID ⇒ no interpretation fields + issues preserving the reason; structural directional rule: BULLISH/BEARISH/MIXED require positive strength AND positive confidence (no market-domain inference) |
+| Reuse | Day-9 `Provenance` (preserved verbatim — `internal` placeholder banned), Day-12 `QualityResult`/`QualityIssue` types (imported for preservation only — `MarketDataQualityEngine` never referenced), Day-14 frozen-dataclass + structured-issue + versioning conventions |
+| Determinism | Frozen everywhere (mutation raises `FrozenInstanceError`), no dict fields, no wall clock/random/network/DB/broker imports (module-level AST tests — the Day-14 glob covers only `app/quant/*.py`), timestamps all explicit and tz-aware |
+| Serialization | `to_dict()` deterministic JSON-safe (enums → value, datetimes → ISO-8601, tuples → lists, None kept); `from_dict()` rebuilds and re-runs every structural rule; round-trips tested for SUCCESS, PARTIAL-with-quality-issues, UNAVAILABLE and regime-carrying results; stable `json.dumps(sort_keys=True)` |
+| Tests | `tests/test_day19_intelligence_contract.py` — 87 tests (construction, validation incl. invalid enums/ranges/naive timestamps/missing evidence, status consistency, directional semantics, semantic separation, missing-data behavior, immutability, provenance/version propagation, determinism/serialization, purity AST) |
+| RED evidence | RED confirmed: module absent → import collection error before implementation; GREEN 87/87 (one generic `from_dict` tolerance fix for omitted optional fields — required keys still enforced) |
+| Focused regression | 820 passed (87 Day 19 + 733 Days 9–18); Days 14–19 re-run: 584/584; market-data group (Days 9–13): 236/236 |
+| Security/session regression | 129 passed, 2 failed = **pre-existing** (same two token/OAuth tests reproduced at clean baselines `79d4551`/`a21b195`/`9bf156a` in prior independent verifications; Day-19 diff adds only a pure contracts package, touches no auth code) |
+| Days 4–7 + Alembic/migration | 120 passed, 2 skipped |
+| Static checks | `py_compile` OK on all changed files; `git diff --check` clean; no unused imports; module AST guard green (no os/sys/random/sqlalchemy/requests/httpx/urllib/socket/subprocess/pathlib, no now/utcnow/today/time/sleep calls, no broker/services/routers imports, no quality-engine instantiation); secret scan clean (0 hits) |
+| PostgreSQL 16 | CI run `33743682489` — success (`postgres:16`) on `909a40e` |
+| Status Gate | CI run `33743682357` — **success** on `909a40e` |
+| Schema migrations | **NONE** — pure application-layer contracts; no DB/enum changes to existing modules |
+| Scope | Contract foundation only: NO positioning/flow/S-R/institutional/regime-engine/event/expiry/trap detection, NO synthesis/conflict resolution, NO opportunity/strategy/risk/execution changes, no Redis/Kafka/workers, no AI/ML/backtesting, no frontend changes, no legacy modification |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 19 gate | **PASS** — Deterministic Intelligence Contract Foundation Gate satisfied |
