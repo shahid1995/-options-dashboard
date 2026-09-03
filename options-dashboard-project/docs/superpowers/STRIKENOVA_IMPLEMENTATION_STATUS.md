@@ -471,3 +471,43 @@
 | Scope | Greeks only: NO IV solver, NO pricing engine, NO GEX/gamma walls/flip, NO scenario/portfolio, NO intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no DB changes, no frontend changes |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 15 gate | **PASS** — Greeks Engine Gate satisfied |
+
+---
+
+## Day 16 — IV & Pricing Engine
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Implement the second and third quantitative engines on the Day-14 boundary: the **deterministic, broker-neutral BS-Merton Pricing Engine** and the **Implied Volatility solver** (bounded Brent), both returning results through the `QuantResult` envelope and sharing the Day-15 model family/conventions |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-iv-pricing-engine.md` |
+| Implementation SHA | `c3ea0f0` |
+| Dependency decision | **No new dependency** — backend has zero third-party numerical libraries (verified); pure-stdlib deterministic Brent solver (the repository's historical design docs specify Brent root finding) |
+| Reuse decision | Sound math from the verified legacy `bs_price` (Phase 7.19B) re-implemented pure in `app/quant/pricing.py`; legacy module untouched. Day-15 model identity `BLACK_SCHOLES_MERTON_EUROPEAN` **imported from `app.quant.greeks`** so pricing/IV/Greeks share ONE canonical model family. Frontend `pricing.js` kept as presentation/scenario compatibility layer (documented; no frontend migration) |
+| Model identity | Pricing: `pricing.black_scholes_european` v1.0.0; IV: `implied_volatility.black_scholes_european` v1.0.0 — same `model = BLACK_SCHOLES_MERTON_EUROPEAN` as Day 15 |
+| Conventions | ACT/365 `T` explicit only (no wall clock); price **per-unit**; IV returned as **decimal volatility fraction** (0.1824 = 18.24% — never percentage points, tested); same erf-based CDF convention as Day 15 |
+| Pricing degenerates | `T == 0` → intrinsic value (never a normal-CDF evaluation at T=0); `σ == 0` → exact σ→0 forward-value convention `max(S·e^(−qT) − K·e^(−rT), 0)` / put mirror — no division by zero, tested |
+| IV solver | Brent on `price(σ) − market` over documented bracket **[0.0, 10.0]**, monotone ⇒ exhaustive deterministic taxonomy: EXPIRED / BELOW_LOWER_BOUND / ABOVE_THEORETICAL_MAX / NO_BRACKET / CONVERGENCE_FAILED; explicit `price_tolerance` 1e-9×max(1,price), `sigma_tolerance` 1e-10×max(1,σ), `max_iterations` 100; market at the forward-intrinsic bound ⇒ σ=0.0 (exact model inverse, never guessed) |
+| Issue taxonomy | `CalculationIssueCode` extended **additively** with EXPIRED/BELOW_LOWER_BOUND/ABOVE_THEORETICAL_MAX/NO_BRACKET/CONVERGENCE_FAILED; status mapping: EXPIRED→UNAVAILABLE, bound violations→INVALID_INPUT, NO_BRACKET/CONVERGENCE_FAILED→FAILED |
+| Golden prices | 20 independent closed-form 12-decimal fixtures (ATM/ITM/OTM × call/put, 7-day/1y/2y, rates, dividends, low/high vol, zero-rate parity pair) — cross-checked against two independent implementations (scratch evaluation + verified legacy `bs_price`, agreement < 1e-12) + textbook ATM anchor ≈ 10.4506 |
+| Mathematical validation | Put-call parity across 4×3×4 spot/T/σ/(r,q) grid; volatility/spot monotonicity; finite-difference ∂Price/∂S, ∂²Price/∂S², ∂Price/∂σ, ∂Price/∂r, −∂Price/∂T vs the Day-15 Greeks engine (authoritative derivative reference) |
+| IV round trips | All 20 golden fixtures: known σ → price → solver → recovered σ (abs 1e-6); deep ITM/OTM, near-bound, zero-vol, decimal-fraction convention tested |
+| Quality propagation | Day-12 quality consumed, never recomputed: EXCELLENT/GOOD/DEGRADED → calculated + preserved; INSUFFICIENT → UNAVAILABLE before either engine runs; missing provenance blocked (both engines, tested) |
+| Provenance | Day-9 `Provenance`, reference timestamp, model + calculation versions preserved on every successful result; model IV never overwrites `GreeksObservation(source="BROKER")` |
+| Boundary registration | Both engines registered/routed through `QuantitativeEngineBoundary`; all three engines (Greeks + Pricing + IV) coexist on one boundary (tested) |
+| Security | No credentials/tokens/broker payloads in engines or results (tested); no external I/O/DB/wall clock (Day-14 AST guards auto-extend over the new modules; module-level AST tests added); no new dependency |
+| Tests | `tests/test_day16_iv_pricing_engine.py` — 242 tests (goldens, degenerates, validation, parity, monotonicity, Greeks-FD consistency, round trips, bounds, taxonomy, determinism, quality, provenance/versioning, boundary routing, stability, security) |
+| RED evidence | RED confirmed: modules absent → import collection error before implementation; GREEN 242/242 |
+| Focused regression | 596 passed (242 Day 16 + 354 Days 9–15); Days 14–16 re-run: 360/360 |
+| Legacy quant regression | 305 passed, 7 skipped (`historical_greeks`, phase719a/723b greeks, IV history, valuation, GEX final/history/historical) |
+| Security/session regression | 153 passed, 2 failed = **pre-existing** (`test_token_persistence` dot-in-state + `test_phase10_2a_identity` 401 expectation — reproduced identically at the clean baseline `79d4551` in a fresh worktree on Day 16; same two failures documented Days 14–15; unrelated to quant) |
+| GEX reliability | `test_gex_reliability.py` standalone: **54 passed** (the historical group-run fixture-order failures remain documented pre-existing from Days 13–15) |
+| Days 4–7 + Alembic/migration | 103 passed, 1 skipped |
+| Static checks | `py_compile` OK on changed files; `git diff --check` clean; AST wall-clock/IO/quality-recompute scan clean on both new modules; secret scan clean (only intentional negative assertions in tests) |
+| PostgreSQL 16 | CI run `33739288814` — **success** (`postgres:16`) on `c3ea0f0` |
+| Status Gate | CI run `33739288815` — **success** on `c3ea0f0` |
+| Schema migrations | **NONE** — pure application-layer quant code (contracts.py enum extension is additive, no DB change) |
+| Scope | Pricing + IV only: NO GEX/gamma walls/flip, NO scenario/portfolio, NO intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no DB changes, no frontend changes |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 16 gate | **PASS** — IV & Pricing Engine Gate satisfied |
