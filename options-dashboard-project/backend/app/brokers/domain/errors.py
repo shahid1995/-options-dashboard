@@ -46,6 +46,11 @@ class BrokerErrorCode(str, Enum):
     # option chain row without a strike). Distinct from UPSTREAM_ERROR,
     # which means the broker/API call itself failed.
     INVALID_MARKET_DATA = "INVALID_MARKET_DATA"
+    # A market-data request had no usable source: no session-bound adapter
+    # was supplied, the source provider produced none, or no registered
+    # source can satisfy the request. Distinct from BROKER_UNKNOWN (the
+    # broker id itself is unrecognized).
+    SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
 
     # Codes that mean the caller's broker session is unusable and should be
     # re-authenticated. Routers use this to clear the stored session token.
