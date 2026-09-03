@@ -399,3 +399,37 @@
 | Scope | No Day-12 quality duplication, no Greeks/IV/GEX/intelligence, no streaming gateway for other brokers, no historical ingestion, no Redis/Kafka/microservices, no DB persistence for stream state, no frontend changes |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 13 gate | **PASS** — Streaming Lifecycle Gate satisfied |
+
+---
+
+## Day 14 — Quantitative Engine Boundary
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish the broker-neutral, deterministic Quantitative Engine Boundary — the shared backend quant domain that becomes authoritative for platform decisions — WITHOUT implementing any engine (Days 15–18) |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-quantitative-engine-boundary.md` |
+| Implementation SHA | `a0ddc91` |
+| Quant package | `app/quant/` — `contracts.py` + `boundary.py` (NEW; no quant package existed before) |
+| Contracts | Frozen: `CalculationContext` (required aware `reference_timestamp` = the ONLY notion of now; `risk_free_rate`, `dividend_yield`, `NumericalTolerance`, model/calculation versions), `OptionMarketData` (Day-9 `NormalizedInstrument` concrete option + spot/market_price/IV + timestamps + Day-9 `Provenance`/`QualityState`), `QuantResult` (output/values/status/issues/quality/provenance/versions kept SEPARATE — never a single confidence score), `QuantIssue`/`CalculationIssueCode` (8 codes), `CalculationStatus` (SUCCESS/UNAVAILABLE/INVALID_INPUT/FAILED) |
+| Precision policy | `NumericalTolerance` (rel 1e-9 / abs 1e-12, validated) + `nearly_equal`; ACT/365 `time_to_expiry` input-normalization convention (the only numeric helper — NOT a model) |
+| Boundary | `QuantitativeEngineBoundary` registry-lite (register/run/available, no duplicates); guards run BEFORE engines: missing provenance ⇒ UNAVAILABLE (`MISSING_PROVENANCE`, never fabricated “unknown”); INSUFFICIENT Day-12 quality ⇒ UNAVAILABLE (`INSUFFICIENT_QUALITY`); DEGRADED permitted and preserved; unregistered calculation ⇒ UNAVAILABLE (`NOT_IMPLEMENTED`); engine faults ⇒ FAILED (`INTERNAL_ERROR`, exception text never leaks); SUCCESS requires values |
+| Provenance | Day-9 `Provenance` preserved end-to-end; engine-dropped provenance/quality/versions repaired by the boundary (tested) |
+| Quality | Consumed from Day 12 — the boundary NEVER recomputes/scorres quality (AST-enforced: no `MarketDataQualityEngine` import path) |
+| Broker neutrality | `app/quant` imports only `app.market_data` + stdlib — zero broker modules/SDKs/payloads (AST-enforced tests) |
+| Determinism | No wall clock/env/DB/HTTP: AST tests ban `datetime.now/utcnow/today`, `time.time`, `os/sys/random/sqlalchemy/requests/httpx/urllib/fastapi` imports in `app/quant`; identical input+context ⇒ identical result (tested); time affects calculations only via `reference_timestamp` (tested) |
+| Model-vs-broker | Documented mapping: broker Greeks/IV arrive via Day-9 `GreeksObservation(source="BROKER")`; model outputs will be `source="MODEL"` with `calculation_id` + versions (Day 15+). No duplication in Day 14 |
+| Existing quant code | Classified (plan): frontend `lib/calculations/*.js` = frontend-only (kept); `historical_greeks.py` = DB-coupled legacy (candidate later migration); `live_gex.py` = reusable foundation (migrated Day 17). NONE touched in Day 14 |
+| Tests | `tests/test_day14_quant_boundary.py` — 67 tests (contracts/validation, determinism + AST bans, quality propagation, provenance, routing/guards, security, broker neutrality, golden fixtures) |
+| RED evidence | RED confirmed: module absent → collection error before implementation; GREEN 67/67 |
+| Focused regression | 303 passed (67 Day 14 + 236 Days 9–13) |
+| Quant regression | 317 passed, 7 skipped (live GEX, historical Greeks/IV/GEX, GEX quality/API, greeks design) |
+| Market-data regression | 304 passed, 3 failed = **pre-existing** `test_gex_reliability` group-run failures (proven identical at clean baseline in Day 13; file passes standalone 54/54) |
+| Security/session regression | 265 passed (full Day-13 group; standalone CORS failure proven pre-existing fixture-order/schema artifact at clean `df085a5`) |
+| Days 4–7 + Alembic/migration | 102 passed, 1 skipped |
+| Static checks | `py_compile` on all changed files — OK; `git diff --check` clean; secret scan clean |
+| Schema migrations | **NONE** — pure application-layer boundary, no DB change |
+| Scope | No Greeks/IV/BS/pricing/GEX/gamma/scenario/portfolio math, no intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no frontend changes, no DB changes |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 14 gate | **PASS** — Quantitative Engine Boundary Gate satisfied |
