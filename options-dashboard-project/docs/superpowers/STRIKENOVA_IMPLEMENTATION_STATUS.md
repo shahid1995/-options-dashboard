@@ -358,3 +358,44 @@
 | Scope | No Day 13 streaming lifecycle, no reconnect/resubscribe/sequence recovery, no stale-data monitor, no Greeks/IV/GEX/intelligence, no Redis, no microservices |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used |
 | Day 12 gate | **PASS** — Data Quality Gate satisfied |
+
+---
+
+## Day 13 — Streaming Lifecycle, Recovery & Stale-Data Hardening
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Build the source-neutral streaming lifecycle boundary: connect / disconnect / reconnect / bounded exponential backoff / resubscription / liveness / stale detection / sequence tracking / gap recovery / intentional shutdown / auth failure, emitting canonical Day-9 observations with provenance and lifecycle metadata consumable by the Day-12 quality layer |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-streaming-lifecycle.md` — reuse decision, state machine, failure semantics, out-of-scope list |
+| Implementation SHA | `cb5ab6f` |
+| Lifecycle manager | `app/market_data/streaming.py` — `StreamingLifecycleManager` (source-neutral), `StreamingSource` protocol, `StreamLifecycleState` (11 states incl. RECOVERY), `SequenceTracker`, `BackoffPolicy`, `StreamStatus`/`StreamQualityContext`, `LifecycleEvent` |
+| Reuse decision | **REUSE** — existing `UpstoxMarketFeed` (Phase 8C; official SDK transport + protobuf + tick state + token handling) adapted behind the protocol via thin `UpstoxStreamingSource` bridge (`app/brokers/adapters/upstox/streaming_source.py`); no competing streaming architecture, feed not rewritten |
+| Sequence continuity | **Unavailable from Upstox** — V3 feed messages carry no per-message sequence numbers (`supports_sequence=False`, documented; never invented). `SequenceTracker` exercises duplicate / out-of-order / gap / recovery semantics for sequence-capable sources with full tests |
+| Reconnect | Bounded exponential backoff (base × 2^attempt, capped at max, jitter ≤ 25% bound, deterministic with injected RNG); max-attempts exhaustion → ERROR; successful reconnect resets retry state |
+| Resubscription | Exact instrument set restored after every reconnect (tested across multiple reconnects) |
+| Stale data | Heartbeat liveness (injectable clock); no data > `stale_after_seconds` → STALE; fresh data clears stale; stale state never fabricates observations; `quality_context()` exposes stale/gap/recovery metadata to the Day-12 engine |
+| Sequence semantics | Monotonic accepted; duplicate → DUPLICATE event; out-of-order → OUT_OF_ORDER event; gap → RECOVERY state + `gap=True` (never reported healthy); contiguity restored → RECOVERED → HEALTHY; `mark_recovered()` after resubscription |
+| Intentional shutdown | `stop()` → STOPPED, cancels reconnect task, NEVER reconnects (tested) |
+| Auth failure | 401/unauthorized → AUTH_FAILED, no endless retry (tested, incl. during connect) |
+| Canonical boundary | Non-canonical observations (raw payloads, provenance-less quotes, non-BROKER_LIVE modes, missing received timestamps) refused with OBSERVATION_REFUSED event — never crash the stream; one consumer callback failure cannot kill the feed (tested) |
+| Upstox bridge | Tick → canonical `QuoteObservation` (LTP/OI/volume/bid/ask preserved; missing → None, no fabricated zeros; market ts from `ltt` epoch-ms vs distinct received ts; BROKER_LIVE; UPSTOX provenance; no token in repr/status; 401 → AUTH_REQUIRED) |
+| Error handling | Reuses existing `BrokerError`/`BrokerErrorCode` taxonomy (`INVALID_MARKET_DATA`, `AUTH_REQUIRED`, `RATE_LIMITED`, `NETWORK_ERROR`, `UPSTREAM_ERROR`, `SOURCE_UNAVAILABLE`) — **no new error class/code** |
+| Tests | `tests/test_day13_streaming_lifecycle.py` — 67 tests |
+| RED evidence | RED confirmed: module absent → 61 collection failures before implementation; GREEN 67/67 |
+| Focused regression | 236 passed (67 Day 13 + 61 Day 12 + 33 Day 11 + 33 Day 10 + 42 Day 9) |
+| Broker/Upstox regression | 264 passed, 4 failed = **pre-existing** (`test_capabilities_matrix_is_complete_and_session_aware` + 3 `test_gex_reliability` group-run failures — proven identical at clean baseline `bf3ea26` in fresh worktree; gex file passes standalone 54/54) |
+| Security/session regression | 265 passed (Day 3 + Phase 9 + BYOB + crypto + auth + identity + CORS + session separation) |
+| Market-data regression | 370 passed, 1 failed = **pre-existing** `test_gex_capture.py::test_post_snapshots_validates_input` (missing `user_sessions` table in test DB — proven identical at clean baseline `bf3ea26`) |
+| Days 4–7 + Alembic/migration | 102 passed, 1 skipped |
+| Static checks | `py_compile` on all 3 changed files — OK; unused-import REFACTOR pass |
+| Diff hygiene | `git diff --check` clean; Day-13 scope = exactly 4 files; secret scan clean (only intentional negative-test strings) |
+| Security | Manager holds no credentials; token never in lifecycle events/status/repr (tested); tenant sources never share state (tested); raw Upstox payloads refused at boundary; `StreamingSource` protocol is Upstox-free (source-neutral, only a docstring example) |
+| Day-12 integration | `StreamQualityContext` (state/live/stale/gap/sequence_state/reconnect_attempts) separate from authoritative `MarketDataQualityEngine.evaluate()` — quality remains the quality authority (tested) |
+| PostgreSQL 16 | CI run `33732949507` — `postgres:16` (backend push regression) |
+| Status Gate | CI run `33732949506` — success — SHA `cb5ab6f` |
+| Schema migrations | **NONE** — pure application-layer boundary, no DB change |
+| Scope | No Day-12 quality duplication, no Greeks/IV/GEX/intelligence, no streaming gateway for other brokers, no historical ingestion, no Redis/Kafka/microservices, no DB persistence for stream state, no frontend changes |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 13 gate | **PASS** — Streaming Lifecycle Gate satisfied |
