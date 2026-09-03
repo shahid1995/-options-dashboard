@@ -322,3 +322,39 @@
 | Scope | No Day 12 quality engine, no Day 13 streaming lifecycle, no Greeks/IV/GEX/intelligence, no Redis, no microservices |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used |
 | Day 11 gate | **PASS** — Market Data Gateway Gate satisfied |
+
+---
+
+## Day 12 — Data Quality Engine
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Implement the deterministic Data Quality Engine as the quality boundary between canonical market observations and downstream Quant/Intelligence |
+| Implementation SHA | `32ef2c4` |
+| Engine module | `app/market_data/quality.py` — `MarketDataQualityEngine` (pure, deterministic, no DB/Redis/workers) |
+| Architecture | `Gateway → Canonical Observation → Data Quality Engine → QualityResult → Downstream` |
+| Dimensions | freshness, completeness, validity, consistency, continuity, anomaly, provenance — each EVALUATED or explicitly NOT_EVALUATED (never fabricated); source reliability NOT_EVALUATED (no justified statistics — documented, not invented) |
+| Output contract | `QualityResult` — bounded int `quality_score` 0–100, `quality_state` (QualityState), `critical_failure`, structured `QualityIssue` list (dimension/code/severity/field/message), per-dimension results, evaluated_at/reference/observation times, observation type, contract version |
+| Issue taxonomy | 17 machine-readable `QualityIssueCode`s + `IssueSeverity` (CRITICAL/ERROR/WARNING) |
+| Score semantics | Weights: freshness .30, completeness .25, validity .20, provenance .15, consistency .05, anomaly .05, continuity .05 (evaluated dims only); `round(100·Σw·s/Σw)`; thresholds EXCELLENT ≥90, GOOD ≥75, DEGRADED ≥60; any CRITICAL → INSUFFICIENT; any ERROR prevents EXCELLENT |
+| Freshness | Explicit `reference_time` arithmetic only (never wall clock); market ts preferred, received fallback; future ts rejected (`FUTURE_TIMESTAMP`); stale > 300s → `STALE_OBSERVATION`; fresh ≤ 60s; missing ts → NOT_EVALUATED |
+| Provenance | Mandatory on quote/market observations — missing → CRITICAL; partial parts → per-part ERRORs; collection-mode coherence vs data_mode checked; chains use provenance-flattened fields |
+| Determinism | Same observation + same reference_time ⇒ identical frozen result (tested); `reference_time=None` → freshness NOT_EVALUATED, identical across calls (no hidden `now()`) |
+| Continuity | Only when a matching-instrument `previous` observation is supplied; relative jump > documented bound → `CONTINUITY_BREAK`; mismatched instrument → ValueError |
+| Downstream integration | No consumer migration required — boundary implemented + tested independently; GEX DB-range quality engine (`gex_data_quality.py`) untouched; master-plan GEX consumption of the shared contract deferred (different input contract — documented) |
+| Tests | `tests/test_day12_data_quality.py` — 61 tests |
+| Focused regression | 169 passed (61 Day 12 + 42 Day 9 + 33 Day 10 + 33 Day 11) |
+| Broker/Upstox regression | 350 passed, 1 failed = **pre-existing** `test_capabilities_matrix_is_complete_and_session_aware` (proven identical at clean baseline) |
+| Security/session regression | 276 passed |
+| Market-data regression | 251 passed, 12 skipped, 3 failed = **pre-existing** ordering/state-pollution (`test_gex_reliability.py` group run — proven identical at clean baseline `66569c9`; file passes standalone 54/54) |
+| Days 5–8 + Alembic + migration + GEX quality + Day 12 | 208 passed |
+| Static checks | `py_compile` on all changed files — OK |
+| Diff hygiene | `git diff --check` clean; no secrets/credentials in diff |
+| PostgreSQL 16 | CI run `33728381221` — success — `postgres:16` (backend push regression) |
+| Status Gate | CI run `33728381212` — success — SHA `32ef2c4` |
+| Schema migrations | **NONE** |
+| Scope | No Day 13 streaming lifecycle, no reconnect/resubscribe/sequence recovery, no stale-data monitor, no Greeks/IV/GEX/intelligence, no Redis, no microservices |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used |
+| Day 12 gate | **PASS** — Data Quality Gate satisfied |
