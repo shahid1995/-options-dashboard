@@ -433,3 +433,41 @@
 | Scope | No Greeks/IV/BS/pricing/GEX/gamma/scenario/portfolio math, no intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no frontend changes, no DB changes |
 | Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
 | Day 14 gate | **PASS** — Quantitative Engine Boundary Gate satisfied |
+
+---
+
+## Day 15 — Greeks Engine
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Implement the first real quantitative engine on the Day-14 boundary: the **deterministic, broker-neutral BS-Merton Greeks Engine** (delta/gamma/theta/vega/rho, call+put) returning results through the `QuantResult` envelope |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-greeks-engine.md` |
+| Implementation SHA | `5b94b97` |
+| Reuse decision | Mathematical core **reused** from the repository's existing sound deterministic BS-Merton implementation in `historical_greeks.py` (legacy DB-coupled service left untouched) — re-implemented pure/deterministic/broker-neutral in `app/quant/greeks.py`; frontend Greeks (`greeks.js` only scales chain data; no BS math) kept, no frontend migration |
+| Model identity | `model = BLACK_SCHOLES_MERTON_EUROPEAN` (v1), `calculation = GREEKS_V1`; results carry Day-9 `Provenance`, Day-12 `QualityState`, Day-14 `CalculationContext` + versions |
+| Conventions | ACT/365 `T` (Day-14 convention, explicit input only — no wall clock); theta **annualized** (time unit = 1 year; `-∂V/∂T`); vega **per 1.00 volatility unit** (1.0 = 100 vol points); rho per 1.00 rate unit; dividend yield `q` continuous; delta dimensionless |
+| Greeks implemented | Delta, Gamma, Theta, Vega, Rho — call + put; gamma/vega parity across sides (tested); `delta_call - delta_put = exp(-qT)` (tested); ITM/OTM/ATM/call/put/rates/dividends/vol regimes |
+| Expiry behavior | Explicit convention: inputs pre-normalized so `T` is always > 0 and bounded; exact `T=0`/non-finite inputs rejected at validation (never silently evaluated) — `INVALID_INPUT` with structured `QuantIssue`, no NaN/Inf fabrications |
+| Numerical stability | Edge cases (non-positive spot/strike/vol, non-finite inputs, extreme moneyness) validated before math; `T` floor at machine-epsilon ordering to avoid division blowups; no silent fallback values |
+| Golden fixtures | 12 representative contracts (ATM/ITM/OTM × call/put, short/long-dated, rates, dividends, high/low vol) with **independent** 12-decimal reference values — independently cross-checked against the classic Hull reference (ATM call: delta 0.6368, vega 37.524, theta −6.414, rho 53.23) |
+| Finite-difference validation | FD tests: delta↔price sensitivity, gamma↔delta sensitivity, vega↔vol sensitivity, rho↔rate sensitivity, theta↔time decay (validation-only, tolerances per numerical differentiation — not the production implementation) |
+| Quality propagation | Consumes Day-12 quality (never recomputes): EXCELLENT/GOOD → calculated; DEGRADED → calculated + preserved degraded in result; INSUFFICIENT on required inputs → calculation UNAVAILABLE (`INSUFFICIENT_QUALITY`), never fabricates |
+| Provenance | Every successful result retains Day-9 `Provenance`, `CalculationContext.reference_timestamp`, source/data mode, model + calculation versions; model Greeks are `source="MODEL"` — never overwrite Day-9 `GreeksObservation(source="BROKER")` |
+| Boundary registration | `GreeksEngine` registered in the Day-14 `QuantitativeEngineBoundary` (`greeks.calculate` route); guards run before math (provenance/quality); broker-neutral — `app/quant` imports only stdlib + `app.market_data` |
+| Security | No credentials/tokens/broker payloads anywhere in the engine or results (tested); no external I/O/DB/wall clock (AST-enforced, consistent with Day 14); exceptions carry no sensitive text |
+| Tests | `tests/test_day15_greeks_engine.py` — 51 tests (math per Greek, validation, expiry, parity, golden fixtures, FD checks, determinism, quality, provenance/versioning, boundary routing, security, broker neutrality) |
+| RED evidence | RED confirmed: module absent → import collection error before implementation; GREEN 51/51 |
+| Focused regression | 354 passed (51 Day 15 + 303 Days 9–14); Day15+Day14 re-run post-REFACTOR: 160/160; file re-run: 118/118 |
+| Quant regression | 317 passed, 7 skipped (legacy `historical_greeks` tests untouched and passing) |
+| Market-data regression | Same 3 documented pre-existing `test_gex_reliability` group-run failures (proven at clean baseline Days 13/14; file passes standalone 54/54) |
+| Security/session regression | 397 passed, 2 failed = **pre-existing** (`test_token_persistence` dot-in-state + `test_phase10_2a_identity` 401 expectation — both fail identically standalone AND at clean baseline `be272fb` in a fresh worktree; unrelated to quant) |
+| Days 4–7 + Alembic/migration | 112 passed, 4 skipped |
+| Static checks | `py_compile` OK on changed files; `git diff --check` clean; unused-import REFACTOR pass; secret scan clean |
+| PostgreSQL 16 | CI run `33736296222` — **success** (`postgres:16`) on `5b94b97` |
+| Status Gate | CI run `33736296234` — **success** on `5b94b97` |
+| Schema migrations | **NONE** — pure application-layer quant code, no DB change |
+| Scope | Greeks only: NO IV solver, NO pricing engine, NO GEX/gamma walls/flip, NO scenario/portfolio, NO intelligence/execution/ingestion/backtest/ML/AI, no Redis/Kafka/microservices, no DB changes, no frontend changes |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used; no deployment/cutover/merge |
+| Day 15 gate | **PASS** — Greeks Engine Gate satisfied |
