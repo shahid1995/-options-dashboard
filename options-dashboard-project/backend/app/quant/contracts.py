@@ -141,6 +141,14 @@ class CalculationIssueCode(str, Enum):
     INSUFFICIENT_QUALITY = "INSUFFICIENT_QUALITY"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # Implied-volatility solver outcomes (Day 16) — the market price does not
+    # admit a volatility solution in the documented domain, the contract is
+    # expired, or the bounded root solve failed numerically.
+    EXPIRED = "EXPIRED"
+    BELOW_LOWER_BOUND = "BELOW_LOWER_BOUND"
+    ABOVE_THEORETICAL_MAX = "ABOVE_THEORETICAL_MAX"
+    NO_BRACKET = "NO_BRACKET"
+    CONVERGENCE_FAILED = "CONVERGENCE_FAILED"
 
 
 # ---------------------------------------------------------------------------
