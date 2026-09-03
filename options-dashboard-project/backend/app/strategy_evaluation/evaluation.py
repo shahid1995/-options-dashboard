@@ -33,6 +33,7 @@ Rules enforced here
 from __future__ import annotations
 
 from app.intelligence.contracts import IntelligenceDirection, MarketRegime
+from app.market_data.contracts import Provenance
 from app.quant.contracts import CalculationContext, CalculationStatus
 from app.quant.scenarios import PortfolioScenarioResult, evaluate_portfolio
 from app.strategy_evaluation.contracts import (
@@ -79,13 +80,29 @@ def _portfolio_at(inp: StrategyEvaluationInput, *, spot: float,
     )
 
 
+def _shared_leg_provenance(inp: StrategyEvaluationInput) -> Provenance | None:
+    """Single shared provenance when every leg carries the same Day-9 source.
+
+    Aggregated Greek/scenario assessments span all legs: provenance is
+    attributed only when every leg is present with one identical source;
+    mixed or partially-missing leg provenance yields ``None`` (per-leg
+    provenance stays on the legs; nothing is synthesized).
+    """
+    provs = [leg.provenance for leg in inp.legs]
+    if not provs or any(p is None for p in provs):
+        return None
+    first = provs[0]
+    return first if all(p == first for p in provs) else None
+
+
 def _assess_payoff(inp: StrategyEvaluationInput) -> tuple[PayoffAssessment, str]:
     ev = inp.payoff
     if ev is None:
         return (PayoffAssessment(
             state=DimensionState.UNAVAILABLE, expiry_semantics=None,
             net_debit_credit=None, max_profit=None, max_loss=None,
-            tail=None, breakevens=(), note="no payoff evidence supplied"),
+            tail=None, breakevens=(), note="no payoff evidence supplied",
+            provenance=None),
             "no payoff evidence supplied")
     note = (f"payoff metrics supplied (state {ev.state.value}; "
             f"semantics {ev.expiry_semantics.value})")
@@ -95,7 +112,7 @@ def _assess_payoff(inp: StrategyEvaluationInput) -> tuple[PayoffAssessment, str]
         state=ev.state, expiry_semantics=ev.expiry_semantics,
         net_debit_credit=ev.net_debit_credit, max_profit=ev.max_profit,
         max_loss=ev.max_loss, tail=ev.tail, breakevens=ev.breakevens,
-        note=note), note)
+        note=note, provenance=ev.provenance), note)
 
 
 def _assess_greeks(inp: StrategyEvaluationInput) -> tuple[GreekAssessment, str]:
@@ -120,7 +137,8 @@ def _assess_greeks(inp: StrategyEvaluationInput) -> tuple[GreekAssessment, str]:
     return (GreekAssessment(
         state=state, delta=port.delta, gamma=port.gamma, theta=port.theta,
         vega=port.vega, legs_priced=priced, legs_total=total,
-        greeks_source="MODEL", note=note), note)
+        greeks_source="MODEL", note=note,
+        provenance=_shared_leg_provenance(inp)), note)
 
 
 def _assess_scenarios(inp: StrategyEvaluationInput) -> tuple[ScenarioAssessment, str]:
@@ -129,7 +147,8 @@ def _assess_scenarios(inp: StrategyEvaluationInput) -> tuple[ScenarioAssessment,
             state=DimensionState.UNAVAILABLE, points_total=0,
             points_assessed=0, spot_values=(), min_pnl=None, max_pnl=None,
             unavailable_reasons=(),
-            note="no scenario points supplied -- scenario dimension unavailable"),
+            note="no scenario points supplied -- scenario dimension unavailable",
+            provenance=_shared_leg_provenance(inp)),
             "no scenario points supplied")
     pnls: list[float] = []
     partial_points = 0
@@ -156,7 +175,8 @@ def _assess_scenarios(inp: StrategyEvaluationInput) -> tuple[ScenarioAssessment,
         spot_values=tuple(p.spot for p in inp.scenario_points),
         min_pnl=min(pnls) if pnls else None,
         max_pnl=max(pnls) if pnls else None,
-        unavailable_reasons=tuple(reasons), note=note), note)
+        unavailable_reasons=tuple(reasons), note=note,
+        provenance=_shared_leg_provenance(inp)), note)
 
 
 def _assess_regime(inp: StrategyEvaluationInput) -> tuple[RegimeAssessment, str]:
@@ -205,13 +225,14 @@ def _assess_liquidity(inp: StrategyEvaluationInput) -> tuple[LiquidityAssessment
             state=DimensionState.UNAVAILABLE, legs_complete=None,
             legs_total=None, spread_bps=None,
             note="no liquidity evidence supplied -- missing liquidity is "
-            "never treated as zero"),
+            "never treated as zero", provenance=None),
             "no liquidity evidence supplied")
     return (LiquidityAssessment(
         state=ev.state, legs_complete=ev.legs_complete,
         legs_total=ev.legs_total, spread_bps=ev.spread_bps,
         note=(f"liquidity evidence supplied "
-              f"({ev.legs_complete}/{ev.legs_total} legs complete)")), "")
+              f"({ev.legs_complete}/{ev.legs_total} legs complete)"),
+        provenance=ev.provenance), "")
 
 
 def _assess_risk(inp: StrategyEvaluationInput) -> tuple[RiskAssessment, str]:
@@ -221,7 +242,7 @@ def _assess_risk(inp: StrategyEvaluationInput) -> tuple[RiskAssessment, str]:
             state=DimensionState.UNAVAILABLE, structural_unbounded_loss=None,
             max_loss_estimate=None, informational_only=True,
             note="no risk evidence supplied -- risk remains unevaluated "
-            "(informational/evaluative only)"),
+            "(informational/evaluative only)", provenance=None),
             "no risk evidence supplied")
     note = "risk characteristics recorded (informational/evaluative only; no decision here)"
     if ev.notes:
@@ -229,7 +250,7 @@ def _assess_risk(inp: StrategyEvaluationInput) -> tuple[RiskAssessment, str]:
     return (RiskAssessment(
         state=ev.state, structural_unbounded_loss=ev.structural_unbounded_loss,
         max_loss_estimate=ev.max_loss_estimate, informational_only=True,
-        note=note), note)
+        note=note, provenance=ev.provenance), note)
 
 
 def _assess_historical(inp: StrategyEvaluationInput) -> tuple[HistoricalAssessment, str]:
@@ -239,13 +260,13 @@ def _assess_historical(inp: StrategyEvaluationInput) -> tuple[HistoricalAssessme
             state=DimensionState.UNAVAILABLE, observations=None,
             metric_note=None,
             note="no point-in-time historical evidence supplied -- no "
-            "historical score is fabricated"),
+            "historical score is fabricated", provenance=None),
             "no historical evidence supplied")
     return (HistoricalAssessment(
         state=ev.state, observations=ev.observations,
         metric_note=ev.metric_note,
         note=(f"historical evidence supplied ({ev.observations} point-in-time "
-              "observations)")), "")
+              "observations)"), provenance=ev.provenance), "")
 
 
 def evaluate_strategy(inp: StrategyEvaluationInput) -> StrategyEvaluationResult:
@@ -262,13 +283,18 @@ def evaluate_strategy(inp: StrategyEvaluationInput) -> StrategyEvaluationResult:
     historical, historical_note = _assess_historical(inp)
 
     assessments = {
-        EvaluationDimension.PAYOFF: (payoff.state, payoff_note),
-        EvaluationDimension.GREEKS: (greeks.state, greeks_note),
-        EvaluationDimension.SCENARIO: (scenario.state, scenario_note),
-        EvaluationDimension.REGIME: (regime.state, regime_note),
-        EvaluationDimension.LIQUIDITY: (liquidity.state, liquidity_note),
-        EvaluationDimension.RISK: (risk.state, risk_note),
-        EvaluationDimension.HISTORICAL: (historical.state, historical_note),
+        EvaluationDimension.PAYOFF: (payoff.state, payoff_note,
+                                    payoff.provenance),
+        EvaluationDimension.GREEKS: (greeks.state, greeks_note,
+                                     greeks.provenance),
+        EvaluationDimension.SCENARIO: (scenario.state, scenario_note,
+                                       scenario.provenance),
+        EvaluationDimension.REGIME: (regime.state, regime_note, None),
+        EvaluationDimension.LIQUIDITY: (liquidity.state, liquidity_note,
+                                        liquidity.provenance),
+        EvaluationDimension.RISK: (risk.state, risk_note, risk.provenance),
+        EvaluationDimension.HISTORICAL: (historical.state, historical_note,
+                                         historical.provenance),
     }
     _sources = {
         EvaluationDimension.PAYOFF: "payoff-boundary",
@@ -283,7 +309,8 @@ def evaluate_strategy(inp: StrategyEvaluationInput) -> StrategyEvaluationResult:
     evidence = tuple(
         EvaluationEvidence(
             dimension=dim, state=assessments[dim][0],
-            source=_sources[dim], note=assessments[dim][1])
+            source=_sources[dim], note=assessments[dim][1],
+            provenance=assessments[dim][2])
         for dim in _ALL_DIMENSIONS)
     issues = tuple(
         EvaluationIssue(dimension=dim, message=assessments[dim][1])
@@ -294,8 +321,7 @@ def evaluate_strategy(inp: StrategyEvaluationInput) -> StrategyEvaluationResult:
     states = [assessments[d][0] for d in _ALL_DIMENSIONS]
     if any(s is DimensionState.INVALID for s in states):
         status = StrategyEvaluationStatus.INVALID
-    elif all(s in (DimensionState.AVAILABLE, DimensionState.PARTIAL)
-             for s in states):
+    elif all(s is DimensionState.AVAILABLE for s in states):
         status = StrategyEvaluationStatus.SUCCESS
     elif all(s is DimensionState.UNAVAILABLE for s in states):
         status = StrategyEvaluationStatus.UNAVAILABLE

@@ -446,6 +446,7 @@ class PayoffAssessment:
     tail: TailClass | None
     breakevens: tuple[float, ...]
     note: str
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True)
@@ -459,6 +460,7 @@ class GreekAssessment:
     legs_total: int
     greeks_source: str | None
     note: str
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True)
@@ -471,6 +473,7 @@ class ScenarioAssessment:
     max_pnl: float | None
     unavailable_reasons: tuple[str, ...]
     note: str
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True)
@@ -488,6 +491,7 @@ class LiquidityAssessment:
     legs_total: int | None
     spread_bps: float | None
     note: str
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True)
@@ -497,6 +501,7 @@ class RiskAssessment:
     max_loss_estimate: float | None
     informational_only: bool
     note: str
+    provenance: Provenance | None = None
 
 
 @dataclass(frozen=True)
@@ -505,6 +510,7 @@ class HistoricalAssessment:
     observations: int | None
     metric_note: str | None
     note: str
+    provenance: Provenance | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -514,12 +520,18 @@ class HistoricalAssessment:
 
 @dataclass(frozen=True)
 class EvaluationEvidence:
-    """One structured evidence row for a dimension assessment."""
+    """One structured evidence row for a dimension assessment.
+
+    ``provenance`` preserves the dimension's own Day-9 source when the
+    supplied evidence carries one (never synthesized; ``None`` stays
+    missing).  Opportunity provenance is a separate top-level channel.
+    """
 
     dimension: EvaluationDimension
     state: DimensionState
     source: str
     note: str
+    provenance: Provenance | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -527,6 +539,7 @@ class EvaluationEvidence:
             "state": self.state.value,
             "source": self.source,
             "note": self.note,
+            "provenance": _fmt_provenance(self.provenance),
         }
 
     @classmethod
@@ -536,6 +549,7 @@ class EvaluationEvidence:
             state=DimensionState(data["state"]),
             source=data["source"],
             note=data["note"],
+            provenance=_prov_from_dict(data.get("provenance")),
         )
 
 
@@ -632,13 +646,14 @@ class StrategyEvaluationResult:
             "tail": p.tail.value if p.tail else None,
             "breakevens": list(p.breakevens),
             "note": p.note,
+            "provenance": _fmt_provenance(p.provenance),
         }
         g = self.greek_assessment
         payload["greek_assessment"] = {
             "state": g.state.value, "delta": g.delta, "gamma": g.gamma,
             "theta": g.theta, "vega": g.vega, "legs_priced": g.legs_priced,
             "legs_total": g.legs_total, "greeks_source": g.greeks_source,
-            "note": g.note,
+            "note": g.note, "provenance": _fmt_provenance(g.provenance),
         }
         s = self.scenario_assessment
         payload["scenario_assessment"] = {
@@ -647,6 +662,7 @@ class StrategyEvaluationResult:
             "spot_values": list(s.spot_values), "min_pnl": s.min_pnl,
             "max_pnl": s.max_pnl,
             "unavailable_reasons": list(s.unavailable_reasons), "note": s.note,
+            "provenance": _fmt_provenance(s.provenance),
         }
         rg = self.regime_assessment
         payload["regime_assessment"] = {
@@ -662,6 +678,7 @@ class StrategyEvaluationResult:
             "state": lq.state.value, "legs_complete": lq.legs_complete,
             "legs_total": lq.legs_total, "spread_bps": lq.spread_bps,
             "note": lq.note,
+            "provenance": _fmt_provenance(lq.provenance),
         }
         rk = self.risk_assessment
         payload["risk_assessment"] = {
@@ -669,11 +686,13 @@ class StrategyEvaluationResult:
             "structural_unbounded_loss": rk.structural_unbounded_loss,
             "max_loss_estimate": rk.max_loss_estimate,
             "informational_only": rk.informational_only, "note": rk.note,
+            "provenance": _fmt_provenance(rk.provenance),
         }
         h = self.historical_assessment
         payload["historical_assessment"] = {
             "state": h.state.value, "observations": h.observations,
             "metric_note": h.metric_note, "note": h.note,
+            "provenance": _fmt_provenance(h.provenance),
         }
         return payload
 
@@ -700,12 +719,14 @@ class StrategyEvaluationResult:
                 net_debit_credit=p["net_debit_credit"],
                 max_profit=p["max_profit"], max_loss=p["max_loss"],
                 tail=TailClass(p["tail"]) if p.get("tail") else None,
-                breakevens=tuple(p["breakevens"]), note=p["note"]),
+                breakevens=tuple(p["breakevens"]), note=p["note"],
+                provenance=_prov_from_dict(p.get("provenance"))),
             greek_assessment=GreekAssessment(
                 state=DimensionState(g["state"]), delta=g["delta"],
                 gamma=g["gamma"], theta=g["theta"], vega=g["vega"],
                 legs_priced=g["legs_priced"], legs_total=g["legs_total"],
-                greeks_source=g.get("greeks_source"), note=g["note"]),
+                greeks_source=g.get("greeks_source"), note=g["note"],
+                provenance=_prov_from_dict(g.get("provenance"))),
             scenario_assessment=ScenarioAssessment(
                 state=DimensionState(s["state"]),
                 points_total=s["points_total"],
@@ -713,7 +734,8 @@ class StrategyEvaluationResult:
                 spot_values=tuple(s["spot_values"]), min_pnl=s["min_pnl"],
                 max_pnl=s["max_pnl"],
                 unavailable_reasons=tuple(s["unavailable_reasons"]),
-                note=s["note"]),
+                note=s["note"],
+                provenance=_prov_from_dict(s.get("provenance"))),
             regime_assessment=RegimeAssessment(
                 state=DimensionState(rg["state"]),
                 compatibility=RegimeCompatibility(rg["compatibility"])
@@ -724,16 +746,19 @@ class StrategyEvaluationResult:
             liquidity_assessment=LiquidityAssessment(
                 state=DimensionState(lq["state"]),
                 legs_complete=lq["legs_complete"], legs_total=lq["legs_total"],
-                spread_bps=lq["spread_bps"], note=lq["note"]),
+                spread_bps=lq["spread_bps"], note=lq["note"],
+                provenance=_prov_from_dict(lq.get("provenance"))),
             risk_assessment=RiskAssessment(
                 state=DimensionState(rk["state"]),
                 structural_unbounded_loss=rk["structural_unbounded_loss"],
                 max_loss_estimate=rk["max_loss_estimate"],
-                informational_only=rk["informational_only"], note=rk["note"]),
+                informational_only=rk["informational_only"], note=rk["note"],
+                provenance=_prov_from_dict(rk.get("provenance"))),
             historical_assessment=HistoricalAssessment(
                 state=DimensionState(h["state"]),
                 observations=h["observations"], metric_note=h["metric_note"],
-                note=h["note"]),
+                note=h["note"],
+                provenance=_prov_from_dict(h.get("provenance"))),
             evidence=tuple(EvaluationEvidence.from_dict(e)
                            for e in data["evidence"]),
             issues=tuple(EvaluationIssue.from_dict(i) for i in data["issues"]),

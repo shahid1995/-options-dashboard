@@ -201,11 +201,13 @@ def _payoff(state: DimensionState = DimensionState.AVAILABLE,
            net: float | None = 1.0, max_profit: float | None = 100.0,
            max_loss: float | None = -50.0,
            tail: TailClass = TailClass.NONE,
-           breakevens: tuple[float, ...] = (105.0,)) -> PayoffEvidence:
+           breakevens: tuple[float, ...] = (105.0,),
+           prov=_UNSET) -> PayoffEvidence:
     return PayoffEvidence(
         state=state, expiry_semantics=semantics, net_debit_credit=net,
         max_profit=max_profit, max_loss=max_loss, tail=tail,
-        breakevens=breakevens, provenance=_prov("payoff-bnd"))
+        breakevens=breakevens,
+        provenance=_prov("payoff-bnd") if prov is _UNSET else prov)
 
 
 def _full_inp(**overrides) -> StrategyEvaluationInput:
@@ -583,6 +585,181 @@ class TestEvidenceProvenanceStatus:
         assert base.greek_assessment.delta == high.greek_assessment.delta
         assert base.scenario_assessment.min_pnl == \
             high.scenario_assessment.min_pnl
+
+
+# ---------------------------------------------------------------------------
+# 7b. Remediation — dimension-level provenance (approved design §8)
+# ---------------------------------------------------------------------------
+
+
+class TestDimensionProvenance:
+    """Dimension evidence provenance must survive into the final result.
+
+    Lineage locked here (Day-9 canonical Provenance reused, never
+    synthesized): caller-supplied dimension evidence provenance -> final
+    dimension assessment + evidence row -> to_dict/from_dict round trip.
+    """
+
+    def _ev_for(self, dim: EvaluationDimension, r: StrategyEvaluationResult):
+        return next(e for e in r.evidence if e.dimension is dim)
+
+    def test_payoff_provenance_preserved(self):
+        prov = _prov("payoff-src")
+        r = evaluate_strategy(_full_inp(payoff=_payoff(prov=prov)))
+        assert r.payoff_assessment.provenance is prov
+        assert self._ev_for(EvaluationDimension.PAYOFF, r).provenance == prov
+
+    def test_liquidity_provenance_preserved(self):
+        prov = _prov("liq-src")
+        r = evaluate_strategy(_full_inp(liquidity=LiquidityEvidence(
+            state=DimensionState.AVAILABLE, legs_complete=1, legs_total=1,
+            spread_bps=2.5, quality=QualityState.EXCELLENT,
+            provenance=prov)))
+        assert r.liquidity_assessment.provenance is prov
+        assert self._ev_for(EvaluationDimension.LIQUIDITY, r).provenance == prov
+
+    def test_risk_provenance_preserved(self):
+        prov = _prov("risk-src")
+        r = evaluate_strategy(_full_inp(risk=RiskEvidence(
+            state=DimensionState.AVAILABLE, structural_unbounded_loss=False,
+            max_loss_estimate=50.0, notes=("debit spread",),
+            provenance=prov)))
+        assert r.risk_assessment.provenance is prov
+        assert self._ev_for(EvaluationDimension.RISK, r).provenance == prov
+
+    def test_historical_provenance_preserved(self):
+        prov = _prov("hist-src")
+        r = evaluate_strategy(_full_inp(historical=HistoricalEvidence(
+            state=DimensionState.AVAILABLE, observations=120,
+            metric_note="point-in-time supplied", provenance=prov)))
+        assert r.historical_assessment.provenance is prov
+        assert self._ev_for(EvaluationDimension.HISTORICAL,
+                            r).provenance == prov
+
+    def test_uniform_leg_provenance_preserved_on_greeks_and_scenario(self):
+        prov = _prov("leg-src")
+        r = evaluate_strategy(_full_inp(legs=(_leg(prov=prov),)))
+        assert r.greek_assessment.provenance == prov
+        assert r.scenario_assessment.provenance == prov
+        assert self._ev_for(EvaluationDimension.GREEKS,
+                            r).provenance == prov
+        assert self._ev_for(EvaluationDimension.SCENARIO,
+                            r).provenance == prov
+
+    def test_mixed_leg_provenance_never_synthesized(self):
+        # two legs from two different sources: aggregate greeks/scenario
+        # provenance is None (per-leg provenance remains on the legs)
+        r = evaluate_strategy(_full_inp(legs=(
+            _leg(prov=_prov("leg-a")), _leg(strike=110.0, prov=_prov("leg-b"))),
+            scenario_points=_points(100.0)))
+        assert r.greek_assessment.provenance is None
+        assert r.scenario_assessment.provenance is None
+
+    def test_missing_dimension_provenance_stays_none(self):
+        r = evaluate_strategy(_full_inp(
+            payoff=_payoff(prov=None),
+            legs=(_leg(prov=None),),
+            liquidity=LiquidityEvidence(
+                state=DimensionState.AVAILABLE, legs_complete=1,
+                legs_total=1, spread_bps=2.5,
+                quality=QualityState.EXCELLENT, provenance=None),
+            risk=RiskEvidence(state=DimensionState.AVAILABLE,
+                              structural_unbounded_loss=False,
+                              max_loss_estimate=50.0,
+                              provenance=None),
+            historical=HistoricalEvidence(
+                state=DimensionState.AVAILABLE, observations=120,
+                metric_note="point-in-time supplied", provenance=None)))
+        assert r.payoff_assessment.provenance is None
+        assert r.liquidity_assessment.provenance is None
+        assert r.risk_assessment.provenance is None
+        assert r.historical_assessment.provenance is None
+        assert r.greek_assessment.provenance is None
+        assert all(e.provenance is None for e in r.evidence)
+
+    def test_opportunity_provenance_never_overwrites_dimension_provenance(self):
+        dim_prov = _prov("payoff-src")
+        opp = _opportunity("opp-prov")
+        r = evaluate_strategy(_full_inp(payoff=_payoff(prov=dim_prov),
+                                        opportunity=opp))
+        # top-level provenance is the Opportunity's; the dimension keeps
+        # its own distinct source
+        assert r.provenance is opp.provenance
+        assert opp.provenance != dim_prov
+        assert r.payoff_assessment.provenance is dim_prov
+        assert self._ev_for(EvaluationDimension.PAYOFF,
+                            r).provenance == dim_prov
+
+    def test_dimension_provenance_round_trip(self):
+        r = evaluate_strategy(_full_inp(
+            payoff=_payoff(prov=_prov("payoff-src")),
+            liquidity=LiquidityEvidence(
+                state=DimensionState.AVAILABLE, legs_complete=1,
+                legs_total=1, spread_bps=2.5,
+                quality=QualityState.EXCELLENT, provenance=_prov("liq-src")),
+            risk=RiskEvidence(state=DimensionState.AVAILABLE,
+                              structural_unbounded_loss=False,
+                              max_loss_estimate=50.0,
+                              provenance=_prov("risk-src")),
+            historical=HistoricalEvidence(
+                state=DimensionState.AVAILABLE, observations=120,
+                metric_note="point-in-time supplied",
+                provenance=_prov("hist-src")),
+            legs=(_leg(prov=_prov("leg-src")),),
+            opportunity=_opportunity("opp-rt")))
+        r2 = StrategyEvaluationResult.from_dict(
+            json.loads(json.dumps(r.to_dict())))
+        assert r2.to_dict() == r.to_dict()
+        for a in (r2.payoff_assessment, r2.liquidity_assessment,
+                  r2.risk_assessment, r2.historical_assessment,
+                  r2.greek_assessment, r2.scenario_assessment):
+            assert a.provenance is not None
+        assert r2.provenance is not None  # Opportunity provenance intact
+
+
+# ---------------------------------------------------------------------------
+# 7c. Remediation — PARTIAL must never become SUCCESS (design §6)
+# ---------------------------------------------------------------------------
+
+
+class TestStatusLadderRemediation:
+    """A PARTIAL dimension must keep the overall status PARTIAL."""
+
+    def test_partial_dimension_never_becomes_success(self):
+        # liquidity supplied with PARTIAL state; everything else AVAILABLE
+        r = evaluate_strategy(_full_inp(liquidity=LiquidityEvidence(
+            state=DimensionState.PARTIAL, legs_complete=1, legs_total=2,
+            spread_bps=None, quality=QualityState.DEGRADED,
+            provenance=_prov("liq-partial"))))
+        assert r.liquidity_assessment.state is DimensionState.PARTIAL
+        assert r.status is StrategyEvaluationStatus.PARTIAL
+
+    def test_partial_payoff_dimension_never_becomes_success(self):
+        r = evaluate_strategy(_full_inp(
+            payoff=_payoff(state=DimensionState.PARTIAL)))
+        assert r.payoff_assessment.state is DimensionState.PARTIAL
+        assert r.status is StrategyEvaluationStatus.PARTIAL
+
+    def test_all_available_is_success(self):
+        r = evaluate_strategy(_full_inp())
+        assert r.status is StrategyEvaluationStatus.SUCCESS
+
+    def test_all_unavailable_is_unavailable(self):
+        r = evaluate_strategy(_full_inp(
+            legs=(_leg(implied_volatility=None),),
+            implied_volatility=None,
+            scenario_points=(), payoff=None, market_regime=None,
+            liquidity=None, risk=None, historical=None))
+        assert r.status is StrategyEvaluationStatus.UNAVAILABLE
+
+    def test_mixed_available_and_unavailable_is_partial(self):
+        r = evaluate_strategy(_full_inp(historical=None))
+        assert r.status is StrategyEvaluationStatus.PARTIAL
+
+    def test_invalid_dimension_still_invalid(self):
+        r = evaluate_strategy(
+            _full_inp(payoff=_payoff(state=DimensionState.INVALID)))
+        assert r.status is StrategyEvaluationStatus.INVALID
 
 
 # ---------------------------------------------------------------------------
