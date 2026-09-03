@@ -250,6 +250,14 @@ class OptionMarketData:
     * :attr:`quality` — the Day-12 :class:`QualityState` of the underlying
       observation, consumed as-is.  This boundary never scores quality.
     * :attr:`provenance` — Day-9 :class:`Provenance` of the input market data.
+    * :attr:`gamma` — option gamma input (per-unit-per-unit) used by
+      exposure calculations (Day 17 GEX).  ``None`` = missing (never
+      fabricated); ``0.0`` = a legitimate zero gamma.
+    * :attr:`open_interest` — open interest in **contracts** (never lots);
+      ``None`` = missing, ``0.0`` = a legitimate zero.
+    * :attr:`greeks_source` — explicit source label (``"BROKER"`` or
+      ``"MODEL"`` per the Day-9 ``GreeksObservation`` vocabulary) for the
+      gamma input; token validation is the engine's responsibility.
     * Timestamps are market/received observation times; engines must use
       ``CalculationContext.reference_timestamp`` as their notion of now.
     """
@@ -263,6 +271,9 @@ class OptionMarketData:
     data_mode: DataMode | None = None
     quality: QualityState | None = None
     provenance: Provenance | None = None
+    gamma: float | None = None
+    open_interest: float | None = None
+    greeks_source: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.instrument, NormalizedInstrument):
@@ -281,7 +292,7 @@ class OptionMarketData:
             raise ValueError("spot must be a finite number")
         if self.spot <= 0:
             raise ValueError("spot must be positive")
-        for name in ("market_price", "implied_volatility"):
+        for name in ("market_price", "implied_volatility", "gamma", "open_interest"):
             value = getattr(self, name)
             if value is not None:
                 if not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -337,6 +348,11 @@ class QuantResult:
       implementation produced the result
 
     These are never collapsed into a single confidence/score.
+
+    ``greeks_source`` records which gamma/IV inputs the calculation consumed
+    (``"BROKER"``/``"MODEL"``) when the engine is required to identify them
+    (Day 17 GEX); it stays ``None`` for calculations that do not consume
+    greeks inputs.  Never fabricated.
     """
 
     calculation_id: str
@@ -349,6 +365,7 @@ class QuantResult:
     model_version: str | None = None
     calculation_version: str | None = None
     contract_version: str | None = None
+    greeks_source: str | None = None
 
     @property
     def succeeded(self) -> bool:
