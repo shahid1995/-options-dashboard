@@ -90,6 +90,7 @@ from app.intelligence.contracts import (
     IntelligenceIssueCode,
     IntelligenceResult,
     IntelligenceStatus,
+    MarketRegime,
     RegimeLabel,
     TimeHorizon,
 )
@@ -150,10 +151,20 @@ def _level(strike: float, kind: LevelKind, state: LevelState,
                                strength=strength)
 
 
+def _regime(label: RegimeLabel = RegimeLabel.TRENDING) -> MarketRegime:
+    return MarketRegime(
+        label=label,
+        source="intelligence.regime.v1",
+        model_version="1.0.0",
+        reference_timestamp=_REF,
+    )
+
+
 def _inp(*, spot=250.0, spot_change=5.0, positioning=None,
          price_flow_relation=None, levels=(), institutional_direction=None,
          institutional_strength=None, regime_label=None,
-         regime_direction=None, trap_direction=None, trap_strength=None,
+         regime_direction=None, regime=None, trap_direction=None,
+         trap_strength=None, horizon=TimeHorizon.EXPIRY,
          quality=_UNSET, prov=_UNSET, expiry="2026-09-24") -> SynthesisInput:
     return SynthesisInput(
         underlying=NIFTY,
@@ -167,8 +178,10 @@ def _inp(*, spot=250.0, spot_change=5.0, positioning=None,
         institutional_strength=institutional_strength,
         regime_label=regime_label,
         regime_direction=regime_direction,
+        regime=regime,
         trap_direction=trap_direction,
         trap_strength=trap_strength,
+        time_horizon=horizon,
         reference_timestamp=_REF,
         provenance=prov if prov is not _UNSET else _prov(),
         quality=quality if quality is not _UNSET else _quality(),
@@ -837,6 +850,157 @@ class TestEvidenceStructure:
         assert r.quality is q
         assert r.signal_strength != r.confidence
         assert r.confidence != r.quality.quality_score
+
+
+# ---------------------------------------------------------------------------
+# 8b. Time horizon (explicit, never invented)
+# ---------------------------------------------------------------------------
+
+
+class TestTimeHorizon:
+    def test_supplied_non_expiry_horizon_preserved(self):
+        r = evaluate_synthesis(_inp(horizon=TimeHorizon.INTRADAY,
+                                    positioning=PositioningClassification.LONG_BUILDUP))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.time_horizon is TimeHorizon.INTRADAY
+
+    def test_supplied_expiry_horizon_preserved(self):
+        r = evaluate_synthesis(_inp(horizon=TimeHorizon.EXPIRY,
+                                    positioning=PositioningClassification.LONG_BUILDUP))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.time_horizon is TimeHorizon.EXPIRY
+
+    def test_missing_horizon_cannot_become_expiry(self):
+        # full directional evidence but no caller-supplied horizon: the
+        # engine must not invent EXPIRY -- PARTIAL + MISSING_HORIZON
+        r = evaluate_synthesis(_inp(horizon=None,
+                                    positioning=PositioningClassification.LONG_BUILDUP))
+        assert r.status is IntelligenceStatus.PARTIAL
+        assert r.time_horizon is None
+        assert r.direction is None
+        assert r.observation is None
+        assert r.evidence
+        codes = {i.code for i in r.issues}
+        assert IntelligenceIssueCode.MISSING_HORIZON in codes
+
+    def test_missing_horizon_conflict_is_partial(self):
+        r = evaluate_synthesis(_inp(
+            horizon=None,
+            positioning=PositioningClassification.LONG_BUILDUP,
+            price_flow_relation=PriceFlowRelation.DIVERGE))
+        assert r.status is IntelligenceStatus.PARTIAL
+        assert r.direction is None
+        assert IntelligenceIssueCode.MISSING_HORIZON in {i.code for i in r.issues}
+
+    def test_missing_horizon_no_direction_is_partial(self):
+        r = evaluate_synthesis(_inp(horizon=None,
+                                    institutional_direction=IntelligenceDirection.MIXED))
+        assert r.status is IntelligenceStatus.PARTIAL
+        assert r.direction is None
+        assert IntelligenceIssueCode.MISSING_HORIZON in {i.code for i in r.issues}
+
+    def test_missing_horizon_never_success(self):
+        r = evaluate_synthesis(_inp(horizon=None,
+                                    positioning=PositioningClassification.SHORT_BUILDUP,
+                                    price_flow_relation=PriceFlowRelation.CONFIRM))
+        assert r.status is not IntelligenceStatus.SUCCESS
+
+    def test_invalid_horizon_type_rejected(self):
+        with pytest.raises(ValueError):
+            _inp(horizon="EXPIRY",
+                 positioning=PositioningClassification.LONG_BUILDUP)
+
+
+# ---------------------------------------------------------------------------
+# 8c. Day-23 MarketRegime propagation (authoritative, never fabricated)
+# ---------------------------------------------------------------------------
+
+
+class TestRegimePropagation:
+    def test_day23_regime_propagates_into_result(self):
+        regime = _regime(RegimeLabel.TRENDING)
+        r = evaluate_synthesis(_inp(regime=regime,
+                                    regime_direction=IntelligenceDirection.BULLISH,
+                                    positioning=PositioningClassification.LONG_BUILDUP))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime is regime
+        assert r.regime.label is RegimeLabel.TRENDING
+
+    def test_regime_propagates_without_directional_vote(self):
+        # RANGING regime (NEUTRAL direction) still propagates its channel
+        regime = _regime(RegimeLabel.RANGING)
+        r = evaluate_synthesis(_inp(regime=regime,
+                                    regime_direction=IntelligenceDirection.NEUTRAL))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime is regime
+        assert r.direction is IntelligenceDirection.UNKNOWN  # label never votes
+        assert r.signal_strength == 0.0
+
+    def test_regime_label_alone_is_never_directional(self):
+        # authoritative channel present but no direction => no fabrication
+        regime = _regime(RegimeLabel.TRENDING)
+        r = evaluate_synthesis(_inp(regime=regime, regime_direction=None,
+                                    horizon=TimeHorizon.EXPIRY))
+        assert r.direction is None or r.direction is IntelligenceDirection.UNKNOWN
+        assert r.signal_strength in (None, 0.0)
+
+    def test_regime_channel_preserved_under_missing_evidence(self):
+        regime = _regime(RegimeLabel.TRENDING)
+        r = evaluate_synthesis(_inp(regime=regime, regime_direction=None,
+                                    positioning=None))
+        assert r.status is IntelligenceStatus.UNAVAILABLE
+        assert r.regime is regime
+
+    def test_regime_label_only_still_no_fabricated_channel(self):
+        # a bare label (no Day-23 MarketRegime object) never fabricates
+        # source/version metadata -- channel stays None
+        r = evaluate_synthesis(_inp(regime_label=RegimeLabel.TRENDING,
+                                    regime_direction=IntelligenceDirection.BULLISH))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime is None
+        rows = _evidence_map(r)
+        assert any(k.startswith("bull:regime:TRENDING") for k in rows)
+
+    def test_regime_object_label_drives_evidence(self):
+        regime = _regime(RegimeLabel.RISK_ON)
+        r = evaluate_synthesis(_inp(regime=regime,
+                                    regime_direction=IntelligenceDirection.BULLISH))
+        rows = _evidence_map(r)
+        assert any(k.startswith("bull:regime:RISK_ON") for k in rows)
+
+    def test_regime_label_mismatch_rejected(self):
+        regime = _regime(RegimeLabel.RANGING)
+        with pytest.raises(ValueError):
+            _inp(regime=regime, regime_label=RegimeLabel.TRENDING,
+                 regime_direction=IntelligenceDirection.NEUTRAL)
+
+    def test_regime_type_checked(self):
+        with pytest.raises(ValueError):
+            _inp(regime=RegimeLabel.TRENDING,
+                 regime_direction=IntelligenceDirection.BULLISH)
+
+    def test_regime_propagates_with_regime_direction_evidence(self):
+        regime = _regime(RegimeLabel.TRENDING)
+        r = evaluate_synthesis(_inp(regime=regime, regime_label=None,
+                                    regime_direction=IntelligenceDirection.BULLISH,
+                                    horizon=TimeHorizon.INTRADAY))
+        assert r.status is IntelligenceStatus.SUCCESS
+        assert r.regime is regime
+        assert r.direction is IntelligenceDirection.BULLISH
+        assert r.time_horizon is TimeHorizon.INTRADAY
+
+    def test_serialization_round_trip_with_regime_and_horizon(self):
+        regime = _regime(RegimeLabel.TRENDING)
+        r = evaluate_synthesis(_inp(regime=regime,
+                                    regime_direction=IntelligenceDirection.BULLISH,
+                                    horizon=TimeHorizon.SWING,
+                                    positioning=PositioningClassification.LONG_BUILDUP))
+        rebuilt = IntelligenceResult.from_dict(r.to_dict())
+        assert rebuilt.to_dict() == r.to_dict()
+        assert rebuilt.regime is not None
+        assert rebuilt.regime.label is RegimeLabel.TRENDING
+        assert rebuilt.regime.source == "intelligence.regime.v1"
+        assert rebuilt.time_horizon is TimeHorizon.SWING
 
 
 # ---------------------------------------------------------------------------

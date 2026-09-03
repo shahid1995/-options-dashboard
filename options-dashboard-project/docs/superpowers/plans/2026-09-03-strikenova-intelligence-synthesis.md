@@ -65,6 +65,8 @@ chain evaluation):
 | `trap_direction` / `trap_strength` | Day-25 result | BULL_TRAP_CANDIDATE direction etc. (BEARISH/BULLISH); NO_TRAP (NEUTRAL) → present, never votes; strength = caller strength else 0.5 |
 | `spot` / `spot_change` | price context | converts flow relation and level geometry into reads; missing ⇒ those families are present-but-uninterpretable |
 | `expiry` | chain scope | context only, never a vote |
+| `time_horizon` | caller (authoritative) | preserved verbatim into SUCCESS results; missing ⇒ PARTIAL + MISSING_HORIZON, never invented |
+| `regime` | Day-23 `MarketRegime` | propagated verbatim into `IntelligenceResult.regime`; label mismatch with `regime_label` rejected; no channel fabricated when absent |
 | `quality` / `provenance` / `reference_timestamp` | Days 12 / 9 / caller | preserved verbatim; quality gates status |
 
 ## Evidence-family independence (explicit, testable)
@@ -121,8 +123,13 @@ construction (a conflicted read cannot inflate a one-sided total).
 - `quality is None` → `PARTIAL` (`MISSING_QUALITY`) with read evidence rows.
 - `quality.quality_state == INSUFFICIENT` → `PARTIAL`
   (`INSUFFICIENT_QUALITY`) with read evidence rows.
-- Otherwise → `SUCCESS` per the outcome table. Success horizon is
-  `TimeHorizon.EXPIRY` (chain-scoped, mirroring Days 20–25).
+- **Time-horizon gate:** the synthesis layer never invents a horizon. A
+  Day-19 `SUCCESS` requires a `time_horizon`, so without a caller-supplied
+  `SynthesisInput.time_horizon` the interpretation is `PARTIAL`
+  (`MISSING_HORIZON`) with the read evidence rows — never a fabricated
+  `EXPIRY` SUCCESS.
+- Otherwise → `SUCCESS` per the outcome table, carrying the caller-supplied
+  `time_horizon` verbatim (never defaulted, never overwritten).
 - Structural input violations raise `ValueError` (INVALID semantics are
   enforced at construction like every intelligence module).
 
@@ -135,9 +142,12 @@ construction (a conflicted read cannot inflate a one-sided total).
 - Observation: `metric_name` = outcome value, `value` = strength
   (`score_0_1`); never fabricated for non-SUCCESS paths.
 - Day-9 provenance preserved verbatim on every row and the result; Day-12
-  quality preserved by identity; regime read exposed via the deterministic
-  evidence rows (`read:regime:<label>`) — the Day-23 result's own regime
-  channel remains authoritative, Day-26 does not fabricate a second one.
+  quality preserved by identity; the authoritative Day-23 `MarketRegime`
+  (label / source / model version / reference timestamp) supplied in
+  `SynthesisInput.regime` propagates verbatim into `IntelligenceResult.regime`
+  on every status — never recomputed, never fabricated (a bare
+  `regime_label` without the Day-23 channel fabricates no channel; a label
+  alone never votes).
 
 ## Purity
 

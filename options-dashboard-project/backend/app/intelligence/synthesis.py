@@ -75,6 +75,7 @@ from app.intelligence.contracts import (
     IntelligenceObservation,
     IntelligenceResult,
     IntelligenceStatus,
+    MarketRegime,
     RegimeLabel,
     TimeHorizon,
 )
@@ -169,7 +170,12 @@ class SynthesisInput:
     ``institutional_direction``/``institutional_strength`` come from the
     Day-22 result (MIXED carries no implication);
     ``regime_label``/``regime_direction`` come from the Day-23 result
-    (label alone never votes);
+    (label alone never votes); ``regime`` is the authoritative Day-23
+    ``MarketRegime`` channel preserved through synthesis into
+    ``IntelligenceResult.regime`` (never fabricated when absent);
+    ``time_horizon`` is the caller-supplied authoritative horizon -- the
+    synthesis layer never invents a horizon (a missing horizon yields
+    PARTIAL + MISSING_HORIZON rather than a fabricated SUCCESS);
     ``trap_direction``/``trap_strength`` come from the Day-25 result
     (NO_TRAP / NEUTRAL never votes).  ``quality`` is the preserved Day-12
     assessment (``None`` is allowed and yields a non-SUCCESS result).
@@ -189,6 +195,8 @@ class SynthesisInput:
     institutional_strength: float | None = None
     regime_label: RegimeLabel | None = None
     regime_direction: IntelligenceDirection | None = None
+    regime: MarketRegime | None = None
+    time_horizon: TimeHorizon | None = None
     trap_direction: IntelligenceDirection | None = None
     trap_strength: float | None = None
     quality: QualityResult | None = None
@@ -233,6 +241,16 @@ class SynthesisInput:
                 raise ValueError(f"{name} must be in [0, 1] or None")
         if self.regime_label is not None and not isinstance(self.regime_label, RegimeLabel):
             raise ValueError("regime_label must be a RegimeLabel or None")
+        if self.regime is not None and not isinstance(self.regime, MarketRegime):
+            raise ValueError("regime must be a Day-23 MarketRegime or None")
+        if self.regime is not None and self.regime_label is not None \
+                and self.regime.label is not self.regime_label:
+            raise ValueError(
+                "regime.label must match regime_label when both are supplied")
+        if self.time_horizon is not None and not isinstance(
+            self.time_horizon, TimeHorizon
+        ):
+            raise ValueError("time_horizon must be a TimeHorizon or None")
         if not isinstance(self.provenance, Provenance):
             raise ValueError("provenance must be a Day-9 Provenance")
         if self.quality is not None and not isinstance(self.quality, QualityResult):
@@ -356,12 +374,18 @@ def _regime_read(inp: SynthesisInput) -> _FamilyRead:
     """Day-23 convention: regime_direction is the read; a label alone is an
     absent family.  Only an actual directional Day-23 read (BULLISH /
     BEARISH) votes -- RANGING (NEUTRAL) and volatility labels (UNKNOWN)
-    are present measurements that never vote."""
+    are present measurements that never vote.  The authoritative label
+    comes from the preserved Day-23 ``MarketRegime`` channel when supplied."""
     if inp.regime_direction is None:
         return _FamilyRead("regime:missing", False, None, 0.0)
     direction = (inp.regime_direction
                  if _directional(inp.regime_direction) else None)
-    label = inp.regime_label.value if inp.regime_label is not None else "UNKNOWN"
+    if inp.regime is not None:
+        label = inp.regime.label.value
+    elif inp.regime_label is not None:
+        label = inp.regime_label.value
+    else:
+        label = "UNKNOWN"
     return _FamilyRead(
         f"regime:{label}", True, direction,
         FAMILY_STRENGTH_REGIME if direction is not None else 0.0,
@@ -439,7 +463,11 @@ def _finish_result(inp: SynthesisInput, *, status: IntelligenceStatus,
                    observation: IntelligenceObservation | None,
                    evidence: list[IntelligenceEvidence],
                    issues: list[IntelligenceIssue]) -> IntelligenceResult:
-    horizon = TimeHorizon.EXPIRY if status is IntelligenceStatus.SUCCESS else None
+    # The synthesis layer never invents a horizon: a SUCCESS carries only a
+    # caller-supplied time_horizon (the horizon gate guarantees it is not
+    # None before any SUCCESS is returned).  The authoritative Day-23
+    # MarketRegime channel is preserved through synthesis when supplied.
+    horizon = inp.time_horizon if status is IntelligenceStatus.SUCCESS else None
     return IntelligenceResult(
         calculation_id=CALCULATION_ID,
         status=status,
@@ -449,7 +477,7 @@ def _finish_result(inp: SynthesisInput, *, status: IntelligenceStatus,
         time_horizon=horizon,
         observation=observation,
         evidence=tuple(evidence),
-        regime=None,
+        regime=inp.regime,
         quality=inp.quality,
         provenance=inp.provenance,
         reference_timestamp=inp.reference_timestamp,
@@ -557,6 +585,20 @@ def evaluate_synthesis(inp: SynthesisInput) -> IntelligenceResult:
         issues.append(_issue(IntelligenceIssueCode.INSUFFICIENT_QUALITY,
                              "quality",
                              "input quality is below the interpretability floor"))
+        return _finish_result(inp, status=IntelligenceStatus.PARTIAL,
+                              direction=None, strength=None, confidence=None,
+                              observation=None, evidence=evidence, issues=issues)
+
+    # -- time-horizon gate: never invent EXPIRY for the synthesis ------------
+    # Day-19 SUCCESS requires a time_horizon; the synthesis layer has no
+    # authoritative horizon of its own, so without a caller-supplied one the
+    # interpretation stays PARTIAL (structured issue) instead of fabricating
+    # a SUCCESS on an invented horizon.
+    if inp.time_horizon is None:
+        issues.append(_issue(
+            IntelligenceIssueCode.MISSING_HORIZON, "time_horizon",
+            "a caller-supplied time horizon is required for synthesis "
+            "SUCCESS -- the engine never invents one"))
         return _finish_result(inp, status=IntelligenceStatus.PARTIAL,
                               direction=None, strength=None, confidence=None,
                               observation=None, evidence=evidence, issues=issues)
