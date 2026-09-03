@@ -1,7 +1,7 @@
 # StrikeNova Implementation Status Tracker
 
 > **Master Plan SHA:** `0a244c0` (docs: add StrikeNova master day-wise implementation plan)
-> **Last Updated:** 2026-09-03 (Day 6 — Performance Baseline established)
+> **Last Updated:** 2026-09-03 (Day 7 — Session Persistence Hardening)
 
 ## Phase 0 — Security Emergency
 
@@ -185,3 +185,20 @@
 | GitHub Actions — PostgreSQL compat | Run ID `33714990949` — conclusion: **success** — SHA `4914427` — `postgres:16` |
 | Final Day 6 remote HEAD | `4914427` |
 | Day 6 gate | **PASS** — Performance Baseline established |
+
+---
+
+## Day 7 — Session Persistence Hardening
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Harden session persistence across application/process restart |
+| Analysis | Sessions already persist via dual-layer (in-memory cache + DB fallback); blocking urlopen in sync handler (FastAPI threadpool); OAuth CSRF state is in-memory |
+| Test file | `tests/test_day7_session_persistence.py` — 16 tests |
+| Platform session persistence | Verified: `get_active_session()` DB lookup works after cache clear |
+| Broker session persistence | Verified: `get_token()` DB fallback works after cache clear |
+| OAuth state | HMAC-signed; TTL enforced; `_pending_states` in-memory (documented limitation) |
+| No blocking async | `google_auth` is sync def (FastAPI threadpool); `callback` is async with no blocking calls |
+| Session lifecycle | TTL 24h; expired/revoked sessions rejected; hash indexed | |
