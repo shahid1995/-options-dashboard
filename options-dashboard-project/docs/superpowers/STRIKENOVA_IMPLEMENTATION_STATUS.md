@@ -287,3 +287,38 @@
 | Security | No broker credentials/tokens in canonical objects (isolation tests); no raw Upstox envelope leakage |
 | Production isolation | No Railway/Vercel/production changes; no production Upstox credentials used |
 | Day 10 gate | **PASS** — Upstox Quote/Chain Adapter Gate satisfied |
+
+---
+
+## Day 11 — Market Data Gateway
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish a source-neutral Market Data Gateway above broker adapters — consumers request normalized market data without knowing which source supplied it |
+| Implementation SHA | `201d685` |
+| Gateway module | `app/market_data/gateway.py` — `MarketDataGateway` (orchestration only, no new models, no DB, no Redis) |
+| Operations | `get_quote`, `get_quotes` → Day-9 `QuoteObservation`; `get_option_chain` → Day-9 `OptionChainObservation` (wraps the adapter's canonical chain contract) |
+| Source selection | Per-request session-bound adapter or caller `source_provider` — never a global credential-holding source; absent source → `BrokerError(SOURCE_UNAVAILABLE)` (additive taxonomy code); adapter errors propagate unmasked |
+| Capability pre-flight | Uses existing `BrokerCapabilities` matrix: unwired/missing → `CAPABILITY_UNSUPPORTED`, `AUTH_REQUIRED` state → `AUTH_REQUIRED`, account states → `ACCOUNT_RESTRICTED`/`UPSTREAM_ERROR` |
+| Data-mode semantics | REST = `BROKER_SNAPSHOT` (default); `BROKER_LIVE` requires a live-capable source (`websocket_market_data` wired) or fails; observations whose mode contradicts the request are rejected — delayed data never relabelled real-time |
+| Provenance | Adapter provenance preserved — never overwritten; quotes without provenance refused (`INVALID_MARKET_DATA`) |
+| Boundary guard | Non-canonical (raw broker) quote/chain payloads refused at the gateway — raw payloads never reach consumers |
+| Freshness | `observation_ages()` / `ObservationAges` — pure timestamp arithmetic (age seconds, `None`-safe); no scoring/classification (Day 12) |
+| Tenant isolation | Gateway holds no token/credential state; each request routes through that request's adapter — proven by per-request-source tests |
+| Consumer migration | **NONE required** — existing chain-dict call sites (chains/gex/paper/valuation/live_gex/template_resolution) consume the legacy UI chain contract through `BrokerGateway` and stay direct; quotes have no app consumers yet; gateway is the canonical observation path |
+| Tests | `tests/test_day11_market_data_gateway.py` — 33 tests |
+| Focused regression | 108 passed (33 Day 11 + 42 Day 9 + 33 Day 10) |
+| Broker/Upstox regression | 324 passed, 1 failed = **pre-existing** `test_capabilities_matrix_is_complete_and_session_aware` (proven identical at clean baseline in Day 10) |
+| Security/session regression | 276 passed (Day 3 + Phase 9 + BYOB + auth + identity + crypto + CORS + analytics token) |
+| Market-data regression | 216 passed, 12 skipped (candle/option/market-status/GEX-quality/Postgres app + Day 4) |
+| Days 5–8 + Alembic/migration | 121 passed |
+| Static checks | `py_compile` on all changed files — OK |
+| Diff hygiene | `git diff --check` clean; no secrets/credentials in diff |
+| PostgreSQL 16 | CI run `33726946056` — success — `postgres:16` (backend push regression) |
+| Status Gate | CI run `33726946012` — success — SHA `201d685` |
+| Schema migrations | **NONE** |
+| Scope | No Day 12 quality engine, no Day 13 streaming lifecycle, no Greeks/IV/GEX/intelligence, no Redis, no microservices |
+| Production isolation | No Railway/Vercel/production changes; no production credentials used |
+| Day 11 gate | **PASS** — Market Data Gateway Gate satisfied |
