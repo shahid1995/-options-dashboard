@@ -96,11 +96,12 @@ NIFTY = "NIFTY"
 # ---------------------------------------------------------------------------
 
 
-def _prov() -> Provenance:
+def _prov(source: str = "UPSTOX_SNAPSHOT_NORMALIZED",
+          received_at: datetime | None = None) -> Provenance:
     return Provenance(
-        source="UPSTOX_SNAPSHOT_NORMALIZED",
+        source=source,
         collection_mode=DataMode.BROKER_SNAPSHOT.value,
-        received_at=_REF,
+        received_at=received_at if received_at is not None else _REF,
         normalization_version="1.0.0",
         contract_version="1.0.0",
         transformation_id=None,
@@ -160,8 +161,10 @@ def _opportunity(opp_id: str = "opp-1") -> Opportunity:
 
 def _factor(factor: RankingFactor, score: float,
             state: QualityState = QualityState.EXCELLENT,
-            raw: float | str | None = None) -> FactorObservation:
-    return FactorObservation(factor=factor, score=score, state=state, raw=raw)
+            raw: float | str | None = None,
+            provenance: Provenance | None = None) -> FactorObservation:
+    return FactorObservation(factor=factor, score=score, state=state, raw=raw,
+                             provenance=provenance)
 
 
 def _all_factors(scores: dict[RankingFactor, float] | None = None,
@@ -276,6 +279,95 @@ class TestFactorAndWeightsValidation:
             _cand(confidence=1.5)
         with pytest.raises(ValueError):
             _cand(confidence=-0.1)
+
+
+# ---------------------------------------------------------------------------
+# 1b. Factor-level provenance preservation
+# ---------------------------------------------------------------------------
+
+
+class TestFactorProvenance:
+    def test_factor_observation_carries_valid_provenance(self):
+        prov = _prov(source="LIQUIDITY-PROVIDER-v2")
+        f = _factor(_f("LIQUIDITY"), 0.9, provenance=prov)
+        assert f.provenance is prov
+
+    def test_factor_observation_rejects_invalid_provenance(self):
+        with pytest.raises(ValueError):
+            FactorObservation(factor=_f("IV"), score=0.5,
+                              provenance="not-a-provenance")  # type: ignore[arg-type]
+
+    def test_missing_provenance_is_missing_not_fabricated(self):
+        f = _factor(_f("RISK"), 0.5)
+        assert f.provenance is None
+        assert f.to_dict()["provenance"] is None
+
+    def test_provenance_survives_factor_round_trip(self):
+        prov = _prov(source="GEX-SOURCE-1")
+        f = _factor(_f("GEX"), 0.6, provenance=prov)
+        f2 = FactorObservation.from_dict(json.loads(json.dumps(f.to_dict())))
+        assert f2.to_dict() == f.to_dict()
+        assert f2.provenance is not None
+        assert f2.provenance.source == "GEX-SOURCE-1"
+        assert f2.provenance.received_at == _REF
+
+    def test_provenance_survives_ranking_into_contributions(self):
+        prov = _prov(source="FLOW-BOUNDARY-v1")
+        cand = _cand(factors=tuple(
+            _factor(f.factor, f.score, provenance=prov if f.factor
+                    is _f("SPREAD_QUALITY") else None) for f in _all_factors()))
+        r = _run([cand])
+        c = [x for x in r.ranked[0].contributions
+             if x.factor is _f("SPREAD_QUALITY")][0]
+        assert c.provenance is prov
+        assert c.to_dict()["provenance"]["source"] == "FLOW-BOUNDARY-v1"
+
+    def test_nine_factors_retain_distinct_provenance(self):
+        factors = tuple(
+            _factor(f, 0.8, provenance=_prov(source=f"src-{f.value}"))
+            for f in RankingFactor)
+        r = _run([_cand(factors=factors)])
+        contribs = {c.factor: c for c in r.ranked[0].contributions}
+        data = r.ranked[0].to_dict()
+        contrib_data = {c["factor"]: c for c in data["contributions"]}
+        for f in RankingFactor:
+            assert contribs[f].provenance is not None
+            assert contribs[f].provenance.source == f"src-{f.value}"
+            # provenance is exposed structurally (never prose claims)
+            assert contrib_data[f.value]["provenance"]["source"] == \
+                f"src-{f.value}"
+
+    def test_provenance_none_stays_none_through_ranking(self):
+        r = _run([_cand()])
+        assert all(c.provenance is None for c in r.ranked[0].contributions)
+
+    def test_determinism_with_provenance(self):
+        factors = tuple(
+            _factor(f, 0.7, provenance=_prov(source=f"src-{f.value}"))
+            for f in RankingFactor)
+        r1 = _run([_cand("a", factors=factors), _cand("b")])
+        r2 = _run([_cand("a", factors=factors), _cand("b")])
+        assert json.dumps(r1.to_dict(), sort_keys=True) == \
+            json.dumps(r2.to_dict(), sort_keys=True)
+
+    def test_full_result_round_trip_preserves_factor_provenance(self):
+        factors = tuple(
+            _factor(f, 0.75, provenance=_prov(source=f"src-{f.value}"))
+            for f in RankingFactor)
+        r = _run([_cand("a", factors=factors)])
+        r2 = StrikeRankingResult.from_dict(
+            json.loads(json.dumps(r.to_dict())))
+        assert r2.to_dict() == r.to_dict()
+        c2 = {c.factor: c for c in r2.ranked[0].contributions}
+        assert c2[_f("IV")].provenance.source == "src-iv"
+
+    def test_existing_opportunity_provenance_still_intact(self):
+        opp = _opportunity("opp-1")
+        assert opp.provenance is not None
+        r = _run([_cand("a", opportunity=opp, factors=tuple(
+            _factor(f, 0.8, provenance=_prov(source=f"src-{f.value}"))
+            for f in RankingFactor))])
+        assert r.ranked[0].provenance is opp.provenance
 
 
 # ---------------------------------------------------------------------------

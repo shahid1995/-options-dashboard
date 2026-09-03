@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 
 from app.market_data.contracts import Provenance, QualityState
@@ -130,12 +131,19 @@ class FactorObservation:
     candidate is suppressed -- never scored with a fabricated value).
     ``raw`` optionally carries the raw market value for explanation only;
     ranking operates solely on ``score``.
+    ``provenance`` is the canonical Day-9 ``Provenance`` of the individual
+    factor observation (reused, not a second provenance model): it
+    identifies where this factor's normalized score originated and is
+    propagated through ranking into every ``FactorContribution`` so an
+    auditor can trace each contribution back to its source.  ``None``
+    means genuinely missing -- never fabricated.
     """
 
     factor: RankingFactor
     score: float
     state: QualityState = QualityState.EXCELLENT
     raw: float | str | None = None
+    provenance: Provenance | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.factor, RankingFactor):
@@ -145,6 +153,10 @@ class FactorObservation:
             raise ValueError("state must be a Day-12 QualityState")
         if self.raw is not None and isinstance(self.raw, float):
             _require_finite(self.raw, "raw")
+        if self.provenance is not None and \
+                not isinstance(self.provenance, Provenance):
+            raise ValueError(
+                "provenance must be a canonical Provenance or None")
 
     @property
     def usable(self) -> bool:
@@ -156,6 +168,7 @@ class FactorObservation:
             "score": self.score,
             "state": self.state.value,
             "raw": self.raw,
+            "provenance": _fmt_provenance(self.provenance),
         }
 
     @classmethod
@@ -165,6 +178,7 @@ class FactorObservation:
             score=data["score"],
             state=QualityState(data["state"]),
             raw=data.get("raw"),
+            provenance=_provenance_from_dict(data.get("provenance")),
         )
 
 
@@ -341,7 +355,12 @@ class StrikeRankingInput:
 
 @dataclass(frozen=True)
 class FactorContribution:
-    """Structured contribution of one factor to the total ranking score."""
+    """Structured contribution of one factor to the total ranking score.
+
+    ``provenance`` is the preserved factor-level provenance of the source
+    ``FactorObservation`` -- it survives ranking so every contribution can
+    be audited back to its originating factor source.
+    """
 
     factor: RankingFactor
     score: float
@@ -349,6 +368,7 @@ class FactorContribution:
     contribution: float
     state: QualityState
     raw: float | str | None = None
+    provenance: Provenance | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -358,6 +378,7 @@ class FactorContribution:
             "contribution": self.contribution,
             "state": self.state.value,
             "raw": self.raw,
+            "provenance": _fmt_provenance(self.provenance),
         }
 
     @classmethod
@@ -369,6 +390,7 @@ class FactorContribution:
             contribution=data["contribution"],
             state=QualityState(data["state"]),
             raw=data.get("raw"),
+            provenance=_provenance_from_dict(data.get("provenance")),
         )
 
 
@@ -505,6 +527,39 @@ class StrikeRankingResult:
             weights=RankingWeights.from_dict(data["weights"]),
             objective_id=data.get("objective_id"),
         )
+
+
+# ---------------------------------------------------------------------------
+# Provenance projection helpers (JSON-safe; canonical Day-9 shape)
+# ---------------------------------------------------------------------------
+
+
+def _fmt_provenance(prov: Provenance | None) -> dict | None:
+    """Canonical JSON-safe Provenance shape (same fields/shape used by the
+    intelligence contracts): datetimes serialize as ISO-8601 strings."""
+    if prov is None:
+        return None
+    return {
+        "source": prov.source,
+        "collection_mode": prov.collection_mode,
+        "received_at": prov.received_at.isoformat(),
+        "normalization_version": prov.normalization_version,
+        "contract_version": prov.contract_version,
+        "transformation_id": prov.transformation_id,
+    }
+
+
+def _provenance_from_dict(data: dict | None) -> Provenance | None:
+    if not data:
+        return None
+    return Provenance(
+        source=data["source"],
+        collection_mode=data["collection_mode"],
+        received_at=datetime.fromisoformat(data["received_at"]),
+        normalization_version=data["normalization_version"],
+        contract_version=data["contract_version"],
+        transformation_id=data.get("transformation_id"),
+    )
 
 
 # ---------------------------------------------------------------------------

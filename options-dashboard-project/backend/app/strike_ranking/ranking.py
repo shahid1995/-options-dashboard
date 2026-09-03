@@ -123,7 +123,8 @@ def _rank_candidate(candidate: StrikeCandidateInput,
         running += contribution
         contributions.append(FactorContribution(
             factor=factor, score=obs.score, weight=weight,
-            contribution=contribution, state=obs.state, raw=obs.raw))
+            contribution=contribution, state=obs.state, raw=obs.raw,
+            provenance=obs.provenance))
     # Position and explanation are assigned after sorting.
     return RankedStrike(
         candidate_id=candidate.candidate_id,
