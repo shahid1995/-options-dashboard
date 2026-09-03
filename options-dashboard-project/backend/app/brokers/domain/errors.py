@@ -41,6 +41,11 @@ class BrokerErrorCode(str, Enum):
     CAPABILITY_UNSUPPORTED = "CAPABILITY_UNSUPPORTED"
     BROKER_UNKNOWN = "BROKER_UNKNOWN"
     UPSTREAM_ERROR = "UPSTREAM_ERROR"
+    # A broker payload was received but is malformed / unusable for
+    # canonical market-data normalization (e.g. a quote with no price, an
+    # option chain row without a strike). Distinct from UPSTREAM_ERROR,
+    # which means the broker/API call itself failed.
+    INVALID_MARKET_DATA = "INVALID_MARKET_DATA"
 
     # Codes that mean the caller's broker session is unusable and should be
     # re-authenticated. Routers use this to clear the stored session token.

@@ -97,13 +97,15 @@ class BrokerAdapter(Protocol):
         market-status engine interprets it)."""
         ...
 
-    def get_quote(self, instrument: InstrumentIdentity) -> dict:
-        """Single quote. NOT WIRED in this phase — raises
-        BrokerError(CAPABILITY_UNSUPPORTED) until a later phase wires it."""
+    def get_quote(self, instrument: InstrumentIdentity):
+        """Single quote (wired Day 10). Returns the canonical market-data
+        contract :class:`~app.market_data.contracts.QuoteObservation` —
+        never a raw broker payload."""
         ...
 
-    def get_quotes(self, instruments: list[InstrumentIdentity]) -> dict:
-        """Bulk quotes. NOT WIRED in this phase."""
+    def get_quotes(self, instruments: list[InstrumentIdentity]):
+        """Bulk quotes (wired Day 10). Returns one canonical
+        ``QuoteObservation`` per requested instrument, in request order."""
         ...
 
     def get_option_chain(self, symbol: str, expiry_date: str) -> dict:

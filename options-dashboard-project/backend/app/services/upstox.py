@@ -142,6 +142,31 @@ async def get_option_chain(access_token: str, instrument_key: str, expiry_date: 
     )
 
 
+async def get_market_quotes(access_token: str, instrument_keys: list[str]) -> dict:
+    """Full market quotes for one or more instruments (Upstox V2).
+
+    ``GET /v2/market-quote/quotes`` accepts up to 500 comma-separated
+    instrument keys. Returns the raw response body; the ``data`` object is
+    keyed by the requested instrument key and each value is the quote
+    object (``ohlc``, ``depth``, ``last_price``, ``volume``, ``oi``,
+    ``last_trade_time``, ...). Raises :class:`UpstoxError` on failure.
+    """
+    return await _request(
+        "GET",
+        "/market-quote/quotes",
+        params={"instrument_key": ",".join(instrument_keys)},
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+
+async def get_market_quote(access_token: str, instrument_key: str) -> dict:
+    """Full market quote for a single instrument (Upstox V2)."""
+    return await get_market_quotes(access_token, [instrument_key])
+
+
 async def get_option_contracts(access_token: str, instrument_key: str) -> dict:
     """Returns available strikes/expiries for an instrument (used to list expiry dates)."""
     return await _request(

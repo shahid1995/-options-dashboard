@@ -274,6 +274,43 @@ class OptionChainObservation:
 
 
 # ===========================================================================
+# Single-instrument Quote Observation
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class QuoteObservation:
+    """A single-instrument normalized quote observation (Day 10).
+
+    Composes the Day-9 canonical vocabulary for the REST-quote read path:
+
+    * :attr:`instrument` — canonical broker-neutral identity
+    * :attr:`quote` — canonical price fields (LTP/OHLC/bid/ask/volume/OI)
+    * :attr:`market_timestamp` — exchange/event time (None when the source
+      provides no event timestamp; never silently replaced by receive time)
+    * :attr:`received_timestamp` — when the application received the quote
+    * :attr:`source` — data provider label (e.g. ``"UPSTOX"``)
+    * :attr:`data_mode` — snapshot vs live semantics
+    * :attr:`provenance` — traceability metadata
+    * :attr:`contract_version` — schema version of this observation
+
+    Broker payloads (envelopes, ``depth``, ``last_price``, instrument
+    tokens) never leak into this contract — adapters map them away before
+    constructing a ``QuoteObservation``.
+    """
+
+    instrument: NormalizedInstrument
+    quote: PriceQuote
+    market_timestamp: datetime | None = None
+    received_timestamp: datetime | None = None
+    source: str | None = None
+    data_mode: DataMode | None = None
+    quality: QualityState | None = None
+    provenance: Provenance | None = None
+    contract_version: ContractVersion = ContractVersion.v1_0_0
+
+
+# ===========================================================================
 # Greeks / IV Boundary
 # ===========================================================================
 

@@ -1,4 +1,4 @@
-"""Upstox-specific mappings (Phase 6.5.0.2).
+"""Upstox-specific mappings (Phase 6.5.0.2 → Day 10).
 
 EVERY Upstox-specific concept lives here or in ``adapter.py`` — instrument
 keys, transaction types, product codes, V3 order field names, chain payload
@@ -7,9 +7,17 @@ domain/application code except through the adapter boundary (compat
 re-exports in the pre-existing broker services are documented there).
 
 Pure functions only: no HTTP, no side effects, deterministic.
+
+Day 10 adds the canonical market-data boundary: raw Upstox quote and
+option-chain payloads are normalized HERE into the Day-9 canonical
+contracts (``NormalizedInstrument`` / ``PriceQuote`` /
+``QuoteObservation`` / ``OptionChainObservation`` /
+``GreeksObservation``) so broker-specific structures stop at the adapter.
 """
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 from app.brokers.domain.enums import (
     ExecutionPolicy,
@@ -24,6 +32,18 @@ from app.brokers.domain.enums import (
 )
 from app.brokers.domain.errors import BrokerError, BrokerErrorCode
 from app.brokers.domain.models import BrokerOrderRequest, BrokerOrderResult, InstrumentIdentity
+from app.market_data.contracts import (
+    ContractVersion,
+    DataMode,
+    GreeksObservation,
+    NormalizedInstrument,
+    OptionChainObservation,
+    OptionChainRow,
+    PriceQuote,
+    Provenance,
+    QuoteObservation,
+    Side as MarketDataSide,  # market-data CALL/PUT — distinct from broker Side (BUY/SELL)
+)
 
 # ---- Instrument master (canonical identity + Upstox keys) --------------------
 #
@@ -464,3 +484,298 @@ def _extract_order_ids(value) -> tuple[str, ...]:
     if isinstance(value, (list, tuple)):
         return tuple(str(v) for v in value if v is not None)
     return (str(value),)
+
+
+# ---------------------------------------------------------------------------
+# Day 10 — Canonical market-data normalization (REST quote + option chain)
+# ---------------------------------------------------------------------------
+#
+# The functions below are the adapter's canonicalization boundary: they read
+# Upstox payload field names ONLY here and return Day-9 canonical market-data
+# contracts. Everything below this line is pure (no HTTP, no side effects).
+
+# Normalization/transformation version for payloads produced by this mapper.
+NORMALIZATION_VERSION = "1.0.0"
+
+# Canonical label applied to every normalized price payload's ``source``.
+SOURCE_LABEL = "UPSTOX"
+
+# Upstox quote/chain timestamp keys, in preference order (first present wins).
+_QUOTE_MARKET_TS_KEYS = ("last_trade_time", "timestamp")
+
+
+def instrument_identity_to_normalized(
+    identity: InstrumentIdentity,
+) -> NormalizedInstrument:
+    """Bridge the broker-layer :class:`InstrumentIdentity` (used by order /
+    chain code) to the market-data :class:`NormalizedInstrument` (Day 9).
+
+    No third identity model is created: this is a pure conversion between
+    the two existing canonical vocabularies. ``option_type`` is mapped to
+    the market-data ``Side`` enum; missing values stay ``None``.
+    """
+    option_type = None
+    if identity.option_type is not None:
+        mapped = option_type_to_domain(identity.option_type)
+        if mapped is OptionType.CALL:
+            option_type = MarketDataSide.CALL
+        elif mapped is OptionType.PUT:
+            option_type = MarketDataSide.PUT
+    return NormalizedInstrument(
+        exchange=identity.exchange,
+        segment=identity.segment,
+        underlying=identity.underlying,
+        symbol=identity.symbol,
+        instrument_type=identity.instrument_type,
+        expiry=identity.expiry,
+        strike=identity.strike,
+        option_type=option_type,
+        lot_size=identity.lot_size,
+        tick_size=identity.tick_size,
+    )
+
+
+def upstox_timestamp_to_datetime(value: str | int | None) -> datetime | None:
+    """Parse an Upstox timestamp into a UTC :class:`datetime`.
+
+    Upstox returns timestamps in two shapes:
+
+    * epoch milliseconds (``last_trade_time``), e.g. ``"1697624972130"``;
+    * ISO-8601 with an offset (``timestamp``), e.g.
+      ``"2023-10-19T05:21:51.099+05:30"``.
+
+    Both normalize deterministically to UTC. Unparseable / missing input
+    returns ``None`` (never raises, never guessed).
+    """
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+
+    # Epoch milliseconds: purely numeric string.
+    if text.isdigit():
+        try:
+            return datetime.fromtimestamp(int(text) / 1000, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    # ISO-8601 (optionally with +NN:NN offset / Z).
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def upstox_quote_to_price_quote(raw: dict) -> PriceQuote:
+    """Map a raw Upstox market-quote payload to a canonical :class:`PriceQuote`.
+
+    Field mapping (Upstox names on the left):
+
+    * ``last_price`` → ``ltp``
+    * ``ohlc.open/high/low/close`` → OHLC
+    * ``depth.buy[0].price/quantity`` → best bid / bid quantity
+    * ``depth.sell[0].price/quantity`` → best ask / ask quantity
+    * ``volume``, ``oi`` → preserved as-is (OI is in contracts, never
+      converted to lots)
+
+    Missing fields stay ``None`` — never fabricated to zero. A payload with
+    no ``last_price`` is malformed and raises
+    ``BrokerError(INVALID_MARKET_DATA)``.
+    """
+    ltp = raw.get("last_price")
+    if ltp is None:
+        raise BrokerError(
+            BrokerErrorCode.INVALID_MARKET_DATA,
+            "Upstox quote payload has no last_price — cannot normalize.",
+        )
+
+    ohlc = raw.get("ohlc") or {}
+    depth = raw.get("depth") or {}
+    buy = depth.get("buy") or []
+    sell = depth.get("sell") or []
+    best_bid = buy[0] if buy else {}
+    best_ask = sell[0] if sell else {}
+
+    bid_price = best_bid.get("price")
+    ask_price = best_ask.get("price")
+
+    return PriceQuote(
+        ltp=float(ltp),
+        open=_optional_float(ohlc.get("open")),
+        high=_optional_float(ohlc.get("high")),
+        low=_optional_float(ohlc.get("low")),
+        close=_optional_float(ohlc.get("close")),
+        bid=_optional_float(bid_price),
+        ask=_optional_float(ask_price),
+        bid_quantity=_optional_int(best_bid.get("quantity")),
+        ask_quantity=_optional_int(best_ask.get("quantity")),
+        volume=_optional_float(raw.get("volume")),
+        oi=_optional_float(raw.get("oi")),
+        source=SOURCE_LABEL,
+    )
+
+
+def upstox_quote_to_observation(
+    raw_quote: dict,
+    instrument: NormalizedInstrument,
+    *,
+    received_at: datetime,
+) -> QuoteObservation:
+    """Wrap a single raw Upstox market quote into a canonical
+    :class:`QuoteObservation` with dual timestamps and provenance.
+
+    ``market_timestamp`` prefers the exchange event time (``last_trade_time``
+    epoch-ms, falling back to the feed ``timestamp`` ISO). ``received_at`` is
+    the application receive time — never conflated with the market time.
+
+    Raises ``BrokerError(INVALID_MARKET_DATA)`` for malformed quotes (no
+    price).
+    """
+    price = upstox_quote_to_price_quote(raw_quote)
+
+    market_timestamp = None
+    for key in _QUOTE_MARKET_TS_KEYS:
+        candidate = upstox_timestamp_to_datetime(raw_quote.get(key))
+        if candidate is not None:
+            market_timestamp = candidate
+            break
+
+    provenance = Provenance(
+        source=SOURCE_LABEL,
+        collection_mode=DataMode.BROKER_SNAPSHOT.value,
+        received_at=received_at,
+        normalization_version=NORMALIZATION_VERSION,
+        contract_version=ContractVersion.v1_0_0.value,
+        transformation_id="upstox_market_quote_v1",
+    )
+
+    return QuoteObservation(
+        instrument=instrument,
+        quote=price,
+        market_timestamp=market_timestamp,
+        received_timestamp=received_at,
+        source=SOURCE_LABEL,
+        data_mode=DataMode.BROKER_SNAPSHOT,
+        provenance=provenance,
+        contract_version=ContractVersion.v1_0_0,
+    )
+
+
+def _optional_float(value) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _optional_int(value) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def _chain_leg_to_price_quote(side_key: str, item: dict) -> PriceQuote | None:
+    """Map one Upstox chain leg (call/put side) to a canonical PriceQuote.
+
+    The leg is ``item[side_key]`` with ``market_data`` and ``option_greeks``
+    nested objects. ``ltp`` is the required canonical price field, so a leg
+    with no LTP is represented as absent (``None``) rather than fabricated
+    with a zero price — the broker payload cannot be canonically priced.
+    """
+    side = item.get(side_key) or {}
+    market = side.get("market_data") or {}
+    ltp = market.get("ltp")
+    if ltp is None:
+        return None
+    return PriceQuote(
+        ltp=float(ltp),
+        volume=_optional_float(market.get("volume")),
+        oi=_optional_float(market.get("oi")),
+        source=SOURCE_LABEL,
+    )
+
+
+def upstox_chain_to_observation(
+    symbol: str,
+    expiry_date: str,
+    raw: dict,
+    *,
+    received_at: datetime,
+) -> OptionChainObservation:
+    """Normalize a raw Upstox option-chain payload into a canonical
+    :class:`OptionChainObservation` (Day 9).
+
+    CE and PE legs are independent: a row with only one populated side keeps
+    the other ``None``. OI is preserved as reported (contracts, not lots).
+    Rows without a ``strike_price`` are skipped (malformed row, not fatal).
+    The chain is sorted by strike ascending.
+    """
+    rows: list[OptionChainRow] = []
+    underlying_spot = None
+
+    for item in raw.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        strike = item.get("strike_price")
+        if strike is None:
+            continue
+        if underlying_spot is None:
+            spot = item.get("underlying_spot_price")
+            underlying_spot = _optional_float(spot)
+        rows.append(
+            OptionChainRow(
+                strike=float(strike),
+                call=_chain_leg_to_price_quote("call_options", item),
+                put=_chain_leg_to_price_quote("put_options", item),
+            )
+        )
+
+    rows.sort(key=lambda row: row.strike)
+
+    return OptionChainObservation(
+        symbol=symbol,
+        expiry_date=expiry_date,
+        underlying_spot_price=underlying_spot,
+        chain=rows,
+        received_timestamp=received_at,
+        source=SOURCE_LABEL,
+        data_mode=DataMode.BROKER_SNAPSHOT,
+        contract_version=ContractVersion.v1_0_0,
+    )
+
+
+def upstox_chain_to_broker_greeks(
+    raw: dict,
+) -> dict[tuple[float, str], GreeksObservation]:
+    """Extract broker-provided option Greeks from a raw Upstox chain payload.
+
+    Returns a mapping ``(strike, "CALL"|"PUT") → GreeksObservation`` with
+    ``source="BROKER"``. Broker Greeks are preserved as broker values — they
+    are never relabelled as model values, never merged with a model
+    calculation. Only IV is commonly supplied by Upstox; other fields stay
+    ``None`` when absent.
+    """
+    result: dict[tuple[float, str], GreeksObservation] = {}
+    for item in raw.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        strike = item.get("strike_price")
+        if strike is None:
+            continue
+        for side_key, label in (("call_options", "CALL"), ("put_options", "PUT")):
+            side = item.get(side_key) or {}
+            greeks = side.get("option_greeks") or {}
+            if not greeks:
+                continue
+            result[(float(strike), label)] = GreeksObservation(
+                iv=_optional_float(greeks.get("iv")),
+                delta=_optional_float(greeks.get("delta")),
+                gamma=_optional_float(greeks.get("gamma")),
+                theta=_optional_float(greeks.get("theta")),
+                vega=_optional_float(greeks.get("vega")),
+                source="BROKER",
+                calc_model=None,
+                calc_version=None,
+            )
+    return result
