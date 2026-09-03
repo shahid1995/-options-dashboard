@@ -1,7 +1,7 @@
 # StrikeNova Implementation Status Tracker
 
 > **Master Plan SHA:** `0a244c0` (docs: add StrikeNova master day-wise implementation plan)
-> **Last Updated:** 2026-09-03 (Day 5 PASS — evidence closure complete, CI verified on d7f99fa)
+> **Last Updated:** 2026-09-03 (Day 6 — Performance Baseline established)
 
 ## Phase 0 — Security Emergency
 
@@ -155,3 +155,29 @@
 | GitHub Actions — Status Gate (closure) | Run ID `33713961573` — conclusion: **success** — SHA `d7f99fa` |
 | GitHub Actions — PostgreSQL compat (closure) | Run ID `33713961599` — conclusion: **success** — SHA `d7f99fa` — `postgres:16` image |
 | Final Day 5 remote HEAD | `d7f99fa` — all evidence fresh on this SHA |
+
+---
+
+## Day 6 — PostgreSQL Performance Baseline
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Establish reproducible PostgreSQL 16 performance baseline |
+| Plan | `docs/superpowers/plans/2026-09-03-strikenova-postgresql-performance-baseline.md` |
+| Benchmark test | `tests/test_day6_performance_baseline.py` — 29 tests |
+| Dataset | 5 users, 4000 contracts, 6000 nifty candles, 5000 option candles, 1000 greek records, 1000 GEX snapshots, 5000 historical GEX, 250 strategy executions, 125 positions, 500 transactions, 500 ingestion logs |
+| Query benchmarks | 11 representative workloads benchmarked with median/p95 timing |
+| EXPLAIN plans | 5 critical query paths analyzed |
+| Index audit | 5 missing composite indexes identified (not yet added — requires PostgreSQL benchmark evidence) |
+| Connection pool | Documented: pool_size=5, max_overflow=10, pool_timeout=30, pool_recycle=1800 |
+| Day 6 tests | 29/29 passed, 3.86s |
+| Regression | 110 passed, 1 skipped, 0 failed across Day 5 + Day 4 + Day 3 + Phase 9 + Alembic + DB migration |
+| CI integration | Day 6 tests added to `postgres-compatibility.yml` |
+| Security | No secrets in diff; no production credentials; no production changes |
+| Production isolation | No Railway/Vercel/production DB changes |
+| `git diff --check` | Clean |
+| Findings | No P0/P1 issues requiring immediate optimization; composite index candidates identified for future phases |
+| Remaining risks | Composite indexes not yet added (need PostgreSQL benchmark evidence); SQLite-only composite indexes not ported to PostgreSQL |
+| Day 6 gate | PASS — Performance Baseline established |
