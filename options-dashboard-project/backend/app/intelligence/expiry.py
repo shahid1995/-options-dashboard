@@ -104,8 +104,10 @@ PROXIMITY_STRENGTH = {
 #: EXPIRED/UNKNOWN endpoints never fire a proximity transition.
 _PROXIMITY_ORDINAL = {"FAR": 0, "NEAR": 1, "AT_EXPIRY": 2}
 
-#: Ordinal indices over the live gamma contexts.
-_GAMMA_ORDINAL = {"NEGATIVE": 0, "POSITIVE": 1}
+#: Ordinal indices over the live gamma contexts (NEGATIVE / NEUTRAL /
+#: POSITIVE).  UNSUPPORTED is absence, never a gamma state, and never
+#: fires a transition.  Strength = ordinal distance / max distance (2).
+_GAMMA_ORDINAL = {"NEGATIVE": 0, "NEUTRAL": 1, "POSITIVE": 2}
 
 #: Documented confidence table (completeness-based).
 CONFIDENCE_FULL = 0.90
@@ -386,12 +388,22 @@ def _concentration(inp: ExpiryInput) -> dict:
     put_oi = metrics.total_put_oi
     if call_oi is None and put_oi is None:
         return out
-    total = (call_oi or 0.0) + (put_oi or 0.0)
+    # Aggregate total OI is a one-sided measurement when only one side is
+    # available — missing is never coerced to zero (Day-20 semantics).
+    if call_oi is not None and put_oi is not None:
+        total = call_oi + put_oi
+    else:
+        total = call_oi if call_oi is not None else put_oi
     out["total_oi"] = total
-    out["ce_share"] = call_oi / total if call_oi is not None else None
-    out["pe_share"] = put_oi / total if put_oi is not None else None
+    # CE/PE shares are defined only over a complete two-sided denominator
+    # with a non-zero total: partial availability never fabricates a 100%
+    # share, and a measured-zero total leaves ratios undefined (never 0.0).
+    if call_oi is not None and put_oi is not None \
+            and total is not None and total > 0:
+        out["ce_share"] = call_oi / total
+        out["pe_share"] = put_oi / total
     top = _top_strike(inp.rows)
-    if top is not None:
+    if top is not None and total is not None and total > 0:
         strike, value = top
         out["top_strike"] = strike
         out["top_share"] = value / total
@@ -650,7 +662,7 @@ def _transition_candidates(inp: ExpiryInput,
             and p_gamma is not c_gamma:
         dist = abs(_GAMMA_ORDINAL[c_gamma.value]
                    - _GAMMA_ORDINAL[p_gamma.value])
-        out.append((EventType.GAMMA_CONTEXT_TRANSITION, dist / 1.0))
+        out.append((EventType.GAMMA_CONTEXT_TRANSITION, dist / 2.0))
 
     if previous.conflict is not None and inp.conflict is not None \
             and previous.conflict != inp.conflict:

@@ -65,6 +65,12 @@ never reimplemented); theta is consumed whole (Day-15 annualized convention).
   `ce_share`, `pe_share`, `total_oi`, `top_strike`, `top_share`
   (dominant single-side strike value ÷ total OI), `spot_distance_top`
   (`|top_strike − spot| / spot`).  A high share is a measured fact only.
+  **Partial-OI semantics (Day-20 authoritative — missing ≠ zero):**
+  `total_oi` is a one-sided measurement when only one side is available;
+  CE/PE shares are defined only over a complete two-sided denominator with
+  a non-zero total — partial availability never fabricates a 100% share,
+  a measured-zero total leaves ratios undefined (never 0.0), and a side
+  measured `0.0` remains a legitimate zero (distinct from missing).
 - Gamma context: `POSITIVE` (gex > 0) / `NEGATIVE` (gex < 0) / `NEUTRAL`
   (measured 0.0) / `UNSUPPORTED` (missing).
 - Time-decay context: `ACCELERATING` (proximity NEAR/AT_EXPIRY AND
@@ -99,7 +105,7 @@ non-NONE-like — `UNKNOWN → X` is never a fabricated event):
 | `LEVEL_TRANSITION` | `level_state` | both meaningful & different |
 | `INSTITUTIONAL_TRANSITION` | `institutional_pattern` | both meaningful & different |
 | `EXPIRY_PROXIMITY_TRANSITION` | derived proximity class | both != UNKNOWN & different |
-| `GAMMA_CONTEXT_TRANSITION` | derived gamma context | both in (POSITIVE, NEGATIVE) & different |
+| `GAMMA_CONTEXT_TRANSITION` | derived gamma context | both in (POSITIVE, NEGATIVE, NEUTRAL) & different |
 | `DIRECTIONAL_CONFLICT_TRANSITION` | `conflict` flag | changed True↔False |
 
 Identical states ⇒ no event.  Missing previous ⇒ one explicit PARTIAL
@@ -108,9 +114,15 @@ simultaneous transitions emit one result each, ordered deterministically by
 `EventType` enum order.  Strength: 1.0 for categorical transitions;
 ordinal transitions (`EXPIRY_PROXIMITY`, `GAMMA_CONTEXT`) use
 `|index_prior − index_current| / max_index_distance` (documented ordinal
-indices).  Confidence: 0.90 when both endpoints and the expiry context are
-present, 0.70 when the expiry context is incomplete.  `direction = NEUTRAL`
-always — transitions are not trade signals and never imply a direction.
+indices — gamma ordinals NEGATIVE=0 / NEUTRAL=1 / POSITIVE=2, max distance
+2, so NEGATIVE↔POSITIVE = 1.0 and NEUTRAL↔NEGATIVE/POSITIVE = 0.5).
+`UNSUPPORTED` is **absence, never a gamma state**: UNSUPPORTED→X and
+X→UNSUPPORTED never fire a transition (no fabricated gamma event when the
+observation is unavailable), while measured-zero GEX (`NEUTRAL`) is
+legitimate and participates in every meaningful-pair transition.
+Confidence: 0.90 when both endpoints and the expiry context are present,
+0.70 when the expiry context is incomplete.  `direction = NEUTRAL` always —
+transitions are not trade signals and never imply a direction.
 
 ## Quality / provenance / determinism
 
@@ -158,7 +170,8 @@ live trading, merge.
   thresholds, never certainty; no exchange expiry calendars or holidays are
   modeled (proximity uses explicit caller timestamps only).
 - Concentration shares use the supplied rows' present values; missing sides
-  yield None, never zero.
+  yield None, never zero; partial (one-sided) availability exposes the
+  one-sided measurement only and never fabricates a 100% aggregate share.
 
 ## Day 24 gate
 

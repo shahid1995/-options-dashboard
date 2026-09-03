@@ -288,8 +288,79 @@ class TestConcentration:
         rows = (_row(100.0, call_oi=1_000), _row(200.0, call_oi=500))
         r = evaluate_expiry(_inp(rows=rows))
         ev = {e.source_reference_id: e.value for e in r.evidence}
-        assert "exp:NIFTY:2026-09-24:pe_share" not in ev  # missing != zero
+        # missing PE is never coerced to zero, and partial availability
+        # never fabricates a 100% CE share (defect-encoding assertion
+        # corrected by the Day-24 partial-OI remediation)
+        assert "exp:NIFTY:2026-09-24:pe_share" not in ev
+        assert "exp:NIFTY:2026-09-24:ce_share" not in ev
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(1_500.0)
+
+    def test_ce_only_partial_aggregate_no_fabricated_share(self):
+        rows = (_row(100.0, call_oi=1_000), _row(200.0, call_oi=500))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        # one-sided measurement exposed, aggregate share undefined
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(1_500.0)
+        assert "exp:NIFTY:2026-09-24:ce_share" not in ev
+        assert "exp:NIFTY:2026-09-24:pe_share" not in ev
+
+    def test_pe_only_partial_aggregate_symmetric(self):
+        rows = (_row(100.0, put_oi=800), _row(200.0, put_oi=200))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(1_000.0)
+        assert "exp:NIFTY:2026-09-24:ce_share" not in ev
+        assert "exp:NIFTY:2026-09-24:pe_share" not in ev
+
+    def test_neither_side_aggregate_unsupported(self):
+        rows = (_row(100.0), _row(200.0))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        assert "exp:NIFTY:2026-09-24:total_oi" not in ev
+        assert "exp:NIFTY:2026-09-24:ce_share" not in ev
+        assert "exp:NIFTY:2026-09-24:pe_share" not in ev
+
+    def test_ce_measured_zero_with_pe_present(self):
+        rows = (_row(100.0, call_oi=0, put_oi=1_000),
+                _row(200.0, call_oi=0, put_oi=500))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(1_500.0)
+        assert ev["exp:NIFTY:2026-09-24:ce_share"] == pytest.approx(0.0)
+        assert ev["exp:NIFTY:2026-09-24:pe_share"] == pytest.approx(1.0)
+
+    def test_pe_measured_zero_with_ce_present(self):
+        rows = (_row(100.0, call_oi=1_000, put_oi=0),
+                _row(200.0, call_oi=500, put_oi=0))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(1_500.0)
         assert ev["exp:NIFTY:2026-09-24:ce_share"] == pytest.approx(1.0)
+        assert ev["exp:NIFTY:2026-09-24:pe_share"] == pytest.approx(0.0)
+
+    def test_both_measured_zero_preserved_shares_undefined(self):
+        rows = (_row(100.0, call_oi=0, put_oi=0),
+                _row(200.0, call_oi=0, put_oi=0))
+        r = evaluate_expiry(_inp(rows=rows))
+        ev = {e.source_reference_id: e.value for e in r.evidence}
+        # measured zero total is preserved, never converted to missing
+        assert ev["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(0.0)
+        # zero-denominator ratios are undefined, never 0.0
+        assert "exp:NIFTY:2026-09-24:ce_share" not in ev
+        assert "exp:NIFTY:2026-09-24:pe_share" not in ev
+        assert "exp:NIFTY:2026-09-24:top_share" not in ev
+
+    def test_missing_vs_measured_zero_distinguishable(self):
+        # missing side: no total_oi evidence
+        r_missing = evaluate_expiry(_inp(rows=(_row(100.0), _row(200.0))))
+        ev_missing = {e.source_reference_id: e.value
+                      for e in r_missing.evidence}
+        assert "exp:NIFTY:2026-09-24:total_oi" not in ev_missing
+        # measured zero side: total_oi 0.0 present
+        r_zero = evaluate_expiry(_inp(rows=(_row(100.0, call_oi=0),
+                                             _row(200.0, call_oi=0))))
+        ev_zero = {e.source_reference_id: e.value for e in r_zero.evidence}
+        assert ev_zero["exp:NIFTY:2026-09-24:total_oi"] == pytest.approx(0.0)
 
     def test_concentration_never_directional(self):
         r = evaluate_expiry(_inp(rows=_rows_a()))
@@ -484,6 +555,69 @@ class TestEventTransitions:
         assert len(events) == 1
         assert events[0].observation.metric_name \
             == EventType.GAMMA_CONTEXT_TRANSITION.value
+
+    @pytest.mark.parametrize(
+        "prev_gex, cur_gex, strength", [
+            # NEGATIVE -> POSITIVE: ordinal |2 - 0| / 2 = 1.0
+            (-100_000.0, 100_000.0, 1.0),
+            # POSITIVE -> NEGATIVE: 1.0
+            (100_000.0, -100_000.0, 1.0),
+            # NEGATIVE -> NEUTRAL: |1 - 0| / 2 = 0.5
+            (-100_000.0, 0.0, 0.5),
+            # NEUTRAL -> NEGATIVE: 0.5
+            (0.0, -100_000.0, 0.5),
+            # POSITIVE -> NEUTRAL: 0.5
+            (100_000.0, 0.0, 0.5),
+            # NEUTRAL -> POSITIVE: 0.5
+            (0.0, 100_000.0, 0.5),
+        ])
+    def test_gamma_meaningful_transition_pairs(self, prev_gex, cur_gex,
+                                               strength):
+        events = evaluate_transitions(
+            _inp(gex=cur_gex, gex_source="MODEL"),
+            _inp(gex=prev_gex, gex_source="MODEL"))
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.observation.metric_name \
+            == EventType.GAMMA_CONTEXT_TRANSITION.value
+        assert ev.signal_strength == pytest.approx(strength, rel=1e-9)
+        assert ev.direction is IntelligenceDirection.NEUTRAL
+        assert ev.reference_timestamp == _REF
+        assert ev.provenance == _prov()
+        assert ev.quality is not None
+        refs = [e.source_reference_id for e in ev.evidence]
+        assert any("prior:gex:MODEL" in r for r in refs)
+        assert any(":gex:MODEL" in r and "prior:" not in r for r in refs)
+        assert all(e.reference_timestamp == _REF for e in ev.evidence)
+
+    def test_gamma_same_meaningful_state_no_event(self):
+        # NEUTRAL -> NEUTRAL (measured zero both sides)
+        assert evaluate_transitions(
+            _inp(gex=0.0, gex_source="MODEL"),
+            _inp(gex=0.0, gex_source="MODEL")) == ()
+        # POSITIVE -> POSITIVE (magnitude change is not a context transition)
+        assert evaluate_transitions(
+            _inp(gex=50_000.0, gex_source="MODEL"),
+            _inp(gex=100_000.0, gex_source="MODEL")) == ()
+        # NEGATIVE -> NEGATIVE
+        assert evaluate_transitions(
+            _inp(gex=-50_000.0, gex_source="MODEL"),
+            _inp(gex=-100_000.0, gex_source="MODEL")) == ()
+
+    def test_gamma_unsupported_never_fires(self):
+        # UNSUPPORTED is absence, never a gamma state: no fabricated events
+        cases = [(None, 100_000.0), (100_000.0, None),
+                 (None, 0.0), (0.0, None), (None, None)]
+        for prev_gex, cur_gex in cases:
+            prev = _inp(gex=prev_gex)
+            cur = _inp(gex=cur_gex)
+            assert evaluate_transitions(cur, prev) == ()
+
+    def test_measured_zero_gex_is_neutral_not_unsupported(self):
+        ctx = classify_expiry(_inp(gex=0.0, gex_source="MODEL"))
+        assert ctx.gamma_context is GammaContext.NEUTRAL
+        ctx = classify_expiry(_inp(gex=None))
+        assert ctx.gamma_context is GammaContext.UNSUPPORTED
 
     def test_conflict_appearing_transition(self):
         events = evaluate_transitions(_inp(conflict=True), _inp(conflict=False))
