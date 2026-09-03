@@ -257,3 +257,33 @@
 | Production code changes | New `app/market_data/` package only — no modification to existing code |
 | Compatibility | No parallel models; existing `InstrumentIdentity` in `brokers.domain.models` remains broker-layer identity; `NormalizedInstrument` is market-data layer equivalent |
 | Day 9 gate | **PASS** — Canonical Market-Data Contract Gate satisfied |
+
+---
+
+## Day 10 — Upstox Quote/Chain Adapter Completion
+
+**Status:** PASS
+
+| Item | Evidence |
+|------|----------|
+| Objective | Complete the Upstox source-adapter boundary: raw quote/option-chain payloads → Day 9 canonical market-data contracts |
+| Implementation SHA | `24054b6` |
+| Canonical boundary | `Upstox payload → adapter/mapper → QuoteObservation / PriceQuote / OptionChainObservation / GreeksObservation` |
+| Mapper additions | `upstox_quote_to_price_quote`, `upstox_quote_to_observation`, `upstox_chain_to_observation`, `upstox_chain_to_broker_greeks`, `instrument_identity_to_normalized`, `upstox_timestamp_to_datetime` (epoch-ms + ISO → UTC, deterministic) |
+| Quote wiring | `UpstoxAdapter.get_quote`/`get_quotes` wired to `GET /v2/market-quote/quotes`; capability matrix `quotes` row → wired |
+| Contract addition | `QuoteObservation` (additive frozen composite of Day-9 `NormalizedInstrument` + `PriceQuote` + `Provenance`) — no competing representation |
+| Taxonomy addition | `BrokerErrorCode.INVALID_MARKET_DATA` — malformed-payload category distinct from `UPSTREAM_ERROR` |
+| Key rules | No fabricated zeros (missing → None, LTP-less legs absent); OI preserved in contracts (never lots); market vs received timestamp never conflated; broker Greeks stay `source="BROKER"`; concrete contracts refuse direct quoting (`INVALID_INSTRUMENT`) |
+| Tests | `tests/test_day10_upstox_quote_chain.py` — 33 tests |
+| Focused regression | 75 passed (33 Day 10 + 42 Day 9), 0.47s |
+| Broker/Upstox regression | 324 passed, 1 failed = **pre-existing** `test_capabilities_matrix_is_complete_and_session_aware` (proven identical failure at clean baseline `5b66dd0`; listed in Day 5 evidence) |
+| Security/session regression | 214 passed (Day 3 + Phase 9 + BYOB + auth + identity) |
+| Market-data regression | 191 passed, 11 skipped (candle/option/market-status/GEX-quality/Postgres app) |
+| Compile/static | `py_compile` all 8 changed files — OK |
+| Diff hygiene | `git diff --check` clean; no secrets/credentials in diff |
+| PostgreSQL 16 | CI run `33725644108` — success — `postgres:16` (backend push regression) |
+| Status Gate | CI run `33725644117` — success — SHA `24054b6` |
+| Schema migrations | **NONE** — pure domain/mapper change, no DB change |
+| Security | No broker credentials/tokens in canonical objects (isolation tests); no raw Upstox envelope leakage |
+| Production isolation | No Railway/Vercel/production changes; no production Upstox credentials used |
+| Day 10 gate | **PASS** — Upstox Quote/Chain Adapter Gate satisfied |
