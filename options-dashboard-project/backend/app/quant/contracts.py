@@ -265,6 +265,10 @@ class OptionMarketData:
             )
         if self.instrument.option_type not in (Side.CALL, Side.PUT):
             raise ValueError("instrument.option_type must be CALL or PUT")
+        if self.instrument.strike is None or not math.isfinite(self.instrument.strike):
+            raise ValueError("instrument.strike must be a finite number")
+        if self.instrument.strike <= 0:
+            raise ValueError("instrument.strike must be positive")
         if not isinstance(self.spot, (int, float)) or not math.isfinite(self.spot):
             raise ValueError("spot must be a finite number")
         if self.spot <= 0:
