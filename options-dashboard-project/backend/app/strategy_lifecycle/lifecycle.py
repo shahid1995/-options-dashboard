@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from app.market_data.contracts import QualityState
 from app.market_data.quality import QualityResult
 from app.opportunity.contracts import ExpectedBehavior, Opportunity
 from app.quant.scenarios import OptionLeg
@@ -21,16 +22,8 @@ from app.strategy_lifecycle.contracts import (
 
 
 _LEGAL_TRANSITIONS: dict[StrategyLifecycleState, frozenset[StrategyLifecycleState]] = {
-    StrategyLifecycleState.CANDIDATE: frozenset({
-        StrategyLifecycleState.EVALUATED,
-        StrategyLifecycleState.BLOCKED,
-        StrategyLifecycleState.INVALID,
-    }),
-    StrategyLifecycleState.EVALUATED: frozenset({
-        StrategyLifecycleState.ELIGIBLE,
-        StrategyLifecycleState.BLOCKED,
-        StrategyLifecycleState.INVALID,
-    }),
+    StrategyLifecycleState.CANDIDATE: frozenset({StrategyLifecycleState.EVALUATED, StrategyLifecycleState.BLOCKED, StrategyLifecycleState.INVALID}),
+    StrategyLifecycleState.EVALUATED: frozenset({StrategyLifecycleState.ELIGIBLE, StrategyLifecycleState.BLOCKED, StrategyLifecycleState.INVALID}),
     StrategyLifecycleState.ELIGIBLE: frozenset(),
     StrategyLifecycleState.BLOCKED: frozenset(),
     StrategyLifecycleState.EXPIRED: frozenset(),
@@ -38,10 +31,7 @@ _LEGAL_TRANSITIONS: dict[StrategyLifecycleState, frozenset[StrategyLifecycleStat
 }
 
 
-def transition_lifecycle(
-    current: StrategyLifecycleState,
-    target: StrategyLifecycleState,
-) -> StrategyLifecycleState | None:
+def transition_lifecycle(current: StrategyLifecycleState, target: StrategyLifecycleState) -> StrategyLifecycleState | None:
     """Return the target only when the lifecycle transition is legal."""
     if not isinstance(current, StrategyLifecycleState) or not isinstance(target, StrategyLifecycleState):
         return None
@@ -57,7 +47,7 @@ def _evidence(kind: str, passed: bool, message: str, provenance=None) -> GateEvi
 
 
 def _candidate_id(opportunity_id: str, strategy_id: str, strike_ids: tuple[str, ...]) -> str:
-    # Stable, human-auditable identity derived only from explicit inputs.
+    """Create a stable, human-auditable identity from explicit inputs only."""
     return "candidate:" + ":".join((opportunity_id, strategy_id, *strike_ids))
 
 
@@ -74,12 +64,7 @@ def evaluate_strategy_gate(
     confidence: float | None = None,
     quality: QualityResult | None = None,
 ) -> StrategyGateResult:
-    """Compose Day-28/30/31 outputs and decide Day-32 structural eligibility.
-
-    The function is deliberately caller-timestamped and side-effect free.
-    Eligibility is only permission to proceed to Day 33 risk checking; it is
-    never an execution, risk, or user-approval decision.
-    """
+    """Compose Day-28/30/31 outputs and decide Day-32 structural eligibility."""
     reasons: list[BlockingReason] = []
     evidence: list[GateEvidence] = []
 
@@ -90,7 +75,7 @@ def evaluate_strategy_gate(
     else:
         evidence.append(_evidence("OPPORTUNITY", True, "authoritative Opportunity supplied", opportunity.provenance))
 
-    if not strategy_id or not isinstance(strategy_id, str) or not strategy_id.strip():
+    if not isinstance(strategy_id, str) or not strategy_id.strip():
         reasons.append(_reason(BlockingReasonCode.MISSING_STRATEGY_ID, "strategy_id is required"))
     else:
         evidence.append(_evidence("STRATEGY_ID", True, "strategy identity supplied"))
@@ -128,7 +113,7 @@ def evaluate_strategy_gate(
     else:
         evidence.append(_evidence("STRATEGY_EVALUATION", True, "Day-31 Strategy Evaluation is complete", evaluation.provenance))
 
-    if evaluation is not None and isinstance(evaluation, StrategyEvaluationResult) and strategy_id:
+    if isinstance(evaluation, StrategyEvaluationResult) and isinstance(strategy_id, str) and strategy_id.strip():
         if getattr(evaluation, "strategy_id", None) != strategy_id:
             reasons.append(_reason(BlockingReasonCode.INVALID_EVALUATION, "strategy_id does not match the Day-31 evaluation"))
 
@@ -160,21 +145,18 @@ def evaluate_strategy_gate(
     if resolved_confidence is None and isinstance(opportunity, Opportunity):
         resolved_confidence = opportunity.confidence
 
+    invalid_codes = {
+        BlockingReasonCode.INVALID_OPPORTUNITY,
+        BlockingReasonCode.INVALID_STRIKE_SELECTION,
+        BlockingReasonCode.INVALID_EVALUATION,
+        BlockingReasonCode.INVALID_REFERENCE_TIMESTAMP,
+    }
     if reasons:
+        invalid = any(r.code in invalid_codes for r in reasons)
         return StrategyGateResult(
-            status=GateStatus.BLOCKED if not any(r.code in {
-                BlockingReasonCode.INVALID_OPPORTUNITY,
-                BlockingReasonCode.INVALID_STRIKE_SELECTION,
-                BlockingReasonCode.INVALID_EVALUATION,
-                BlockingReasonCode.INVALID_REFERENCE_TIMESTAMP,
-            } for r in reasons) else GateStatus.INVALID,
+            status=GateStatus.INVALID if invalid else GateStatus.BLOCKED,
             candidate=None,
-            lifecycle_state=StrategyLifecycleState.BLOCKED if not any(r.code in {
-                BlockingReasonCode.INVALID_OPPORTUNITY,
-                BlockingReasonCode.INVALID_STRIKE_SELECTION,
-                BlockingReasonCode.INVALID_EVALUATION,
-                BlockingReasonCode.INVALID_REFERENCE_TIMESTAMP,
-            } for r in reasons) else StrategyLifecycleState.INVALID,
+            lifecycle_state=StrategyLifecycleState.INVALID if invalid else StrategyLifecycleState.BLOCKED,
             eligible=False,
             blocking_reasons=tuple(reasons),
             evidence=tuple(evidence),
