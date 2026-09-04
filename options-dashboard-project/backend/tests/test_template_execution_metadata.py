@@ -30,6 +30,10 @@ from app.routers.templates import (
     _build_execution_metadata,
     _persist_execution_metadata,
 )
+
+# Day 34: seed every bare entry intent through the genuine Day-28→Day-33
+# chain into the real paper execution engine (no candidate fabrication).
+from tests.day34_seeding import day34_gated_seeding  # noqa: F401  (autouse fixture)
 from app.services import token_store
 from fastapi.testclient import TestClient
 
@@ -407,6 +411,9 @@ class TestV2ExecutionMetadata:
         assert execution.execution_metadata is not None
         meta = json.loads(execution.execution_metadata)
         assert meta["formula_version"] == 2
+        # Day 34: the template metadata merge must not clobber the risk audit
+        # reference written in the execution transaction.
+        assert meta["risk_status"] == "PASS"
 
     def test_blocked_execution_no_metadata(self, client, logged_in, db_session):
         """When validation fails, no metadata is persisted."""
@@ -571,7 +578,7 @@ class TestMetadataPersistenceFailure:
         assert body["status"] == "FILLED"
         assert body["execution_id"] is not None
 
-        # Metadata should NOT be in the response (persistence failed)
+        # Template metadata should NOT be in the response (persistence failed)
         assert body.get("execution_metadata") is None
 
         # But the execution record should still exist in DB
@@ -579,7 +586,14 @@ class TestMetadataPersistenceFailure:
             execution_id=body["execution_id"]
         ).first()
         assert exec_record is not None
-        assert exec_record.execution_metadata is None  # not persisted
+        # Day 34: the centralized-risk audit reference IS written in the same
+        # transaction as the fill (never "not persisted"); only the template
+        # metadata write failed.
+        assert exec_record.execution_metadata is not None
+        meta = json.loads(exec_record.execution_metadata)
+        assert meta["risk_status"] == "PASS"
+        assert meta["risk_policy_version"]
+        assert "formula_version" not in meta  # template metadata not persisted
 
         # PaperOrder should exist
         order = db_session.query(PaperOrder).filter_by(

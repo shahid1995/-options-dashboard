@@ -564,13 +564,35 @@ def _persist_execution_metadata(db: Session, execution_id: str, metadata: dict) 
     This runs AFTER execute_strategy() has committed the execution.
     Raises on failure so the caller can decide whether to include
     metadata in the response.
+
+    Day 34: the write MERGES with the execution_metadata already stored in
+    the SAME transaction by the paper engine (the centralized-risk audit
+    reference — risk_status / risk_policy_version / candidate_id / etc.).
+    Template-specific keys (formula_version, preview_resolution, ...) never
+    collide with the risk_* reference, so both are preserved for audit.
     """
     from app.models import StrategyExecution
+
+    existing = db.scalar(
+        select(StrategyExecution).where(
+            StrategyExecution.execution_id == execution_id)
+    )
+    merged: dict = dict(metadata)
+    if existing is not None and existing.execution_metadata:
+        try:
+            prior = json.loads(existing.execution_metadata)
+        except (TypeError, ValueError):
+            prior = {}
+        if isinstance(prior, dict):
+            # Existing keys win: the authoritative risk reference written by
+            # the paper engine in the execution transaction is never
+            # clobbered by the post-commit template metadata.
+            merged = {**metadata, **prior}
 
     db.execute(
         update(StrategyExecution)
         .where(StrategyExecution.execution_id == execution_id)
-        .values(execution_metadata=json.dumps(metadata))
+        .values(execution_metadata=json.dumps(merged))
     )
     db.commit()
 

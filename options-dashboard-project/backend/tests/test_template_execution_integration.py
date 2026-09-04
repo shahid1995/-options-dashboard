@@ -35,6 +35,10 @@ from app.main import app
 from app.models import PaperOrder, Position, StrategyExecution, StrategyTemplate
 from app.services import token_store
 
+# Day 34: seed every bare entry intent through the genuine Day-28→Day-33
+# chain into the real paper execution engine (no candidate fabrication).
+from tests.day34_seeding import day34_gated_seeding  # noqa: F401  (autouse fixture)
+
 
 LOT = 65
 EXPIRY = "2026-08-27"

@@ -325,7 +325,16 @@ def _attach_strategy_tags(db: Session, user_id: str, rows: list[dict]) -> list[d
 # ---- Strategy execution (§7/§8) ---------------------------------------------
 
 
-def execute_strategy(user_id: str, request, db: Session, prices: dict) -> ExecutionOut:
+def execute_strategy(
+    user_id: str,
+    request,
+    db: Session,
+    prices: dict,
+    *,
+    risk_candidate=None,
+    risk_policy=None,
+    reference_timestamp=None,
+) -> ExecutionOut:
     """Create one strategy execution atomically.
 
     ``prices`` maps ``(expiry, strike, option_type) -> fill price`` and is
@@ -336,6 +345,17 @@ def execute_strategy(user_id: str, request, db: Session, prices: dict) -> Execut
     Idempotency: a retried ``client_order_id`` returns the ORIGINAL
     execution untouched — no second execution, no second orders, no
     double-counted cash, no duplicate journal record.
+
+    Day 34 enforcement (centralized risk integration):
+    ``risk_candidate`` must be a GENUINE eligible Day-32 ``StrategyCandidate``
+    whose legs EXACTLY match the request legs.  A new entry with no genuine
+    candidate is rejected (``STRATEGY_CANDIDATE_REQUIRED``) before any write;
+    the candidate's Day-33 ``CentralRiskResult`` must be PASS or the entry is
+    rejected (``RISK_BLOCKED`` / ``RISK_PARTIAL`` / ``RISK_UNAVAILABLE`` /
+    ``RISK_INVALID``) with ZERO mutation.  The replay branch above stays
+    FIRST, so a previously successful ``client_order_id`` returns its
+    original execution even under a changed policy.  On PASS the audit
+    reference is stored on ``execution_metadata`` in the SAME transaction.
     """
     now = _now()
     symbol = request.symbol.upper()
@@ -348,6 +368,61 @@ def execute_strategy(user_id: str, request, db: Session, prices: dict) -> Execut
     )
     if existing is not None:
         return _execution_out(existing, db, duplicated=True)
+
+    # ---- Day 34: centralized-risk enforcement at the mutation choke point --
+    # Replay is handled above; everything below runs ONLY for a NEW entry.
+    # Every validation here precedes the first DB write (including
+    # _get_or_create_account), so any rejection leaves zero rows.
+    risk_metadata: str | None = None
+    if risk_candidate is None:
+        raise PaperExecutionError(
+            "STRATEGY_CANDIDATE_REQUIRED",
+            "A paper strategy entry requires a genuine Strategy Candidate "
+            "from the approved intelligence chain (Opportunity -> Day-32 "
+            "Gate -> Day-33 Central Risk). Manual/custom entries without a "
+            "candidate are rejected. Paper order was not executed.",
+        )
+    # The risked legs must be the executed legs (multiset equality).
+    from app.services.paper_risk import legs_match_request
+
+    if not legs_match_request(risk_candidate.legs, list(request.legs)):
+        raise PaperExecutionError(
+            "CANDIDATE_LEG_MISMATCH",
+            "The requested execution legs do not exactly match the genuine "
+            "strategy candidate legs. Paper order was not executed.",
+        )
+    if risk_policy is None:
+        from app.services.paper_risk import PAPER_ENTRY_POLICY
+
+        risk_policy = PAPER_ENTRY_POLICY
+    from app.central_risk.contracts import (
+        CENTRAL_RISK_CALCULATION_VERSION,
+        CentralRiskStatus,
+    )
+    from app.central_risk.engine import assess_candidate_risk
+
+    decision = assess_candidate_risk(
+        risk_candidate, risk_policy,
+        reference_timestamp=reference_timestamp)
+    if decision.status is not CentralRiskStatus.PASS:
+        detail = "; ".join(r.message for r in decision.blocking_reasons)
+        if not detail:
+            detail = "; ".join(i.message for i in decision.issues)
+        raise PaperExecutionError(
+            f"RISK_{decision.status.value}",
+            f"Central risk {decision.status.value}: {detail} "
+            "Paper order was not executed.",
+        )
+    risk_metadata = json.dumps({
+        "risk_status": decision.status.value,
+        "risk_policy_version": risk_policy.policy_version,
+        "risk_assessment_id":
+            f"{risk_candidate.candidate_id}@{risk_policy.policy_version}",
+        "risk_reference_timestamp": decision.reference_timestamp.isoformat(),
+        "risk_calculation_version": CENTRAL_RISK_CALCULATION_VERSION,
+        "candidate_id": risk_candidate.candidate_id,
+        "opportunity_id": risk_candidate.opportunity_id,
+    })
 
     # Pre-validate every leg resolves to a market price before writing.
     missing = []
@@ -378,6 +453,7 @@ def execute_strategy(user_id: str, request, db: Session, prices: dict) -> Execut
         status="FILLED",
         entry_net=0.0,
         entry_at=now,
+        execution_metadata=risk_metadata,
     )
     db.add(execution)
     db.flush()

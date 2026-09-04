@@ -32,6 +32,10 @@ from app.models import (
 )
 from app.services import token_store
 from tests.test_helpers import create_test_identity
+
+# Day 34: seed every bare entry intent through the genuine Day-28→Day-33
+# chain into the real paper execution engine (no candidate fabrication).
+from tests.day34_seeding import day34_gated_seeding  # noqa: F401  (autouse fixture)
 from app.services.leg_exposure import (
     LegExposureError,
     allocate_exit,

@@ -25,6 +25,10 @@ from app.routers.paper import MARKET_CLOSED_MSG, MARKET_UNKNOWN_MSG
 from app.services import token_store
 from tests.test_helpers import create_test_identity
 
+# Day 34: seed every bare entry intent through the genuine Day-28→Day-33
+# chain into the real paper execution engine (no candidate fabrication).
+from tests.day34_seeding import day34_gated_seeding  # noqa: F401  (autouse fixture)
+
 LOT = 65
 EXPIRY = "2026-08-27"
 EXPIRY2 = "2026-09-03"

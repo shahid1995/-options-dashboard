@@ -284,6 +284,14 @@ def _paper_error(exc: PaperExecutionError) -> HTTPException:
         "INSUFFICIENT_POSITION": 400,
         "INVALID_STATE_TRANSITION": 400,
         "EXECUTION_FAILED": 502,
+        # Day 34: centralized-risk enforcement rejections.
+        "STRATEGY_CANDIDATE_REQUIRED": 409,
+        "CANDIDATE_NOT_ELIGIBLE": 409,
+        "CANDIDATE_LEG_MISMATCH": 409,
+        "RISK_BLOCKED": 409,
+        "RISK_PARTIAL": 409,
+        "RISK_UNAVAILABLE": 409,
+        "RISK_INVALID": 409,
     }.get(exc.code, 409)
     return HTTPException(status_code=status, detail=f"{exc.code}: {exc.message}")
 
