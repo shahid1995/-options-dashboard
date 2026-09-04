@@ -1,23 +1,22 @@
 """Day 32 — Strategy lifecycle and Opportunity Gate contracts.
 
 Pure, immutable domain contracts connecting Day-28 Opportunity, Day-30
-strike ranking and Day-31 Strategy Evaluation.  No execution or risk
+strike ranking and Day-31 Strategy Evaluation. No execution or risk
 authorization semantics live here.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
 from enum import Enum
 
 from app.market_data.contracts import Provenance, QualityState
-from app.market_data.quality import QualityResult
-from app.opportunity.contracts import ExpectedBehavior, Opportunity
+from app.market_data.quality import DimensionResult, IssueSeverity, QualityDimension, QualityIssue, QualityIssueCode, QualityResult
+from app.opportunity.contracts import ExpectedBehavior
 from app.quant.scenarios import OptionLeg
 from app.strategy_evaluation.contracts import StrategyEvaluationResult
-from app.strike_ranking.contracts import StrikeRankingResult
 
 STRATEGY_LIFECYCLE_CONTRACT_VERSION = "1.0.0"
 
@@ -68,70 +67,74 @@ def _finite(value: float | None, name: str) -> None:
         raise ValueError(f"{name} must be finite or None")
 
 
+def _json_value(value):
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if is_dataclass(value):
+        return {field.name: _json_value(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    return value
+
+
 def _prov_to_dict(value: Provenance | None) -> dict | None:
-    if value is None:
-        return None
-    return {
-        "source": value.source,
-        "collection_mode": value.collection_mode,
-        "received_at": value.received_at.isoformat(),
-        "normalization_version": value.normalization_version,
-        "contract_version": value.contract_version,
-        "transformation_id": value.transformation_id,
-    }
+    return _json_value(value) if value is not None else None
 
 
 def _prov_from_dict(value: dict | None) -> Provenance | None:
     if value is None:
         return None
-    return Provenance(
-        source=value["source"],
-        collection_mode=value["collection_mode"],
-        received_at=datetime.fromisoformat(value["received_at"]),
-        normalization_version=value["normalization_version"],
-        contract_version=value["contract_version"],
-        transformation_id=value.get("transformation_id"),
-    )
+    return Provenance(source=value["source"], collection_mode=value["collection_mode"],
+                      received_at=datetime.fromisoformat(value["received_at"]),
+                      normalization_version=value["normalization_version"],
+                      contract_version=value["contract_version"],
+                      transformation_id=value.get("transformation_id"))
 
 
 def _quality_to_dict(value: QualityResult | None) -> dict | None:
-    return value.to_dict() if value is not None and hasattr(value, "to_dict") else None
+    return _json_value(value) if value is not None else None
 
 
 def _quality_from_dict(value: dict | None) -> QualityResult | None:
     if value is None:
         return None
-    return QualityResult.from_dict(value)
+    def issue_from_dict(item: dict) -> QualityIssue:
+        return QualityIssue(dimension=QualityDimension(item["dimension"]), code=QualityIssueCode(item["code"]),
+                            severity=IssueSeverity(item["severity"]), message=item["message"], field=item.get("field"))
+    dimensions = tuple(
+        DimensionResult(dimension=QualityDimension(item["dimension"]), status=item["status"], score=item.get("score"),
+                        issues=tuple(issue_from_dict(issue) for issue in item.get("issues", [])))
+        for item in value.get("dimensions", [])
+    )
+    return QualityResult(
+        quality_score=value["quality_score"], quality_state=QualityState(value["quality_state"]),
+        critical_failure=value["critical_failure"], issues=tuple(issue_from_dict(x) for x in value.get("issues", [])),
+        dimensions=dimensions,
+        evaluated_at=datetime.fromisoformat(value["evaluated_at"]) if value.get("evaluated_at") else None,
+        observation_time=datetime.fromisoformat(value["observation_time"]) if value.get("observation_time") else None,
+        observation_type=value["observation_type"], contract_version=value.get("contract_version"),
+        reference_time=datetime.fromisoformat(value["reference_time"]) if value.get("reference_time") else None,
+    )
 
 
 def _leg_to_dict(leg: OptionLeg) -> dict:
-    return {
-        "option_type": leg.option_type.value,
-        "strike": leg.strike,
-        "expiry": leg.expiry,
-        "quantity": leg.quantity,
-        "direction": leg.direction.value,
-        "entry_price": leg.entry_price,
-        "implied_volatility": leg.implied_volatility,
-        "quality": leg.quality.value if leg.quality else None,
-        "provenance": _prov_to_dict(leg.provenance),
-    }
+    return _json_value(leg)
 
 
 def _leg_from_dict(data: dict) -> OptionLeg:
     from app.market_data.contracts import Side
     from app.quant.scenarios import PositionDirection
-    return OptionLeg(
-        option_type=Side(data["option_type"]),
-        strike=data["strike"],
-        expiry=data["expiry"],
-        quantity=data["quantity"],
-        direction=PositionDirection(data["direction"]),
-        entry_price=data.get("entry_price"),
-        implied_volatility=data.get("implied_volatility"),
-        quality=QualityState(data["quality"]) if data.get("quality") else None,
-        provenance=_prov_from_dict(data.get("provenance")),
-    )
+    return OptionLeg(option_type=Side(data["option_type"]), strike=data["strike"], expiry=data["expiry"],
+                     quantity=data["quantity"], direction=PositionDirection(data["direction"]),
+                     entry_price=data.get("entry_price"), implied_volatility=data.get("implied_volatility"),
+                     quality=QualityState(data["quality"]) if data.get("quality") else None,
+                     provenance=_prov_from_dict(data.get("provenance")))
 
 
 @dataclass(frozen=True)
@@ -168,19 +171,13 @@ class GateEvidence:
             raise ValueError("provenance must be Provenance or None")
 
     def to_dict(self) -> dict:
-        return {
-            "kind": self.kind,
-            "passed": self.passed,
-            "message": self.message,
-            "provenance": _prov_to_dict(self.provenance),
-        }
+        return {"kind": self.kind, "passed": self.passed, "message": self.message,
+                "provenance": _prov_to_dict(self.provenance)}
 
     @classmethod
     def from_dict(cls, data: dict) -> "GateEvidence":
-        return cls(
-            kind=data["kind"], passed=data["passed"], message=data["message"],
-            provenance=_prov_from_dict(data.get("provenance")),
-        )
+        return cls(kind=data["kind"], passed=data["passed"], message=data["message"],
+                   provenance=_prov_from_dict(data.get("provenance")))
 
 
 @dataclass(frozen=True)
@@ -224,41 +221,25 @@ class StrategyCandidate:
             raise ValueError("provenance must be Provenance or None")
 
     def to_dict(self) -> dict:
-        return {
-            "contract": "strategy_lifecycle.candidate",
-            "version": STRATEGY_LIFECYCLE_CONTRACT_VERSION,
-            "candidate_id": self.candidate_id,
-            "opportunity_id": self.opportunity_id,
-            "strategy_id": self.strategy_id,
-            "legs": [_leg_to_dict(leg) for leg in self.legs],
-            "selected_strike_ids": list(self.selected_strike_ids),
-            "expected_behavior": self.expected_behavior.value,
-            "invalidation": self.invalidation,
-            "evaluation": self.evaluation.to_dict(),
-            "lifecycle_state": self.lifecycle_state.value,
-            "confidence": self.confidence,
-            "quality": _quality_to_dict(self.quality),
-            "reference_timestamp": self.reference_timestamp.isoformat(),
-            "provenance": _prov_to_dict(self.provenance),
-        }
+        return {"contract": "strategy_lifecycle.candidate", "version": STRATEGY_LIFECYCLE_CONTRACT_VERSION,
+                "candidate_id": self.candidate_id, "opportunity_id": self.opportunity_id,
+                "strategy_id": self.strategy_id, "legs": [_leg_to_dict(leg) for leg in self.legs],
+                "selected_strike_ids": list(self.selected_strike_ids), "expected_behavior": self.expected_behavior.value,
+                "invalidation": self.invalidation, "evaluation": self.evaluation.to_dict(),
+                "lifecycle_state": self.lifecycle_state.value, "confidence": self.confidence,
+                "quality": _quality_to_dict(self.quality), "reference_timestamp": self.reference_timestamp.isoformat(),
+                "provenance": _prov_to_dict(self.provenance)}
 
     @classmethod
     def from_dict(cls, data: dict) -> "StrategyCandidate":
-        return cls(
-            candidate_id=data["candidate_id"],
-            opportunity_id=data["opportunity_id"],
-            strategy_id=data["strategy_id"],
-            legs=tuple(_leg_from_dict(x) for x in data["legs"]),
-            selected_strike_ids=tuple(data["selected_strike_ids"]),
-            expected_behavior=ExpectedBehavior(data["expected_behavior"]),
-            invalidation=data["invalidation"],
-            evaluation=StrategyEvaluationResult.from_dict(data["evaluation"]),
-            lifecycle_state=StrategyLifecycleState(data["lifecycle_state"]),
-            confidence=data.get("confidence"),
-            quality=_quality_from_dict(data.get("quality")),
-            reference_timestamp=datetime.fromisoformat(data["reference_timestamp"]),
-            provenance=_prov_from_dict(data.get("provenance")),
-        )
+        return cls(candidate_id=data["candidate_id"], opportunity_id=data["opportunity_id"], strategy_id=data["strategy_id"],
+                   legs=tuple(_leg_from_dict(x) for x in data["legs"]), selected_strike_ids=tuple(data["selected_strike_ids"]),
+                   expected_behavior=ExpectedBehavior(data["expected_behavior"]), invalidation=data["invalidation"],
+                   evaluation=StrategyEvaluationResult.from_dict(data["evaluation"]),
+                   lifecycle_state=StrategyLifecycleState(data["lifecycle_state"]), confidence=data.get("confidence"),
+                   quality=_quality_from_dict(data.get("quality")),
+                   reference_timestamp=datetime.fromisoformat(data["reference_timestamp"]),
+                   provenance=_prov_from_dict(data.get("provenance")))
 
 
 @dataclass(frozen=True)
@@ -302,32 +283,22 @@ class StrategyGateResult:
             raise ValueError("ELIGIBLE status must set eligible=True")
 
     def to_dict(self) -> dict:
-        return {
-            "contract": "strategy_lifecycle.gate_result",
-            "version": STRATEGY_LIFECYCLE_CONTRACT_VERSION,
-            "status": self.status.value,
-            "candidate": self.candidate.to_dict() if self.candidate else None,
-            "lifecycle_state": self.lifecycle_state.value,
-            "eligible": self.eligible,
-            "blocking_reasons": [x.to_dict() for x in self.blocking_reasons],
-            "evidence": [x.to_dict() for x in self.evidence],
-            "confidence": self.confidence,
-            "quality": _quality_to_dict(self.quality),
-            "reference_timestamp": self.reference_timestamp.isoformat() if self.reference_timestamp else None,
-            "provenance": _prov_to_dict(self.provenance),
-        }
+        return {"contract": "strategy_lifecycle.gate_result", "version": STRATEGY_LIFECYCLE_CONTRACT_VERSION,
+                "status": self.status.value, "candidate": self.candidate.to_dict() if self.candidate else None,
+                "lifecycle_state": self.lifecycle_state.value, "eligible": self.eligible,
+                "blocking_reasons": [x.to_dict() for x in self.blocking_reasons],
+                "evidence": [x.to_dict() for x in self.evidence], "confidence": self.confidence,
+                "quality": _quality_to_dict(self.quality),
+                "reference_timestamp": self.reference_timestamp.isoformat() if self.reference_timestamp else None,
+                "provenance": _prov_to_dict(self.provenance)}
 
     @classmethod
     def from_dict(cls, data: dict) -> "StrategyGateResult":
-        return cls(
-            status=GateStatus(data["status"]),
-            candidate=StrategyCandidate.from_dict(data["candidate"]) if data.get("candidate") else None,
-            lifecycle_state=StrategyLifecycleState(data["lifecycle_state"]),
-            eligible=data["eligible"],
-            blocking_reasons=tuple(BlockingReason.from_dict(x) for x in data.get("blocking_reasons", [])),
-            evidence=tuple(GateEvidence.from_dict(x) for x in data.get("evidence", [])),
-            confidence=data.get("confidence"),
-            quality=_quality_from_dict(data.get("quality")),
-            reference_timestamp=datetime.fromisoformat(data["reference_timestamp"]) if data.get("reference_timestamp") else None,
-            provenance=_prov_from_dict(data.get("provenance")),
-        )
+        return cls(status=GateStatus(data["status"]),
+                   candidate=StrategyCandidate.from_dict(data["candidate"]) if data.get("candidate") else None,
+                   lifecycle_state=StrategyLifecycleState(data["lifecycle_state"]), eligible=data["eligible"],
+                   blocking_reasons=tuple(BlockingReason.from_dict(x) for x in data.get("blocking_reasons", [])),
+                   evidence=tuple(GateEvidence.from_dict(x) for x in data.get("evidence", [])),
+                   confidence=data.get("confidence"), quality=_quality_from_dict(data.get("quality")),
+                   reference_timestamp=datetime.fromisoformat(data["reference_timestamp"]) if data.get("reference_timestamp") else None,
+                   provenance=_prov_from_dict(data.get("provenance")))
