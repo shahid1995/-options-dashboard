@@ -84,7 +84,7 @@ class StrategyCandidate:
     legs: tuple[OptionLeg, ...]
     selected_strike_ids: tuple[str, ...]
     expected_behavior: ExpectedBehavior
-    invalidation: str
+    invalidation_conditions: tuple[str, ...]
     evaluation: StrategyEvaluationResult
     lifecycle_state: StrategyLifecycleState
     confidence: float | None
@@ -114,7 +114,7 @@ def evaluate_strategy_gate(
     strategy_id: str | None = None,
     legs: tuple[OptionLeg, ...] = (),
     expected_behavior: ExpectedBehavior | None = None,
-    invalidation: str | None = None,
+    invalidation_conditions: tuple[str, ...] | None = None,
     reference_timestamp: datetime | None = None,
     confidence: float | None = None,
     quality: QualityResult | None = None,

@@ -59,7 +59,7 @@ def evaluate_strategy_gate(
     strategy_id: str | None = None,
     legs: tuple[OptionLeg, ...] = (),
     expected_behavior: ExpectedBehavior | None = None,
-    invalidation: str | None = None,
+    invalidation_conditions: tuple[str, ...] | None = None,
     reference_timestamp: datetime | None = None,
     confidence: float | None = None,
     quality: QualityResult | None = None,
@@ -153,6 +153,15 @@ def evaluate_strategy_gate(
     }
     if reasons:
         invalid = any(r.code in invalid_codes for r in reasons)
+        # Invalid timestamps never enter the result contract: a naive
+        # reference is reported via the blocking reason and carried as None.
+        carried_reference = (
+            resolved_reference
+            if resolved_reference is not None
+            and resolved_reference.tzinfo is not None
+            and resolved_reference.tzinfo.utcoffset(resolved_reference) is not None
+            else None
+        )
         return StrategyGateResult(
             status=GateStatus.INVALID if invalid else GateStatus.BLOCKED,
             candidate=None,
@@ -162,7 +171,7 @@ def evaluate_strategy_gate(
             evidence=tuple(evidence),
             confidence=resolved_confidence,
             quality=resolved_quality,
-            reference_timestamp=resolved_reference,
+            reference_timestamp=carried_reference,
             provenance=opportunity.provenance if isinstance(opportunity, Opportunity) else None,
         )
 
@@ -173,7 +182,7 @@ def evaluate_strategy_gate(
         legs=legs,
         selected_strike_ids=strike_ids,
         expected_behavior=expected_behavior or opportunity.expected_behavior,
-        invalidation=invalidation or opportunity.invalidation,
+        invalidation_conditions=invalidation_conditions or opportunity.invalidation_conditions,
         evaluation=evaluation,
         lifecycle_state=StrategyLifecycleState.ELIGIBLE,
         confidence=resolved_confidence,

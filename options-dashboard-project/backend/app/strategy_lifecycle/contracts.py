@@ -188,7 +188,7 @@ class StrategyCandidate:
     legs: tuple[OptionLeg, ...]
     selected_strike_ids: tuple[str, ...]
     expected_behavior: ExpectedBehavior
-    invalidation: str
+    invalidation_conditions: tuple[str, ...]
     evaluation: StrategyEvaluationResult
     lifecycle_state: StrategyLifecycleState
     confidence: float | None
@@ -206,7 +206,8 @@ class StrategyCandidate:
             raise ValueError("selected_strike_ids must be a non-empty tuple of strings")
         if not isinstance(self.expected_behavior, ExpectedBehavior):
             raise ValueError("expected_behavior must be ExpectedBehavior")
-        _require_text(self.invalidation, "invalidation")
+        if not isinstance(self.invalidation_conditions, tuple) or not self.invalidation_conditions or not all(isinstance(c, str) and c.strip() for c in self.invalidation_conditions):
+            raise ValueError("invalidation_conditions must be a non-empty tuple of non-blank strings")
         if not isinstance(self.evaluation, StrategyEvaluationResult):
             raise ValueError("evaluation must be StrategyEvaluationResult")
         if not isinstance(self.lifecycle_state, StrategyLifecycleState):
@@ -225,7 +226,8 @@ class StrategyCandidate:
                 "candidate_id": self.candidate_id, "opportunity_id": self.opportunity_id,
                 "strategy_id": self.strategy_id, "legs": [_leg_to_dict(leg) for leg in self.legs],
                 "selected_strike_ids": list(self.selected_strike_ids), "expected_behavior": self.expected_behavior.value,
-                "invalidation": self.invalidation, "evaluation": self.evaluation.to_dict(),
+                "invalidation_conditions": list(self.invalidation_conditions),
+                "evaluation": self.evaluation.to_dict(),
                 "lifecycle_state": self.lifecycle_state.value, "confidence": self.confidence,
                 "quality": _quality_to_dict(self.quality), "reference_timestamp": self.reference_timestamp.isoformat(),
                 "provenance": _prov_to_dict(self.provenance)}
@@ -234,7 +236,8 @@ class StrategyCandidate:
     def from_dict(cls, data: dict) -> "StrategyCandidate":
         return cls(candidate_id=data["candidate_id"], opportunity_id=data["opportunity_id"], strategy_id=data["strategy_id"],
                    legs=tuple(_leg_from_dict(x) for x in data["legs"]), selected_strike_ids=tuple(data["selected_strike_ids"]),
-                   expected_behavior=ExpectedBehavior(data["expected_behavior"]), invalidation=data["invalidation"],
+                   expected_behavior=ExpectedBehavior(data["expected_behavior"]),
+                   invalidation_conditions=tuple(data["invalidation_conditions"]),
                    evaluation=StrategyEvaluationResult.from_dict(data["evaluation"]),
                    lifecycle_state=StrategyLifecycleState(data["lifecycle_state"]), confidence=data.get("confidence"),
                    quality=_quality_from_dict(data.get("quality")),
