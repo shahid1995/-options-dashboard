@@ -548,6 +548,73 @@ class TestIncompleteInvalidUnavailable:
         assert any(issue.code is CentralRiskIssueCode.INCOMPLETE_RISK_EVIDENCE
                    for issue in result.issues)
 
+    def test_partial_eval_verified_max_loss_violation_blocks(self):
+        # Day-31 PARTIAL (liquidity incomplete) yet the payoff dimension is
+        # independently AVAILABLE with a verified 100k loss vs a 50k cap:
+        # BLOCKED must win over PARTIAL (violations never hide behind
+        # incomplete evidence).
+        partial = _evaluation(status_hint="partial",
+                              payoff=_payoff(max_loss=-100000.0))
+        candidate = _candidate_from_evaluation(partial)
+        result = assess_candidate_risk(
+            candidate, _policy(maximum_standalone_loss=50000.0))
+        assert result.status is CentralRiskStatus.BLOCKED
+        failed = {r.rule for r in result.policy_assessment.rules
+                  if r.passed is False}
+        assert PolicyRuleCode.MAX_STANDALONE_LOSS in failed
+        # The incomplete-evidence information is retained, not discarded.
+        assert any(issue.code is CentralRiskIssueCode.INCOMPLETE_RISK_EVIDENCE
+                   for issue in result.issues)
+
+    def test_partial_eval_verified_scenario_loss_violation_blocks(self):
+        # Scenario dimension independently AVAILABLE with a worst supplied
+        # scenario loss of 100 vs a 50 cap -> BLOCKED.
+        partial = _evaluation(
+            status_hint="partial",
+            scenario_points=_points(10000.0, 20000.0, 30000.0))
+        assert partial.scenario_assessment.min_pnl == -100.0
+        candidate = _candidate_from_evaluation(partial)
+        result = assess_candidate_risk(
+            candidate, _policy(maximum_scenario_loss=50.0))
+        assert result.status is CentralRiskStatus.BLOCKED
+        failed = {r.rule for r in result.policy_assessment.rules
+                  if r.passed is False}
+        assert PolicyRuleCode.MAX_SCENARIO_LOSS in failed
+        assert any(issue.code is CentralRiskIssueCode.INCOMPLETE_RISK_EVIDENCE
+                   for issue in result.issues)
+
+    def test_partial_eval_unverifiable_rule_never_fabricates_violation(self):
+        # PARTIAL payoff carries no max-loss value: MAX_STANDALONE_LOSS has
+        # no evidence to verify against. No violation is invented and the
+        # result stays PARTIAL (missing evidence stays missing, never a
+        # fabricated violation nor a false PASS).
+        partial = _evaluation(
+            status_hint="partial",
+            payoff=_payoff(state=DimensionState.PARTIAL, max_profit=None,
+                           max_loss=None, breakevens=()))
+        candidate = _candidate_from_evaluation(partial)
+        result = assess_candidate_risk(
+            candidate, _policy(maximum_standalone_loss=50000.0))
+        assert result.status is CentralRiskStatus.PARTIAL
+        assert result.blocking_reasons == ()
+        rule = next(r for r in result.policy_assessment.rules
+                    if r.rule is PolicyRuleCode.MAX_STANDALONE_LOSS)
+        assert rule.passed is None
+        assert rule.observed is None
+
+    def test_partial_eval_invalid_structure_stays_invalid(self):
+        # INVALID (structurally unsupported) outranks BLOCKED even when a
+        # policy violation would otherwise be verifiable from a PARTIAL
+        # upstream evaluation.
+        partial = _evaluation(status_hint="partial",
+                              payoff=_payoff(max_loss=-100000.0))
+        bad_legs = (_leg(quantity=0.0),)
+        candidate = _candidate_from_evaluation(partial, legs=bad_legs)
+        result = assess_candidate_risk(
+            candidate, _policy(maximum_standalone_loss=50000.0))
+        assert result.status is CentralRiskStatus.INVALID
+        assert result.blocking_reasons == ()
+
     def test_unavailable_evaluation_is_unavailable(self):
         unavailable = _evaluation(status_hint="unavailable")
         assert unavailable.status is StrategyEvaluationStatus.UNAVAILABLE

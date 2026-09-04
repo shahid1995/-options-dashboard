@@ -17,9 +17,13 @@ Decision ladder (deterministic, evidence-backed)
 2. ``UNAVAILABLE`` — the Day-31 evaluation is UNAVAILABLE (risk cannot be
    meaningfully assessed from supplied inputs).
 3. ``PARTIAL`` — the Day-31 evaluation is PARTIAL or a configured policy
-   rule is not verifiable because required evidence is missing.
-4. ``BLOCKED`` — every verifiable rule is checked; any verified violation
-   blocks with the failing rule exposed in ``blocking_reasons``.
+   rule is not verifiable because required evidence is missing, AND no
+   policy rule is verified as violated.
+4. ``BLOCKED`` — every independently verifiable rule is checked; any
+   verified violation (including one riding on an otherwise-PARTIAL Day-31
+   evaluation) blocks with the failing rule exposed in
+   ``blocking_reasons`` — a verified violation never hides behind
+   incomplete evidence.
 5. ``PASS`` — the Day-31 evaluation is SUCCESS, every applicable rule is
    verifiable, and all pass.
 
@@ -190,16 +194,18 @@ def assess_candidate_risk(
                   scenario_risk.provenance),
     ])
 
-    # PARTIAL evaluation -> incomplete evidence -> PARTIAL (never PASS).
-    if evaluation.status is StrategyEvaluationStatus.PARTIAL:
+    # PARTIAL Day-31 evaluation: note the incomplete evidence, but do NOT
+    # short-circuit here -- a verified standalone policy violation must not
+    # hide behind incomplete evidence.  Independently verifiable policy
+    # rules are evaluated below; only rules whose required evidence is
+    # actually available can produce a verified violation (missing evidence
+    # stays unverifiable, never zero/favourable).
+    evaluation_partial = evaluation.status is StrategyEvaluationStatus.PARTIAL
+    if evaluation_partial:
         issues.append(RiskIssue(
             code=CentralRiskIssueCode.INCOMPLETE_RISK_EVIDENCE,
             message="Day-31 evaluation is PARTIAL; required evidence is "
                     "incomplete"))
-        return _compose(candidate, policy, evaluation, structural,
-                        CentralRiskStatus.PARTIAL, (), issues, evidence,
-                        resolved_reference, payoff_risk=payoff_risk,
-                        greek_risk=greek_risk, scenario_risk=scenario_risk)
 
     # -- policy rules -------------------------------------------------------
     rules, rule_evidence, rule_issues = _evaluate_policy(
@@ -209,13 +215,21 @@ def assess_candidate_risk(
     issues.extend(rule_issues)
 
     failed = tuple(r for r in rules if r.passed is False)
-    unverifiable = any(r.passed is None for r in rules)
     if failed:
         return _compose(candidate, policy, evaluation, structural,
                         CentralRiskStatus.BLOCKED, failed, issues, evidence,
                         resolved_reference, payoff_risk=payoff_risk,
                         greek_risk=greek_risk, scenario_risk=scenario_risk,
                         rules=rules)
+    if evaluation_partial:
+        # No verified violation; the incomplete upstream evidence keeps the
+        # result PARTIAL (never a false PASS).
+        return _compose(candidate, policy, evaluation, structural,
+                        CentralRiskStatus.PARTIAL, (), issues, evidence,
+                        resolved_reference, payoff_risk=payoff_risk,
+                        greek_risk=greek_risk, scenario_risk=scenario_risk,
+                        rules=rules)
+    unverifiable = any(r.passed is None for r in rules)
     if unverifiable:
         issues.append(RiskIssue(
             code=CentralRiskIssueCode.INCOMPLETE_RISK_EVIDENCE,
