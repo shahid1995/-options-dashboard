@@ -45,6 +45,7 @@ from app.portfolio_intelligence.contracts import (
     ExposureSlice,
     GexSourceTotal,
     GreekContribution,
+    GreekSourceTotal,
     LargestAbsoluteExposure,
     PortfolioAnalyticsResult,
     PortfolioExposure,
@@ -91,11 +92,7 @@ def _empty_exposure_views(positions: tuple[PortfolioPosition, ...]) -> tuple:
     )
     empty_greeks = PortfolioGreekExposure(
         state=EvidenceState.UNAVAILABLE,
-        delta_total=None,
-        gamma_total=None,
-        theta_total=None,
-        vega_total=None,
-        rho_total=None,
+        by_source=(),
         sources=(),
         contributions=(),
         missing_positions=tuple(p.position_id for p in positions),
@@ -221,11 +218,7 @@ def _greek_view(positions: tuple[PortfolioPosition, ...]) -> PortfolioGreekExpos
     if not present:
         return PortfolioGreekExposure(
             state=EvidenceState.UNAVAILABLE,
-            delta_total=None,
-            gamma_total=None,
-            theta_total=None,
-            vega_total=None,
-            rho_total=None,
+            by_source=(),
             sources=(),
             contributions=(),
             missing_positions=tuple(p.position_id for p in positions),
@@ -258,45 +251,88 @@ def _greek_view(positions: tuple[PortfolioPosition, ...]) -> PortfolioGreekExpos
             )
         )
 
-    def _total(name: str) -> float | None:
-        values = [
-            getattr(c, name) for c in contributions
-            if getattr(c, name) is not None
-        ]
-        return round(sum(float(v) for v in values), 10) if values else None
+    def _scaled(p: PortfolioPosition, name: str) -> float | None:
+        value = getattr(p.greeks, name)
+        return (value * p.signed_quantity
+                if value is not None else None)
 
-    totals = {name: _total(name) for name in _GREEK_NAMES}
+    # Source-separated totals: broker and model evidence NEVER mix in one
+    # number (same architectural principle as the portfolio GEX view).  One
+    # ``GreekSourceTotal`` per contributing source, in deterministic sorted
+    # source order.
+    sources = tuple(sorted({p.greeks.source for p in present}))
+    per_source: list[GreekSourceTotal] = []
+    overall_unavailable = False
+    overall_partial = False
+    for source in sources:
+        members = [p for p in present if p.greeks.source == source]
+        supplied: dict[str, list[float]] = {name: [] for name in _GREEK_NAMES}
+        contributing_ids: list[str] = []
+        missing_ids: list[str] = []
+        for p in members:
+            per_position = [
+                name for name in _GREEK_NAMES
+                if _scaled(p, name) is not None
+            ]
+            if not per_position:
+                missing_ids.append(p.position_id)
+                continue
+            contributing_ids.append(p.position_id)
+            for name in per_position:
+                supplied[name].append(float(_scaled(p, name)))  # type: ignore[arg-type]
+            for name in _GREEK_NAMES:
+                if name not in per_position:
+                    missing_ids.append(p.position_id)
+        totals = {
+            name: (round(sum(vals), 10) if vals else None)
+            for name, vals in supplied.items()
+        }
+        if not contributing_ids:
+            source_state = EvidenceState.UNAVAILABLE
+        elif missing_ids:
+            source_state = EvidenceState.PARTIAL
+        else:
+            source_state = EvidenceState.AVAILABLE
+        per_source.append(GreekSourceTotal(
+            source=source,
+            delta_total=totals["delta"],
+            gamma_total=totals["gamma"],
+            theta_total=totals["theta"],
+            vega_total=totals["vega"],
+            rho_total=totals["rho"],
+            contributing_positions=tuple(contributing_ids),
+            missing_positions=tuple(dict.fromkeys(missing_ids)),
+            state=source_state,
+        ))
+        if source_state is EvidenceState.UNAVAILABLE:
+            overall_unavailable = True
+        elif source_state is EvidenceState.PARTIAL:
+            overall_partial = True
+
     missing_positions = tuple(
         p.position_id for p in present
         if any(getattr(p.greeks, name) is None for name in _GREEK_NAMES)
     )
-    sources = tuple(sorted({p.greeks.source for p in present}))
 
-    any_present = any(v is not None for v in totals.values())
-    all_present = all(
-        getattr(p.greeks, name) is not None for p in present for name in _GREEK_NAMES
-    )
-    if not any_present:
-        state = EvidenceState.UNAVAILABLE
-    elif all_present:
-        state = EvidenceState.AVAILABLE
-    else:
+    if overall_partial:
         state = EvidenceState.PARTIAL
         issues.append(PortfolioIssue(
             code=PortfolioIssueCode.PARTIAL_EVIDENCE,
-            message="Some positions lack one or more per-unit Greeks; totals "
-                    "cover only supplied values and missing Greeks never "
-                    "contribute zero.",
+            message="Some positions lack one or more per-unit Greeks; each "
+                    "source total covers only supplied values and missing "
+                    "Greeks never contribute zero.",
             field="greeks",
         ))
+    elif overall_unavailable and not any(
+        entry.state is EvidenceState.AVAILABLE for entry in per_source
+    ):
+        state = EvidenceState.UNAVAILABLE
+    else:
+        state = EvidenceState.AVAILABLE
 
     return PortfolioGreekExposure(
         state=state,
-        delta_total=totals["delta"],
-        gamma_total=totals["gamma"],
-        theta_total=totals["theta"],
-        vega_total=totals["vega"],
-        rho_total=totals["rho"],
+        by_source=tuple(per_source),
         sources=sources,
         contributions=tuple(contributions),
         missing_positions=missing_positions,

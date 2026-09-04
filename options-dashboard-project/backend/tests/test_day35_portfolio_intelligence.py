@@ -329,11 +329,15 @@ class TestGreekAnalytics:
         ])
         g = result.greeks
         assert g.state is EvidenceState.AVAILABLE
-        assert g.delta_total == pytest.approx(2.0 * 0.5 - 1.0 * 0.6)
-        assert g.gamma_total == pytest.approx(2.0 * 0.0002 - 0.0001)
-        assert g.theta_total == pytest.approx(2.0 * -5.0 - 1.0 * -3.0)
-        assert g.vega_total == pytest.approx(2.0 * 4.0 - 2.0)
-        assert g.rho_total == pytest.approx(2.0 * 1.0 - 0.5)
+        # Single source (MODEL by default) -> its totals are exposed alone.
+        assert len(g.by_source) == 1
+        src = g.by_source[0]
+        assert src.source == GREEKS_SOURCE_MODEL
+        assert src.delta_total == pytest.approx(2.0 * 0.5 - 1.0 * 0.6)
+        assert src.gamma_total == pytest.approx(2.0 * 0.0002 - 0.0001)
+        assert src.theta_total == pytest.approx(2.0 * -5.0 - 1.0 * -3.0)
+        assert src.vega_total == pytest.approx(2.0 * 4.0 - 2.0)
+        assert src.rho_total == pytest.approx(2.0 * 1.0 - 0.5)
 
     def test_missing_greek_is_not_zero(self):
         result = _analyze([
@@ -342,7 +346,9 @@ class TestGreekAnalytics:
         ])
         g = result.greeks
         # Delta available for one of two positions -> PARTIAL, sum over present
-        assert g.delta_total == pytest.approx(1.0)
+        assert len(g.by_source) == 1
+        assert g.by_source[0].source == GREEKS_SOURCE_MODEL
+        assert g.by_source[0].delta_total == pytest.approx(1.0)
         assert g.state is EvidenceState.PARTIAL
         assert "b" in g.missing_positions
 
@@ -352,7 +358,13 @@ class TestGreekAnalytics:
                                                  theta=None, vega=None,
                                                  rho=None)),
         ])
-        assert result.greeks.delta_total is None
+        # The MODEL source was attempted but supplied no Greek -> the
+        # source entry is UNAVAILABLE with every total None (never zero).
+        assert len(result.greeks.by_source) == 1
+        src = result.greeks.by_source[0]
+        assert src.source == GREEKS_SOURCE_MODEL
+        assert src.state is EvidenceState.UNAVAILABLE
+        assert src.delta_total is None
         assert result.greeks.state is EvidenceState.UNAVAILABLE
 
     def test_no_greeks_at_all_unavailable(self):
@@ -370,6 +382,147 @@ class TestGreekAnalytics:
         assert sources == {GREEKS_SOURCE_MODEL, GREEKS_SOURCE_BROKER}
         # Broker and model greeks are never silently mixed in one total.
         assert result.greeks.sources == (GREEKS_SOURCE_BROKER, GREEKS_SOURCE_MODEL)
+
+    def test_broker_and_model_delta_never_mix_into_one_total(self):
+        """The confirmed defect: BROKER +50 and MODEL -20 must NOT become +30.
+
+        Source identity must survive at aggregate level; no synthetic
+        combined total may exist.
+        """
+        result = _analyze([
+            _pos(position_id="broker-pos", greeks=_greeks(
+                delta=50.0, source=GREEKS_SOURCE_BROKER)),
+            _pos(position_id="model-pos", greeks=_greeks(
+                delta=-20.0, source=GREEKS_SOURCE_MODEL)),
+        ])
+        by_source = {entry.source: entry
+                     for entry in result.greeks.by_source}
+        assert set(by_source) == {GREEKS_SOURCE_BROKER, GREEKS_SOURCE_MODEL}
+        assert by_source[GREEKS_SOURCE_BROKER].delta_total == pytest.approx(50.0)
+        assert by_source[GREEKS_SOURCE_MODEL].delta_total == pytest.approx(-20.0)
+        # The contract exposes NO mixed scalar total (nor any other field
+        # that could hide broker+model in one number).
+        assert not hasattr(result.greeks, "delta_total")
+        payload = json.dumps(portfolio_result_to_dict(result))
+        assert '"delta_total": 30' not in payload
+
+    def test_broker_only_aggregation_exposed_normally(self):
+        result = _analyze([
+            _pos(position_id="a", quantity=2.0, greeks=_greeks(
+                delta=0.5, gamma=0.0002, theta=-5.0, vega=4.0, rho=1.0,
+                source=GREEKS_SOURCE_BROKER)),
+            _pos(position_id="b", quantity=1.0,
+                 direction=PositionDirection.SHORT,
+                 greeks=_greeks(delta=0.6, gamma=0.0001, theta=-3.0, vega=2.0,
+                                rho=0.5, source=GREEKS_SOURCE_BROKER)),
+        ])
+        assert len(result.greeks.by_source) == 1
+        src = result.greeks.by_source[0]
+        assert src.source == GREEKS_SOURCE_BROKER
+        assert src.delta_total == pytest.approx(2.0 * 0.5 - 1.0 * 0.6)
+        assert src.gamma_total == pytest.approx(2.0 * 0.0002 - 0.0001)
+        assert src.theta_total == pytest.approx(2.0 * -5.0 - 1.0 * -3.0)
+        assert src.vega_total == pytest.approx(2.0 * 4.0 - 2.0)
+        assert src.rho_total == pytest.approx(2.0 * 1.0 - 0.5)
+        assert src.state is EvidenceState.AVAILABLE
+        assert src.contributing_positions == ("a", "b")
+        assert src.missing_positions == ()
+
+    def test_model_only_aggregation_exposed_normally(self):
+        result = _analyze([
+            _pos(position_id="a", quantity=2.0, greeks=_greeks(delta=0.5)),
+            _pos(position_id="b", quantity=1.0,
+                 direction=PositionDirection.SHORT,
+                 greeks=_greeks(delta=0.6)),
+        ])
+        assert len(result.greeks.by_source) == 1
+        src = result.greeks.by_source[0]
+        assert src.source == GREEKS_SOURCE_MODEL
+        assert src.delta_total == pytest.approx(2.0 * 0.5 - 1.0 * 0.6)
+        assert src.state is EvidenceState.AVAILABLE
+
+    def test_all_five_greeks_preserve_source_separation(self):
+        result = _analyze([
+            _pos(position_id="b", greeks=_greeks(
+                delta=50.0, gamma=0.01, theta=-100.0, vega=40.0, rho=10.0,
+                source=GREEKS_SOURCE_BROKER)),
+            _pos(position_id="m", greeks=_greeks(
+                delta=-20.0, gamma=0.004, theta=30.0, vega=-5.0, rho=-2.0,
+                source=GREEKS_SOURCE_MODEL)),
+        ])
+        by = {entry.source: entry for entry in result.greeks.by_source}
+        assert by[GREEKS_SOURCE_BROKER].delta_total == pytest.approx(50.0)
+        assert by[GREEKS_SOURCE_MODEL].delta_total == pytest.approx(-20.0)
+        assert by[GREEKS_SOURCE_BROKER].gamma_total == pytest.approx(0.01)
+        assert by[GREEKS_SOURCE_MODEL].gamma_total == pytest.approx(0.004)
+        assert by[GREEKS_SOURCE_BROKER].theta_total == pytest.approx(-100.0)
+        assert by[GREEKS_SOURCE_MODEL].theta_total == pytest.approx(30.0)
+        assert by[GREEKS_SOURCE_BROKER].vega_total == pytest.approx(40.0)
+        assert by[GREEKS_SOURCE_MODEL].vega_total == pytest.approx(-5.0)
+        assert by[GREEKS_SOURCE_BROKER].rho_total == pytest.approx(10.0)
+        assert by[GREEKS_SOURCE_MODEL].rho_total == pytest.approx(-2.0)
+
+    def test_missing_model_greek_stays_missing_when_broker_present(self):
+        result = _analyze([
+            _pos(position_id="b", greeks=_greeks(
+                delta=50.0, source=GREEKS_SOURCE_BROKER)),
+            _pos(position_id="m", greeks=_greeks(
+                delta=None, gamma=0.004, theta=None, vega=None, rho=None,
+                source=GREEKS_SOURCE_MODEL)),
+        ])
+        by = {entry.source: entry for entry in result.greeks.by_source}
+        # Broker delta is observed; model delta is genuinely missing and is
+        # NEVER converted to zero.
+        assert by[GREEKS_SOURCE_BROKER].delta_total == pytest.approx(50.0)
+        assert by[GREEKS_SOURCE_MODEL].delta_total is None
+        assert by[GREEKS_SOURCE_MODEL].gamma_total == pytest.approx(0.004)
+        assert by[GREEKS_SOURCE_MODEL].state is EvidenceState.PARTIAL
+        assert result.greeks.state is EvidenceState.PARTIAL
+
+    def test_source_totals_traceable_with_quality_and_provenance(self):
+        result = _analyze([
+            _pos(position_id="b", greeks=_greeks(
+                delta=50.0, source=GREEKS_SOURCE_BROKER,
+                provenance=_prov("broker-greeks"))),
+            _pos(position_id="m", greeks=_greeks(
+                delta=-20.0, source=GREEKS_SOURCE_MODEL,
+                provenance=_prov("model-greeks"))),
+        ])
+        by = {entry.source: entry for entry in result.greeks.by_source}
+        assert by[GREEKS_SOURCE_BROKER].contributing_positions == ("b",)
+        assert by[GREEKS_SOURCE_MODEL].contributing_positions == ("m",)
+        contrib_by_id = {c.position_id: c for c in result.greeks.contributions}
+        assert contrib_by_id["b"].greeks_source == GREEKS_SOURCE_BROKER
+        assert contrib_by_id["b"].quality is QualityState.EXCELLENT
+        assert contrib_by_id["b"].provenance is not None
+        assert contrib_by_id["m"].greeks_source == GREEKS_SOURCE_MODEL
+        assert contrib_by_id["m"].quality is QualityState.EXCELLENT
+        assert contrib_by_id["m"].provenance is not None
+
+    def test_mixed_source_deterministic_order_and_round_trip(self):
+        def run():
+            return _analyze([
+                _pos(position_id="broker-pos", greeks=_greeks(
+                    delta=50.0, gamma=0.01, theta=-100.0, vega=40.0,
+                    rho=10.0, source=GREEKS_SOURCE_BROKER)),
+                _pos(position_id="model-pos", greeks=_greeks(
+                    delta=-20.0, gamma=0.004, theta=30.0, vega=-5.0,
+                    rho=-2.0, source=GREEKS_SOURCE_MODEL)),
+            ])
+
+        result = run()
+        assert [e.source for e in result.greeks.by_source] == [
+            GREEKS_SOURCE_BROKER, GREEKS_SOURCE_MODEL]
+        # Repeated execution is byte-identical.
+        assert json.dumps(portfolio_result_to_dict(result),
+                          sort_keys=True) == json.dumps(
+            portfolio_result_to_dict(run()), sort_keys=True)
+        # Deterministic serialization round-trips the separated totals.
+        restored = portfolio_result_from_dict(portfolio_result_to_dict(result))
+        assert [e.source for e in restored.greeks.by_source] == [
+            GREEKS_SOURCE_BROKER, GREEKS_SOURCE_MODEL]
+        assert restored.greeks.by_source[0].delta_total == pytest.approx(50.0)
+        assert restored.greeks.by_source[1].delta_total == pytest.approx(-20.0)
 
 
 # ---------------------------------------------------------------------------
@@ -999,7 +1152,10 @@ class TestGenuineIntegration:
         assert result.status is PortfolioStatus.SUCCESS
         assert result.exposure.position_count == 2
         assert result.exposure.signed_quantity_total == 1.0  # 2 - 1
-        assert result.greeks.delta_total == pytest.approx(0.5)
+        # Both paper rows carry MODEL greeks -> one source total.
+        assert len(result.greeks.by_source) == 1
+        assert result.greeks.by_source[0].source == GREEKS_SOURCE_MODEL
+        assert result.greeks.by_source[0].delta_total == pytest.approx(0.5)
 
     def test_genuine_day18_scenario_rows_consumed(self):
         """Scenario rows computed by the REAL Day-18 engine feed the view."""

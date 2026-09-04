@@ -402,22 +402,45 @@ class GreekContribution:
 
 
 @dataclass(frozen=True)
-class PortfolioGreekExposure:
-    """Aggregate per-unit Greeks scaled by signed quantity.
+class GreekSourceTotal:
+    """Exposure-scaled aggregate Greeks for ONE Greek source.
 
-    Every component total sums only the positions that supplied that Greek;
-    missing components stay ``None`` and the overall state reflects
-    incomplete coverage (``PARTIAL``) or total absence (``UNAVAILABLE``).
-    ``sources`` lists the contributing Greek sources sorted, so broker and
-    model greeks are visible and never silently mixed inside one component.
+    Mirror of ``GexSourceTotal``: broker-observed and model-derived Greek
+    evidence are NEVER summed into one number.  Each component total sums
+    only the positions OF THIS SOURCE that supplied that Greek; a missing
+    component stays ``None`` (never zero) and ``state`` reflects the source's
+    coverage (``AVAILABLE`` complete / ``PARTIAL`` incomplete /
+    ``UNAVAILABLE`` when the source supplied no usable Greek).
+    ``contributing_positions`` / ``missing_positions`` keep every total
+    traceable to its positions.
     """
 
-    state: EvidenceState
+    source: str
     delta_total: float | None
     gamma_total: float | None
     theta_total: float | None
     vega_total: float | None
     rho_total: float | None
+    contributing_positions: tuple[str, ...]
+    missing_positions: tuple[str, ...]
+    state: EvidenceState
+
+
+@dataclass(frozen=True)
+class PortfolioGreekExposure:
+    """Aggregate per-unit Greeks scaled by signed quantity, by Greek source.
+
+    ``by_source`` holds ONE ``GreekSourceTotal`` per contributing source
+    (deterministic sorted order), so broker and model evidence never mix in
+    an aggregate; when only one source exists it is exposed alone.  ``sources``
+    lists the contributing sources sorted; ``contributions`` preserves every
+    position's source/quality/provenance; missing components stay ``None``
+    and the overall state reflects incomplete coverage (``PARTIAL``) or
+    total absence (``UNAVAILABLE``).
+    """
+
+    state: EvidenceState
+    by_source: tuple[GreekSourceTotal, ...]
     sources: tuple[str, ...]
     contributions: tuple[GreekContribution, ...]
     missing_positions: tuple[str, ...]
@@ -752,6 +775,7 @@ __all__ = [
     "GexSourceTotal",
     "GreekContribution",
     "GreekInput",
+    "GreekSourceTotal",
     "LargestAbsoluteExposure",
     "PortfolioAnalyticsResult",
     "PortfolioExposure",
