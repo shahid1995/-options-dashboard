@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import ast
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -57,6 +57,7 @@ from app.final_risk_gate.contracts import (
     FINAL_RISK_GATE_CALCULATION_VERSION,
     FINAL_RISK_GATE_CONTRACT_VERSION,
     FinalRiskGateDimension,
+    FinalRiskGateInput,
     FinalRiskGateResult,
     FinalRiskIssueCode,
     FinalRiskPolicy,
@@ -69,7 +70,10 @@ from app.final_risk_gate.contracts import (
     final_gate_from_dict,
     final_gate_to_dict,
 )
-from app.final_risk_gate.gate import evaluate_final_gate
+from app.final_risk_gate.gate import (
+    evaluate_final_gate,
+    evaluate_final_risk_gate,
+)
 from app.market_data.contracts import Provenance, QualityState, Side
 from app.market_data.quality import QualityResult
 from app.portfolio_intelligence.analytics import analyze_portfolio
@@ -358,12 +362,16 @@ def _ranging_regime():
 def _policy(*, version: str = "final-policy-1.0",
             maximum_portfolio_delta: float | None = None,
             maximum_projected_delta: float | None = None,
-            maximum_concentration_share: float | None = None) -> FinalRiskPolicy:
+            maximum_concentration_share: float | None = None,
+            maximum_portfolio_age_seconds: float | None = None,
+            disallowed_regimes=()) -> FinalRiskPolicy:
     return FinalRiskPolicy(
         policy_version=version,
         maximum_portfolio_delta=maximum_portfolio_delta,
         maximum_projected_delta=maximum_projected_delta,
         maximum_concentration_share=maximum_concentration_share,
+        maximum_portfolio_age_seconds=maximum_portfolio_age_seconds,
+        disallowed_regimes=tuple(disallowed_regimes),
     )
 
 
@@ -400,6 +408,71 @@ class TestFinalRiskPolicyContract:
         assert policy.maximum_portfolio_delta is None
         assert policy.maximum_projected_delta is None
         assert policy.maximum_concentration_share is None
+        assert policy.maximum_portfolio_age_seconds is None
+        assert policy.disallowed_regimes == ()
+
+    def test_negative_age_cap_rejected(self):
+        with pytest.raises(ValueError):
+            FinalRiskPolicy(policy_version="p",
+                            maximum_portfolio_age_seconds=-5.0)
+
+    def test_disallowed_regimes_must_be_regime_labels(self):
+        from app.intelligence.contracts import RegimeLabel
+
+        with pytest.raises(ValueError):
+            FinalRiskPolicy(policy_version="p", disallowed_regimes=("X",))  # type: ignore[arg-type]
+        p = _policy(disallowed_regimes=(RegimeLabel.HIGH_VOLATILITY,))
+        assert p.disallowed_regimes == (RegimeLabel.HIGH_VOLATILITY,)
+
+    def test_policy_round_trip(self):
+        from app.intelligence.contracts import RegimeLabel
+
+        p = _policy(maximum_portfolio_age_seconds=60.0,
+                    disallowed_regimes=(RegimeLabel.HIGH_VOLATILITY,))
+        restored = FinalRiskPolicy.from_dict(p.to_dict())
+        assert restored == p
+
+
+class TestFinalRiskGateInput:
+    def test_input_bundle_validates_types(self):
+        inp = FinalRiskGateInput(
+            candidate=_candidate(), central_risk=_day33_result(),
+            portfolio=_empty_portfolio(), policy=_policy(),
+            tenant_id="tenant-A")
+        assert inp.candidate.candidate_id.startswith("candidate:")
+        with pytest.raises(ValueError):
+            FinalRiskGateInput(candidate="not-a-candidate",  # type: ignore[arg-type]
+                               central_risk=_day33_result(),
+                               portfolio=None, policy=_policy())
+        with pytest.raises(ValueError):
+            FinalRiskGateInput(candidate=_candidate(), central_risk="x",  # type: ignore[arg-type]
+                               portfolio=None, policy=_policy())
+        with pytest.raises(ValueError):
+            FinalRiskGateInput(candidate=_candidate(), central_risk=_day33_result(),
+                               portfolio=_empty_portfolio(), policy="x")  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            FinalRiskGateInput(candidate=_candidate(), central_risk=_day33_result(),
+                               portfolio=_empty_portfolio(), policy=_policy(),
+                               tenant_id="  ")
+
+    def test_canonical_entrypoint_parity_with_wrapper(self):
+        """The approved plan entrypoint ``evaluate_final_risk_gate`` accepts
+        the immutable input bundle and agrees with the positional wrapper."""
+        candidate = _candidate()
+        central = _day33_result(candidate=candidate)
+        portfolio = _portfolio(["p1"], regime=_ranging_regime())
+        policy = _policy(maximum_concentration_share=1.0)
+        via_bundle = evaluate_final_risk_gate(
+            FinalRiskGateInput(candidate=candidate, central_risk=central,
+                               portfolio=portfolio, policy=policy,
+                               tenant_id="tenant-A"),
+            reference_timestamp=REF)
+        via_wrapper = evaluate_final_gate(
+            candidate, central, portfolio, policy=policy,
+            reference_timestamp=REF, tenant_id="tenant-A")
+        assert via_bundle.status is via_wrapper.status
+        assert json.dumps(final_gate_to_dict(via_bundle), sort_keys=True) == \
+            json.dumps(final_gate_to_dict(via_wrapper), sort_keys=True)
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +743,63 @@ class TestConcentrationGate:
 
 
 class TestDirectionalAndRegime:
+    def test_directional_dimension_blocks_on_delta_cap(self):
+        pos = _portfolio_position(position_id="p1", tenant_id="tenant-A",
+                                  delta=60.0, greeks_source="MODEL")
+        portfolio = analyze_portfolio((pos,), regime=_ranging_regime(),
+                                      reference_timestamp=REF)
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(maximum_portfolio_delta=50.0),
+            reference_timestamp=REF, tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.BLOCKED
+        dim = next(d for d in result.dimensions
+                   if d.dimension is FinalRiskGateDimension.DIRECTIONAL)
+        assert dim.status is FinalRiskStatus.BLOCKED
+
+    def test_regime_disallowed_label_blocks(self):
+        from app.intelligence.contracts import MarketRegime, RegimeLabel
+
+        regime = MarketRegime(label=RegimeLabel.HIGH_VOLATILITY,
+                              source="day23.regime", model_version="2.1.0",
+                              reference_timestamp=REF)
+        portfolio = analyze_portfolio((_portfolio_position(),), regime=regime,
+                                      reference_timestamp=REF)
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(disallowed_regimes=(RegimeLabel.HIGH_VOLATILITY,)),
+            reference_timestamp=REF, tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.BLOCKED
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.REGIME_ALLOWLIST)
+        assert rule.passed is False
+
+    def test_regime_not_disallowed_passes(self):
+        from app.intelligence.contracts import RegimeLabel
+
+        portfolio = _portfolio(["p1"], regime=_ranging_regime())
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(disallowed_regimes=(RegimeLabel.HIGH_VOLATILITY,)),
+            reference_timestamp=REF, tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.PASS
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.REGIME_ALLOWLIST)
+        assert rule.passed is True
+
+    def test_unknown_regime_with_regime_rule_is_unverifiable(self):
+        from app.intelligence.contracts import RegimeLabel
+
+        portfolio = _portfolio(["p1"], regime=None)
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(disallowed_regimes=(RegimeLabel.HIGH_VOLATILITY,)),
+            reference_timestamp=REF, tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.PARTIAL
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.REGIME_ALLOWLIST)
+        assert rule.passed is None
+
     def test_directional_context_is_descriptive(self):
         portfolio = _portfolio(["p1"], regime=_ranging_regime())
         result = evaluate_final_gate(
@@ -706,6 +836,10 @@ class TestDirectionalAndRegime:
 
 class TestDataQuality:
     def test_missing_candidate_quality_recorded_never_invented(self):
+        """Quality/freshness failure (design + plan Task 2): a candidate with
+        no quality evidence can never produce a false PASS -- the gate is
+        deterministic PARTIAL and the CANDIDATE_QUALITY rule is
+        unverifiable."""
         candidate = _candidate()
         from app.strategy_lifecycle.contracts import StrategyCandidate
 
@@ -725,10 +859,48 @@ class TestDataQuality:
         result = evaluate_final_gate(
             no_quality, _day33_result(candidate=no_quality),
             _empty_portfolio(), policy=_policy(), reference_timestamp=REF)
+        assert result.status is FinalRiskStatus.PARTIAL
         quality_dim = next(d for d in result.dimensions
                            if d.dimension is FinalRiskGateDimension.DATA_QUALITY)
         assert quality_dim.status is FinalRiskStatus.PARTIAL
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.CANDIDATE_QUALITY)
+        assert rule.passed is None
         assert any("quality" in i.message.lower() for i in result.issues)
+
+    def test_stale_portfolio_analytics_blocked_by_freshness_cap(self):
+        portfolio = _portfolio(["p1"], regime=_ranging_regime())  # ref = REF
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(maximum_portfolio_age_seconds=60.0),
+            reference_timestamp=REF + timedelta(hours=1), tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.BLOCKED
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.MAX_PORTFOLIO_AGE)
+        assert rule.passed is False
+        assert rule.observed == pytest.approx(3600.0)
+
+    def test_fresh_portfolio_passes_freshness_cap(self):
+        portfolio = _portfolio(["p1"], regime=_ranging_regime())
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(maximum_portfolio_age_seconds=7200.0),
+            reference_timestamp=REF + timedelta(hours=1), tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.PASS
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.MAX_PORTFOLIO_AGE)
+        assert rule.passed is True
+
+    def test_future_dated_portfolio_freshness_unverifiable(self):
+        portfolio = _portfolio(["p1"], regime=_ranging_regime())
+        result = evaluate_final_gate(
+            _candidate(), _day33_result(), portfolio,
+            policy=_policy(maximum_portfolio_age_seconds=60.0),
+            reference_timestamp=REF - timedelta(hours=1), tenant_id="tenant-A")
+        assert result.status is FinalRiskStatus.PARTIAL
+        rule = next(r for r in result.policy.rules
+                    if r.rule is FinalRiskRuleCode.MAX_PORTFOLIO_AGE)
+        assert rule.passed is None
 
 
 class TestBoundaryNoExecution:

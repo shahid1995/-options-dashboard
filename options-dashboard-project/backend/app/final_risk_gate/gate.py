@@ -1,8 +1,8 @@
 """Day 36 — Deterministic Final Risk Gate engine.
 
-``evaluate_final_gate(candidate, central_risk, portfolio, *, policy,
-reference_timestamp=None, tenant_id=None)`` is a pure domain orchestrator.
-It consumes:
+``evaluate_final_risk_gate(gate_input: FinalRiskGateInput, *,
+reference_timestamp=None)`` is a pure domain orchestrator.  It consumes
+(through the immutable ``FinalRiskGateInput`` bundle):
 
 * an eligible Day-32 ``StrategyCandidate``;
 * the authoritative Day-33 ``CentralRiskResult`` (its verdict is consumed
@@ -10,7 +10,13 @@ It consumes:
 * a Day-35 ``PortfolioAnalyticsResult`` (genuine portfolio analytics;
   ``None`` means the required portfolio input is absent -> UNAVAILABLE);
 * an explicit, versioned ``FinalRiskPolicy``;
-* a caller-supplied reference timestamp (never the wall clock).
+* a caller-supplied reference timestamp (never the wall clock);
+* the caller's tenant/account context.
+
+A thin compatibility helper ``evaluate_final_gate(candidate, central_risk,
+portfolio, *, policy, reference_timestamp=None, tenant_id=None)`` wraps the
+positional call into a ``FinalRiskGateInput`` for callers that predate the
+input bundle.
 
 Decision ladder (deterministic, evidence-backed)
 ------------------------------------------------
@@ -29,6 +35,9 @@ Decision ladder (deterministic, evidence-backed)
 Rules implemented
 -----------------
 * ``CENTRAL_RISK_PASS`` -- always evaluated: True only when Day-33 PASS.
+* ``CANDIDATE_QUALITY`` -- always evaluated: True when the candidate
+  carries quality evidence; None (unverifiable) when quality is missing --
+  missing quality can never be manufactured into a PASS.
 * ``MAX_PORTFOLIO_DELTA`` -- cap on the worst per-source current portfolio
   net-delta magnitude (source separated); not verifiable when no source
   supplies a delta.
@@ -39,9 +48,16 @@ Rules implemented
   when no source shares both sides.
 * ``MAX_CONCENTRATION_SHARE`` -- cap on the largest concentration slice
   share of the current portfolio; not verifiable for an empty portfolio.
+* ``MAX_PORTFOLIO_AGE`` -- cap on the age of the supplied Day-35 portfolio
+  analytics measured against the caller-supplied reference timestamp;
+  future-dated analytics are not verifiable (never silently fresh).
+* ``REGIME_ALLOWLIST`` -- explicit policy over the authoritative Day-23
+  regime label: a known label on the configured disallowed list blocks;
+  a label never manufactures direction -- an unknown regime makes the rule
+  unverifiable (never guessed).
 
-No numeric limit is ever invented: a ``None`` policy field means that rule
-is not configured and cannot block or manufacture a PASS requirement.
+No numeric limit is ever invented: a ``None``/empty policy field means that
+rule is not configured and cannot block or manufacture a PASS requirement.
 Dimension sub-statuses are informational evidence states; only configured
 rules and the upstream Day-33/portfolio verdicts move the overall ladder.
 """
@@ -54,10 +70,12 @@ from app.central_risk.contracts import (
     CentralRiskResult,
     CentralRiskStatus,
 )
+from app.intelligence.contracts import RegimeLabel
 from app.final_risk_gate.contracts import (
     FINAL_RISK_GATE_CALCULATION_VERSION,
     FINAL_RISK_GATE_CONTRACT_VERSION,
     FinalRiskGateDimension,
+    FinalRiskGateInput,
     FinalRiskGateResult,
     FinalRiskIssueCode,
     FinalRiskPolicy,
@@ -109,34 +127,30 @@ def _rule(rule: FinalRiskRuleCode, passed: bool | None, message: str,
                           limit=limit, observed=observed)
 
 
-def evaluate_final_gate(
-    candidate: StrategyCandidate,
-    central_risk: CentralRiskResult,
-    portfolio: PortfolioAnalyticsResult | None,
+def evaluate_final_risk_gate(
+    gate_input: FinalRiskGateInput,
     *,
-    policy: FinalRiskPolicy,
     reference_timestamp: datetime | None = None,
-    tenant_id: str | None = None,
 ) -> FinalRiskGateResult:
     """Evaluate the final risk gate for one strategy candidate.
 
-    ``candidate`` must be the eligible Day-32 StrategyCandidate that
-    produced ``central_risk``; ``portfolio`` is the genuine Day-35
-    portfolio analytics of the account the candidate would be added to
-    (``None`` is a deterministic UNAVAILABLE, never a pass).  The reference
-    timestamp is caller-supplied; when omitted the Day-33 result's own
-    reference timestamp is used.  The engine never reads the wall clock and
-    never touches a broker, database, network or filesystem.
+    ``gate_input`` binds the eligible Day-32 ``StrategyCandidate`` that
+    produced the Day-33 ``CentralRiskResult``, the genuine Day-35 portfolio
+    analytics of the account the candidate would be added to (``None`` is a
+    deterministic UNAVAILABLE, never a pass), the explicit ``FinalRiskPolicy``
+    and the caller's tenant context.  The reference timestamp is
+    caller-supplied; when omitted the Day-33 result's own reference
+    timestamp is used.  The engine never reads the wall clock and never
+    touches a broker, database, network or filesystem.
     """
-    if not isinstance(candidate, StrategyCandidate):
-        raise ValueError("evaluate_final_gate requires a StrategyCandidate")
-    if not isinstance(central_risk, CentralRiskResult):
-        raise ValueError("evaluate_final_gate requires a CentralRiskResult")
-    if portfolio is not None and not isinstance(portfolio,
-                                                PortfolioAnalyticsResult):
-        raise ValueError("portfolio must be a PortfolioAnalyticsResult or None")
-    if not isinstance(policy, FinalRiskPolicy):
-        raise ValueError("evaluate_final_gate requires a FinalRiskPolicy")
+    if not isinstance(gate_input, FinalRiskGateInput):
+        raise ValueError(
+            "evaluate_final_risk_gate requires a FinalRiskGateInput")
+    candidate = gate_input.candidate
+    central_risk = gate_input.central_risk
+    portfolio = gate_input.portfolio
+    policy = gate_input.policy
+    tenant_id = gate_input.tenant_id
 
     resolved_reference = (reference_timestamp
                           if reference_timestamp is not None
@@ -258,6 +272,61 @@ def evaluate_final_gate(
     rules: list[GateRuleResult] = []
     rules.append(_rule(FinalRiskRuleCode.CENTRAL_RISK_PASS, True,
                        "Day-33 central risk PASS"))
+
+    # CANDIDATE_QUALITY (always evaluated; required evidence completeness) --
+    # missing candidate quality can never be manufactured into a PASS.
+    if candidate.quality is not None:
+        rules.append(_rule(
+            FinalRiskRuleCode.CANDIDATE_QUALITY, True,
+            f"candidate quality {candidate.quality.quality_state.value} "
+            "present"))
+    else:
+        rules.append(_rule(
+            FinalRiskRuleCode.CANDIDATE_QUALITY, None,
+            "candidate carries no quality evidence; the final gate cannot "
+            "verify quality completeness (missing is never treated as safe)"))
+        issues.append(_issue(FinalRiskIssueCode.MISSING_CANDIDATE_QUALITY,
+                             "candidate carries no quality evidence"))
+
+    # MAX_PORTFOLIO_AGE (portfolio-analytics freshness vs the caller's
+    # reference timestamp; caller-supplied only -- never wall clock) --------
+    if policy.maximum_portfolio_age_seconds is not None:
+        age = (resolved_reference - portfolio.reference_timestamp).total_seconds()
+        if age < 0:
+            rules.append(_rule(
+                FinalRiskRuleCode.MAX_PORTFOLIO_AGE, None,
+                "portfolio analytics are dated in the future relative to the "
+                "reference timestamp; the freshness rule cannot be verified",
+                limit=policy.maximum_portfolio_age_seconds))
+        else:
+            rules.append(_rule(
+                FinalRiskRuleCode.MAX_PORTFOLIO_AGE,
+                age <= policy.maximum_portfolio_age_seconds,
+                f"portfolio analytics age {age:.0f}s vs policy maximum "
+                f"{policy.maximum_portfolio_age_seconds:.0f}s",
+                limit=policy.maximum_portfolio_age_seconds, observed=age))
+
+    # REGIME_ALLOWLIST (explicit policy over the authoritative Day-23 label;
+    # a label never manufactures direction -- it only matches the configured
+    # disallow list; an unknown regime makes the rule unverifiable) ---------
+    if policy.disallowed_regimes:
+        current_label = RegimeLabel(context.regime_label) \
+            if context.regime_label is not None else None
+        if current_label is None:
+            rules.append(_rule(
+                FinalRiskRuleCode.REGIME_ALLOWLIST, None,
+                "regime is unknown; the regime allow-list rule cannot be "
+                "verified (nothing is guessed from a missing label)"))
+        elif current_label in policy.disallowed_regimes:
+            rules.append(_rule(
+                FinalRiskRuleCode.REGIME_ALLOWLIST, False,
+                f"current regime {current_label.value} is on the configured "
+                "disallowed list"))
+        else:
+            rules.append(_rule(
+                FinalRiskRuleCode.REGIME_ALLOWLIST, True,
+                f"current regime {current_label.value} is not on the "
+                "configured disallowed list"))
 
     # MAX_PORTFOLIO_DELTA ---------------------------------------------------
     if policy.maximum_portfolio_delta is not None:
@@ -555,9 +624,6 @@ def _compose(candidate: StrategyCandidate,
         quality_dim = _PARTIAL
         quality_note = ("candidate carries no quality; recorded as "
                         "incomplete (never invented)")
-        if status is _PASS:
-            issues.append(_issue(FinalRiskIssueCode.MISSING_CANDIDATE_QUALITY,
-                                 "candidate carries no quality evidence"))
     dimensions.append(_dim(FinalRiskGateDimension.DATA_QUALITY, quality_dim,
                            quality_note))
 
@@ -585,4 +651,27 @@ def _compose(candidate: StrategyCandidate,
         reference_timestamp=reference,
         contract_version=FINAL_RISK_GATE_CONTRACT_VERSION,
         calculation_version=FINAL_RISK_GATE_CALCULATION_VERSION,
+    )
+
+
+def evaluate_final_gate(
+    candidate: StrategyCandidate,
+    central_risk: CentralRiskResult,
+    portfolio: PortfolioAnalyticsResult | None,
+    *,
+    policy: FinalRiskPolicy,
+    reference_timestamp: datetime | None = None,
+    tenant_id: str | None = None,
+) -> FinalRiskGateResult:
+    """Compatibility wrapper around :func:`evaluate_final_risk_gate`.
+
+    Bundles the positional inputs into a ``FinalRiskGateInput`` and calls
+    the canonical entrypoint.  New callers should use
+    ``evaluate_final_risk_gate(FinalRiskGateInput(...))`` directly.
+    """
+    return evaluate_final_risk_gate(
+        FinalRiskGateInput(candidate=candidate, central_risk=central_risk,
+                           portfolio=portfolio, policy=policy,
+                           tenant_id=tenant_id),
+        reference_timestamp=reference_timestamp,
     )

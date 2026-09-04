@@ -2,11 +2,9 @@
 
 Sits between Day-35 Portfolio Intelligence and the User Decision boundary:
 
-    eligible Day-32 StrategyCandidate
-        + Day-33 CentralRiskResult
-        + Day-35 PortfolioAnalyticsResult
-        + explicit FinalRiskPolicy + caller-supplied reference timestamp
-        -> evaluate_final_gate(...) -> FinalRiskGateResult
+    FinalRiskGateInput(candidate, central_risk, portfolio, policy, tenant_id)
+        + caller-supplied reference timestamp
+        -> evaluate_final_risk_gate(...) -> FinalRiskGateResult
 
 Boundaries (locked):
 * ``PASS`` = permitted to proceed to the User Decision boundary ONLY --
@@ -15,16 +13,18 @@ Boundaries (locked):
   Day-35 portfolio analytics are consumed whole with broker/model source
   separation preserved (the only arithmetic is a same-source delta
   projection, never a broker+model sum).
-* No numeric limit is invented: ``None`` policy fields mean the rule is not
-  configured.  Missing data stays missing; regime labels never manufacture
-  direction; no wall clock, randomness, database, network, filesystem or
-  broker access exists in the domain.
+* No numeric limit is invented: ``None``/empty policy fields mean the rule
+  is not configured.  Missing data stays missing; regime labels never
+  manufacture direction (an explicit disallow list is policy, not a
+  directional read); no wall clock, randomness, database, network,
+  filesystem or broker access exists in the domain.
 """
 
 from app.final_risk_gate.contracts import (
     FINAL_RISK_GATE_CALCULATION_VERSION,
     FINAL_RISK_GATE_CONTRACT_VERSION,
     FinalRiskGateDimension,
+    FinalRiskGateInput,
     FinalRiskGateResult,
     FinalRiskIssueCode,
     FinalRiskPolicy,
@@ -40,12 +40,16 @@ from app.final_risk_gate.contracts import (
     final_gate_from_dict,
     final_gate_to_dict,
 )
-from app.final_risk_gate.gate import evaluate_final_gate
+from app.final_risk_gate.gate import (
+    evaluate_final_gate,
+    evaluate_final_risk_gate,
+)
 
 __all__ = [
     "FINAL_RISK_GATE_CALCULATION_VERSION",
     "FINAL_RISK_GATE_CONTRACT_VERSION",
     "FinalRiskGateDimension",
+    "FinalRiskGateInput",
     "FinalRiskGateResult",
     "FinalRiskIssueCode",
     "FinalRiskPolicy",
@@ -59,6 +63,7 @@ __all__ = [
     "PolicyGateAssessment",
     "PortfolioImpact",
     "evaluate_final_gate",
+    "evaluate_final_risk_gate",
     "final_gate_from_dict",
     "final_gate_to_dict",
 ]

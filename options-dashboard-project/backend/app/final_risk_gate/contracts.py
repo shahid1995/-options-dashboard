@@ -43,8 +43,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
-from app.central_risk.contracts import CentralRiskStatus
+from app.central_risk.contracts import (
+    CentralRiskResult,
+    CentralRiskStatus,
+)
+from app.intelligence.contracts import RegimeLabel
 from app.market_data.contracts import Provenance
+from app.portfolio_intelligence.contracts import PortfolioAnalyticsResult
+from app.strategy_lifecycle.contracts import StrategyCandidate
 
 #: Day-36 contract version (independent of Day-33/35 versions).
 FINAL_RISK_GATE_CONTRACT_VERSION = "1.0.0"
@@ -96,14 +102,20 @@ class FinalRiskGateDimension(str, Enum):
 class FinalRiskRuleCode(str, Enum):
     """Explicit, machine-readable final-gate rule identifiers.
 
-    ``CENTRAL_RISK_PASS`` is always evaluated.  The numeric rules are
-    evaluated ONLY when their cap is configured (``None`` = not configured).
+    ``CENTRAL_RISK_PASS`` and ``CANDIDATE_QUALITY`` are always evaluated.
+    The remaining rules are evaluated ONLY when configured (``None``/empty
+    = rule not configured).  ``REGIME_ALLOWLIST`` is an explicit policy
+    statement over the authoritative Day-23 regime label -- it never
+    manufactures a directional read from a label.
     """
 
     CENTRAL_RISK_PASS = "CENTRAL_RISK_PASS"
+    CANDIDATE_QUALITY = "CANDIDATE_QUALITY"
     MAX_PORTFOLIO_DELTA = "MAX_PORTFOLIO_DELTA"
     MAX_PROJECTED_DELTA = "MAX_PROJECTED_DELTA"
     MAX_CONCENTRATION_SHARE = "MAX_CONCENTRATION_SHARE"
+    MAX_PORTFOLIO_AGE = "MAX_PORTFOLIO_AGE"
+    REGIME_ALLOWLIST = "REGIME_ALLOWLIST"
 
 
 class FinalRiskIssueCode(str, Enum):
@@ -120,6 +132,7 @@ class FinalRiskIssueCode(str, Enum):
     INCOMPLETE_PORTFOLIO_EVIDENCE = "INCOMPLETE_PORTFOLIO_EVIDENCE"
     UNVERIFIABLE_RULE = "UNVERIFIABLE_RULE"
     MISSING_CANDIDATE_QUALITY = "MISSING_CANDIDATE_QUALITY"
+    STALE_PORTFOLIO = "STALE_PORTFOLIO"
 
 
 # ---------------------------------------------------------------------------
@@ -188,20 +201,27 @@ def _prov_from_dict(data: dict | None) -> Provenance | None:
 class FinalRiskPolicy:
     """Explicit final-gate policy.
 
-    ``None`` limit fields mean that particular rule is NOT configured (an
+    ``None``/empty fields mean that particular rule is NOT configured (an
     explicit configuration choice -- never a zero limit and never an
     invented threshold).  The final gate never blocks on an unconfigured
-    rule.
+    rule.  ``disallowed_regimes`` is an explicit allow-list policy over the
+    authoritative Day-23 regime label (``RegimeLabel`` members); an empty
+    tuple means no regime rule is configured.  ``maximum_portfolio_age_seconds``
+    caps the age of the supplied Day-35 portfolio analytics measured against
+    the caller-supplied reference timestamp.
     """
 
     policy_version: str
     maximum_portfolio_delta: float | None = None
     maximum_projected_delta: float | None = None
     maximum_concentration_share: float | None = None
+    maximum_portfolio_age_seconds: float | None = None
+    disallowed_regimes: tuple[RegimeLabel, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.policy_version, "policy_version")
-        for name in ("maximum_portfolio_delta", "maximum_projected_delta"):
+        for name in ("maximum_portfolio_delta", "maximum_projected_delta",
+                     "maximum_portfolio_age_seconds"):
             value = getattr(self, name)
             _require_finite_or_none(value, name)
             if value is not None and value < 0.0:
@@ -213,6 +233,10 @@ class FinalRiskPolicy:
                 raise ValueError(
                     "maximum_concentration_share must be within (0, 1] "
                     "or None")
+        if not isinstance(self.disallowed_regimes, tuple) or not all(
+                isinstance(r, RegimeLabel) for r in self.disallowed_regimes):
+            raise ValueError(
+                "disallowed_regimes must be a tuple of RegimeLabel")
 
     def to_dict(self) -> dict:
         return {
@@ -220,6 +244,8 @@ class FinalRiskPolicy:
             "maximum_portfolio_delta": self.maximum_portfolio_delta,
             "maximum_projected_delta": self.maximum_projected_delta,
             "maximum_concentration_share": self.maximum_concentration_share,
+            "maximum_portfolio_age_seconds": self.maximum_portfolio_age_seconds,
+            "disallowed_regimes": [r.value for r in self.disallowed_regimes],
         }
 
     @classmethod
@@ -230,6 +256,10 @@ class FinalRiskPolicy:
             maximum_projected_delta=data.get("maximum_projected_delta"),
             maximum_concentration_share=data.get(
                 "maximum_concentration_share"),
+            maximum_portfolio_age_seconds=data.get(
+                "maximum_portfolio_age_seconds"),
+            disallowed_regimes=tuple(
+                RegimeLabel(r) for r in data.get("disallowed_regimes", [])),
         )
 
 
@@ -477,6 +507,47 @@ class PortfolioImpact:
 
 
 # ---------------------------------------------------------------------------
+# Input aggregate
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FinalRiskGateInput:
+    """Immutable typed input bundle for the final gate (approved plan Task 1).
+
+    Binds the three authoritative upstream contracts the gate consumes
+    (Day-32 candidate, Day-33 central-risk result, Day-35 portfolio
+    analytics) plus the explicit final-gate policy and the caller's
+    tenant/account context.  ``portfolio=None`` is an explicit input
+    absence (deterministic UNAVAILABLE, never a pass).  The caller-supplied
+    reference timestamp stays a top-level engine parameter -- it is caller
+    context, never part of the domain bundle.
+    """
+
+    candidate: StrategyCandidate
+    central_risk: CentralRiskResult
+    portfolio: PortfolioAnalyticsResult | None
+    policy: FinalRiskPolicy
+    tenant_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.candidate, StrategyCandidate):
+            raise ValueError("candidate must be a Day-32 StrategyCandidate")
+        if not isinstance(self.central_risk, CentralRiskResult):
+            raise ValueError("central_risk must be a Day-33 CentralRiskResult")
+        if self.portfolio is not None and not isinstance(
+                self.portfolio, PortfolioAnalyticsResult):
+            raise ValueError("portfolio must be a Day-35 "
+                             "PortfolioAnalyticsResult or None")
+        if not isinstance(self.policy, FinalRiskPolicy):
+            raise ValueError("policy must be a FinalRiskPolicy")
+        if self.tenant_id is not None and (
+                not isinstance(self.tenant_id, str)
+                or not self.tenant_id.strip()):
+            raise ValueError("tenant_id must be a non-blank string or None")
+
+
+# ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
 
@@ -607,6 +678,7 @@ __all__ = [
     "FINAL_RISK_GATE_CALCULATION_VERSION",
     "FINAL_RISK_GATE_CONTRACT_VERSION",
     "FinalRiskGateDimension",
+    "FinalRiskGateInput",
     "FinalRiskGateResult",
     "FinalRiskIssueCode",
     "FinalRiskPolicy",
