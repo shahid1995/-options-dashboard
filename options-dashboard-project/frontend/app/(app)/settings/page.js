@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { C } from "@/lib/ui";
 import { useAuth } from "@/lib/useAuth";
 import {
@@ -708,6 +709,12 @@ function AnalyticsTokenSection() {
 
 export default function SettingsPage() {
   const { user, loading, isLoggedIn, login, register, logout } = useAuth();
+  const router = useRouter();
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    router.replace("/");
+  }, [logout, router]);
 
   if (loading) {
     return (
@@ -725,7 +732,7 @@ export default function SettingsPage() {
         <AuthForm authLogin={login} authRegister={register} />
       ) : (
         <>
-          <AccountSection user={user} onLogout={logout} />
+          <AccountSection user={user} onLogout={handleLogout} />
           <BrokerSection />
           <AnalyticsTokenSection />
         </>

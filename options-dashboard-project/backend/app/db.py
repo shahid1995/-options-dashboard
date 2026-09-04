@@ -5,47 +5,58 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
 
+
 class Base(DeclarativeBase):
     pass
 
 
 # ---------------------------------------------------------------------------
-# Database path resolution
+# Database path / URL resolution
 # ---------------------------------------------------------------------------
 #
-# Phase 7.20 audit discovered that the previous relative path
-# ("sqlite:///./paper_journal.db") resolved differently depending on
-# the process working directory, causing data loss across server
-# restarts and CLI invocations.
-#
-# FIX: When DATABASE_URL is not set, resolve relative to this file's
-# parent directory (backend/), so the database always lives at
-#   backend/paper_journal.db
-# regardless of where Python/Uvicorn/CLI is launched from.
-#
-# When DATABASE_URL IS set (e.g. Railway PostgreSQL), use it as-is.
+# SQLite remains the default for local development and for the current
+# production environment until the explicit PostgreSQL switchover phase.
+# When DATABASE_URL points at PostgreSQL, normalize bare postgres URLs to the
+# installed psycopg 3 SQLAlchemy dialect.
 # ---------------------------------------------------------------------------
 
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DEFAULT_DB_PATH = os.path.join(_BACKEND_DIR, "paper_journal.db")
 
 
+def normalize_database_url(url: str) -> str:
+    """Normalize database URLs to dialects supported by this application.
+
+    Railway may provide either ``postgres://`` or ``postgresql://`` style
+    URLs. The application uses psycopg 3, so bare PostgreSQL URLs are mapped
+    to ``postgresql+psycopg://``. Explicit driver URLs are preserved.
+    SQLite and other SQLAlchemy URLs are returned unchanged.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
 def _engine():
     if settings.DATABASE_URL:
-        url = settings.DATABASE_URL
+        url = normalize_database_url(settings.DATABASE_URL)
     else:
-        # Absolute file path wrapped in sqlite:/// URI
         url = f"sqlite:///{_DEFAULT_DB_PATH}"
+
     if url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
         eng = create_engine(url, connect_args=connect_args)
-        # Phase 7.23B: Switch SQLite to WAL journal mode for crash safety.
+
+        # SQLite-only crash/concurrency tuning. Never register these hooks
+        # against PostgreSQL or another SQLAlchemy dialect.
         @event.listens_for(eng, "connect")
         def _set_wal(dbapi_conn, _rec):
             dbapi_conn.execute("PRAGMA journal_mode=WAL")
             dbapi_conn.execute("PRAGMA synchronous=NORMAL")
     else:
-        # Phase 9E: Production PostgreSQL configuration
+        # PostgreSQL production/staging configuration.
         eng = create_engine(
             url,
             pool_size=5,
@@ -55,12 +66,6 @@ def _engine():
             pool_pre_ping=True,
         )
 
-    if url.startswith("sqlite"):
-        @event.listens_for(eng, "connect")
-        def _set_wal(dbapi_conn, _rec):
-            dbapi_conn.execute("PRAGMA journal_mode=WAL")
-            dbapi_conn.execute("PRAGMA synchronous=NORMAL")
-
     return eng
 
 
@@ -68,10 +73,163 @@ engine = _engine()
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
+# ---------------------------------------------------------------------------
+# Production safety validation (Day 4)
+# ---------------------------------------------------------------------------
+
+
+def validate_production_config() -> None:
+    """Log warnings when production configuration is unsafe.
+
+    Called once at module import time.  Never crashes the application —
+    misconfigurations are logged as warnings so that operators can fix
+    them before a real production deployment.
+
+    Checks:
+    - Production must have DATABASE_URL set
+    - Production DATABASE_URL must not point to SQLite
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not settings.IS_PRODUCTION:
+        return
+
+    if not settings.DATABASE_URL:
+        logger.warning(
+            "Production environment detected but DATABASE_URL is not set. "
+            "The application will fall back to local SQLite, which is "
+            "unsuitable for production. Set DATABASE_URL to a PostgreSQL "
+            "connection string."
+        )
+        return
+
+    normalized = normalize_database_url(settings.DATABASE_URL)
+    if normalized.startswith("sqlite"):
+        logger.warning(
+            "Production environment detected but DATABASE_URL points to "
+            "SQLite (connection string masked). Production must use "
+            "PostgreSQL. Update DATABASE_URL to a PostgreSQL connection string."
+        )
+
+
+validate_production_config()
+
+
+# ---------------------------------------------------------------------------
+# Migration state validation (Day 5)
+# ---------------------------------------------------------------------------
+
+
+def validate_migration_state() -> dict:
+    """Validate Alembic migration state against the expected head.
+
+    Returns a dict with:
+    - "status": "current" | "behind" | "uninitialised" | "error"
+    - "expected_head": the single expected Alembic head revision
+    - "actual_revision": the revision stamped in the database (or None)
+    - "alembic_heads": list of heads from the migration script directory
+    - "error": error message if validation failed
+
+    Never raises — always returns a result dict.
+    Credentials are never included in the output.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+    result: dict = {
+        "status": "error",
+        "expected_head": None,
+        "actual_revision": None,
+        "alembic_heads": [],
+        "error": None,
+    }
+
+    try:
+        from alembic.config import Config as AlembicConfig
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
+
+        alembic_cfg = AlembicConfig("alembic.ini")
+        alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
+        script = ScriptDirectory.from_config(alembic_cfg)
+        heads = script.get_heads()
+        result["alembic_heads"] = list(heads)
+
+        if len(heads) != 1:
+            result["status"] = "error"
+            result["error"] = (
+                f"Expected exactly 1 Alembic head, got {len(heads)}: {heads}"
+            )
+            return result
+
+        result["expected_head"] = heads[0]
+
+        # Collect every revision ID in the migration graph by walking
+        # backwards from head.  This lets us distinguish "behind" (revision
+        # is in the graph but not the head) from "unknown" (revision is not
+        # in the graph at all).
+        all_revisions: set = set()
+        try:
+            rev_map = script.revision_map
+            # Walk the full chain from each head backwards
+            for h in heads:
+                rev = rev_map.get_revision(h)
+                while rev is not None:
+                    all_revisions.add(rev.revision)
+                    if not rev.down_revision:
+                        break
+                    downs = rev.down_revision
+                    if isinstance(downs, (list, tuple)):
+                        rev = rev_map.get_revision(downs[0])
+                    else:
+                        rev = rev_map.get_revision(downs)
+        except Exception:
+            # If graph walking fails, fall back to checking only against head
+            all_revisions = set(heads)
+
+        with engine.connect() as conn:
+            mc = MigrationContext.configure(conn)
+            current_rev = mc.get_current_revision()
+            result["actual_revision"] = current_rev
+
+        if current_rev is None:
+            result["status"] = "uninitialised"
+            result["error"] = "No alembic_version record found"
+        elif current_rev == heads[0]:
+            result["status"] = "current"
+        elif current_rev in all_revisions:
+            result["status"] = "behind"
+            result["error"] = (
+                f"Database revision {current_rev} != expected head {heads[0]}"
+            )
+        else:
+            result["status"] = "unknown"
+            result["error"] = (
+                f"Database revision {current_rev} is not present in the "
+                f"migration graph (expected one of: {sorted(all_revisions)})"
+            )
+
+    except Exception as e:
+        result["status"] = "error"
+        # Mask any potential credentials in the error message
+        error_str = str(e)
+        for sensitive in ["password", "secret", "token"]:
+            if sensitive in error_str.lower():
+                error_str = "Database connection error (details masked)"
+                break
+        result["error"] = error_str
+        logger.warning("Migration state validation failed: %s", result["error"])
+
+    return result
+
+
+
 def get_database_path() -> str:
-    """Return the absolute filesystem path of the active database."""
+    """Return the configured database URL or local SQLite path."""
     if settings.DATABASE_URL:
-        return settings.DATABASE_URL
+        return normalize_database_url(settings.DATABASE_URL)
     return _DEFAULT_DB_PATH
 
 
@@ -87,15 +245,9 @@ def get_db():
 def _run_alembic_migrations() -> None:
     """Run Alembic migrations against the current engine.
 
-    Called from init_db() to apply versioned schema migrations at startup.
-    This is the PRIMARY schema management path — Alembic owns the
-    authoritative schema definition.
-
-    Uses Alembic's ``Config.attributes`` to pass the current engine to
-    env.py. This avoids module-global state and ensures Alembic reuses
-    the same connection — critical for in-memory SQLite tests.
-    CLI-driven ``alembic upgrade head`` (without Config.attributes) falls
-    back to creating its own engine from the URL.
+    Alembic is the authoritative schema-management path. The current engine
+    is passed through Config.attributes so programmatic startup and in-memory
+    tests reuse the same connectable.
     """
     import logging
     from alembic.config import Config
@@ -104,8 +256,6 @@ def _run_alembic_migrations() -> None:
     logger = logging.getLogger(__name__)
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", str(engine.url))
-    # Alembic's official mechanism for sharing a connection.
-    # env.py reads config.attributes['connectable'] when present.
     alembic_cfg.attributes["connectable"] = engine
     command.upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations applied successfully")
@@ -120,12 +270,7 @@ def _run_alembic_migrations() -> None:
 # Startup sequence:
 #   1. Alembic upgrade head       — versioned, authoritative schema DDL
 #   2. Data backfill (idempotent) — strategy-leg attribution backfill
-#   3. Composite indexes         — SQLite-only pipeline query indexes
-#
-# Removed in Phase 10.1B:
-#   - Base.metadata.create_all() — no longer in production startup
-#   - ensure_column()            — all 15 legacy columns are in baseline
-#   - _existing_columns()        — no longer needed
+#   3. Composite indexes           — SQLite-only pipeline query indexes
 #
 # CLI tools (candle_backfill, run_backfill, run_daily, etc.) may still
 # call Base.metadata.create_all() for their own database setup — those
@@ -151,12 +296,8 @@ def init_db():
     from app import models  # noqa: F401  (registers tables on Base.metadata)
 
     logger = logging.getLogger(__name__)
-
-    # Step 1: Alembic migrations (sole schema management mechanism).
-    # This MUST succeed — if it fails, the application should not start.
     _run_alembic_migrations()
 
-    # Step 2: Idempotent data backfill — strategy-leg attribution.
     # Conservative one-time backfill for pre-existing, provably unambiguous
     # executions. Rows already present are never duplicated.
     from app.services.leg_exposure import backfill_all_exposures
@@ -167,9 +308,8 @@ def init_db():
     finally:
         session.close()
 
-    # Step 3: Composite indexes for pipeline infrastructure queries.
-    # These are NOT in the Alembic baseline (composite + covering indexes)
-    # and use CREATE INDEX IF NOT EXISTS for idempotent execution.
+    # These indexes are intentionally SQLite-only and are not part of the
+    # cross-dialect Alembic schema.
     if engine.dialect.name == "sqlite":
         with engine.begin() as conn:
             for stmt in [
@@ -185,7 +325,6 @@ def init_db():
 # Database health check (Phase 7.21)
 # ---------------------------------------------------------------------------
 
-# Tables that should exist in the historical-data schema.
 _HISTORICAL_TABLES = [
     "nifty_candles",
     "contract_specs",
@@ -195,24 +334,20 @@ _HISTORICAL_TABLES = [
 
 
 def check_database_health() -> dict:
-    """Return a diagnostic snapshot of the production database.
+    """Return a diagnostic snapshot of the active database.
 
-    Designed to be called before any backfill to confirm the database
-    is accessible, correctly located, and has the expected schema.
-
-    Returns
-    -------
-    dict
-        A machine-readable health report with path, size, row counts,
-        and accessibility status.
+    Day 4: report includes the active dialect name and conditionally
+    includes file-specific information only for SQLite databases.
+    PostgreSQL reports omit file_exists/file_size_bytes since they are
+    meaningless for client-server databases.
     """
     from sqlalchemy import inspect as sa_inspect, func, select
 
+    dialect_name = engine.dialect.name
     db_path = get_database_path()
     report: dict = {
         "database_path": db_path,
-        "file_exists": False,
-        "file_size_bytes": 0,
+        "dialect": dialect_name,
         "accessible": False,
         "tables_present": [],
         "tables_missing": [],
@@ -221,12 +356,14 @@ def check_database_health() -> dict:
         "newest_record": None,
     }
 
-    # File check
-    if os.path.isfile(db_path):
-        report["file_exists"] = True
-        report["file_size_bytes"] = os.path.getsize(db_path)
+    # File-specific fields are only meaningful for SQLite.
+    if dialect_name == "sqlite":
+        report["file_exists"] = False
+        report["file_size_bytes"] = 0
+        if os.path.isfile(db_path):
+            report["file_exists"] = True
+            report["file_size_bytes"] = os.path.getsize(db_path)
 
-    # Schema check
     try:
         insp = sa_inspect(engine)
         existing_tables = set(insp.get_table_names())
@@ -240,7 +377,6 @@ def check_database_health() -> dict:
         report["schema_error"] = str(e)
         return report
 
-    # Row counts and date range
     db = SessionLocal()
     try:
         from app.models import NiftyCandle, ContractSpec, OptionCandle, OptionGreeks
@@ -254,7 +390,6 @@ def check_database_health() -> dict:
             count = db.scalar(select(func.count(model.id))) or 0
             report["row_counts"][label] = count
 
-        # Date range from nifty_candles (if any data)
         nifty_oldest = db.scalar(
             select(NiftyCandle.open_time).order_by(NiftyCandle.open_time.asc()).limit(1)
         )
