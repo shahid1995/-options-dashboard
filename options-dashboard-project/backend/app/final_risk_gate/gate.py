@@ -187,27 +187,29 @@ def evaluate_final_risk_gate(
                         structure_note=structural_note)
 
     # -- central risk gate (B): consume Day-33 whole ------------------------
+    central_dim = None
     if central_risk.status is CentralRiskStatus.INVALID:
         issues.append(_issue(FinalRiskIssueCode.DAY33_INCOMPLETE,
                              "Day-33 central risk is INVALID"))
+        central_dim = _INVALID
         return _compose(candidate, central_risk, policy,
                         _INVALID, (), issues, evidence, resolved_reference,
-                        central_dim=_INVALID, structure_note=structural_note)
+                        central_dim=central_dim, structure_note=structural_note)
     if central_risk.status is CentralRiskStatus.UNAVAILABLE:
         issues.append(_issue(FinalRiskIssueCode.DAY33_UNAVAILABLE,
                              "Day-33 central risk is UNAVAILABLE; the final "
                              "gate cannot assess the candidate"))
+        central_dim = _UNAVAILABLE
         return _compose(candidate, central_risk, policy,
                         _UNAVAILABLE, (), issues, evidence,
-                        resolved_reference, central_dim=_UNAVAILABLE,
+                        resolved_reference, central_dim=central_dim,
                         structure_note=structural_note)
     if central_risk.status is CentralRiskStatus.PARTIAL:
         issues.append(_issue(FinalRiskIssueCode.DAY33_INCOMPLETE,
                              "Day-33 central risk is PARTIAL; incomplete "
                              "evidence is never treated as safe"))
-        return _compose(candidate, central_risk, policy,
-                        _PARTIAL, (), issues, evidence, resolved_reference,
-                        central_dim=_PARTIAL, structure_note=structural_note)
+        central_dim = _PARTIAL
+        # Do not return, continue to evaluate Day36 rules
     if central_risk.status is CentralRiskStatus.BLOCKED:
         source = central_risk.blocking_reasons[0] \
             if central_risk.blocking_reasons else None
@@ -221,9 +223,17 @@ def evaluate_final_risk_gate(
         evidence.append(_evidence("DAY33", "central-risk-result",
                                   blocking[0].message,
                                   central_risk.provenance))
+        central_dim = _BLOCKED
         return _compose(candidate, central_risk, policy, _BLOCKED, blocking,
                         issues, evidence, resolved_reference,
-                        central_dim=_BLOCKED, structure_note=structural_note)
+                        central_dim=central_dim, structure_note=structural_note)
+
+    # If we get here, then central_risk.status must be CentralRiskStatus.PASS
+    if central_risk.status is CentralRiskStatus.PASS:
+        evidence.append(_evidence("DAY33", "central-risk-result",
+                                  "Day-33 central risk PASS",
+                                  central_risk.provenance))
+        central_dim = _PASS
 
     # -- portfolio required (Day-36 sits AFTER Day-35 in the chain) ---------
     if portfolio is None:
@@ -233,7 +243,7 @@ def evaluate_final_risk_gate(
                              "treated as safe"))
         return _compose(candidate, central_risk, policy, _UNAVAILABLE, (),
                         issues, evidence, resolved_reference,
-                        central_dim=_PASS, structure_note=structural_note)
+                        central_dim=central_dim, structure_note=structural_note)
 
     if portfolio.status.value == "INVALID":
         issues.append(_issue(FinalRiskIssueCode.INCOMPLETE_PORTFOLIO_EVIDENCE,
@@ -262,16 +272,23 @@ def evaluate_final_risk_gate(
         resolved_tenant = tenant_id
 
     # -- Day-33 PASS; evaluate the configured final-gate rules --------------
-    evidence.append(_evidence("DAY33", "central-risk-result",
-                              "Day-33 central risk PASS",
-                              central_risk.provenance))
-
     context = _portfolio_impact(candidate, central_risk, portfolio)
     evidence.extend(_impact_evidence(context))
 
     rules: list[GateRuleResult] = []
-    rules.append(_rule(FinalRiskRuleCode.CENTRAL_RISK_PASS, True,
-                       "Day-33 central risk PASS"))
+    # Only add CENTRAL_RISK_PASS rule if we have a definitive pass/fail status
+    # For PARTIAL central risk, we continue evaluation but don't treat it as a failed rule
+    if central_dim is _PASS:
+        rules.append(_rule(FinalRiskRuleCode.CENTRAL_RISK_PASS,
+                           True,
+                           "Day-33 central risk PASS"))
+    elif central_dim is _BLOCKED:
+        # When central risk is BLOCKED, we already handled this case above and returned early
+        # This branch should not be reachable, but added for completeness
+        pass
+    # For PARTIAL, INVALID, or UNAVAILABLE central risk, we don't add the rule
+    # as it's either already handled (INVALID/UNAVAILABLE returned early) 
+    # or we want to continue evaluation without treating PARTIAL as a failure
 
     # CANDIDATE_QUALITY (always evaluated; required evidence completeness) --
     # missing candidate quality can never be manufactured into a PASS.
@@ -389,7 +406,7 @@ def evaluate_final_risk_gate(
     if failed:
         return _compose(candidate, central_risk, policy, _BLOCKED, failed,
                         issues, evidence, resolved_reference,
-                        central_dim=_PASS, structure_note=structural_note,
+                        central_dim=central_dim, structure_note=structural_note,
                         portfolio_present=True, tenant=resolved_tenant,
                         context=context, rules=rules)
 
@@ -401,12 +418,16 @@ def evaluate_final_risk_gate(
                              "from the supplied evidence"))
         return _compose(candidate, central_risk, policy, _PARTIAL, (),
                         issues, evidence, resolved_reference,
-                        central_dim=_PASS, structure_note=structural_note,
+                        central_dim=central_dim, structure_note=structural_note,
                         portfolio_present=True, tenant=resolved_tenant,
                         context=context, rules=rules)
 
-    return _compose(candidate, central_risk, policy, _PASS, (), issues,
-                    evidence, resolved_reference, central_dim=_PASS,
+    # If we have a PARTIAL central risk and no rule failures or unverifiable rules,
+    # the overall status should be PARTIAL (due to incomplete evidence).
+    # Otherwise, if all evidence is sufficient and no violations, it's PASS.
+    overall_status = _PARTIAL if central_dim is _PARTIAL else _PASS
+    return _compose(candidate, central_risk, policy, overall_status, (), issues,
+                    evidence, resolved_reference, central_dim=central_dim,
                     structure_note=structural_note,
                     portfolio_present=True, tenant=resolved_tenant,
                     context=context, rules=rules)
