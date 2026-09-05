@@ -88,9 +88,28 @@ tenant identity         = user_id (immutable)
 - `PositionUpdated.event_id → execution_id + position_identity` records which execution contributed to the position change.
 - Replay aggregates all execution-attributed contributions into the same netted position per instrument.
 
-## 5. Lifecycle State Machines
+## 5. Lifecycle State Machines (CORRECTED — two reconstruction scopes)
 
-Four independent sub-state-machines within the event stream. Each has its own valid transitions. **Execution, order, and fill are execution-scoped. Position is instrument-scoped (user/netted).**
+Two distinct reconstruction scopes exist:
+
+```
+                 lifecycle events
+                       │
+          ┌────────────┴────────────┐
+          │                         │
+          ▼                         ▼
+ execution_id scope          position_identity scope
+          │                         │
+          ▼                         ▼
+ TradeLifecycleReplay       PositionReplayProjection
+```
+
+**Execution replay** (`execution_id` scope) answers: "What happened during this execution?"
+**Position reconstruction** (`position_identity` scope) answers: "What position resulted from all lifecycle contributions to this instrument?"
+
+**Execution replay ≠ Position reconstruction.** Execution-scoped replay cannot know about other executions affecting the same instrument. Position reconstruction aggregates contributions from all executions belonging to the same tenant/instrument.
+
+Four independent sub-state-machines within the event stream. **Execution, order, and fill are execution-scoped. Position is instrument-scoped (user/netted) with lifecycle instances.**
 
 ### 5a. Execution Lifecycle (Projection — maps to `StrategyExecution.status`)
 
@@ -126,27 +145,80 @@ Fills accumulate per `order_id`. No fill changes prior fills; each fill is immut
 
 Aggregate fill invariant: `Σ fill_quantity for order_id ≤ order.quantity`; `= order.quantity` when order is `FILLED`.
 
-### 5d. Position Lifecycle — User/Instrument-Netted (CRITICAL CORRECTION)
+### 5d. Position Lifecycle — User/Instrument-Netted with Lifecycle Instances (CORRECTED)
 
 Position state is **NOT execution-owned**. Position is `open/closed` per `(user_id, symbol, expiry, strike, option_type)`. Multiple executions contribute to the same position's netting.
 
-Position events record **contributions** (attribution), not independent ownership.
+#### Position Identity vs Position Lifecycle Instance
+
+- **Position Identity** = permanent logical key: `(user_id, symbol, expiry, strike, option_type)`. Reusable.
+- **Position Lifecycle Instance** = a particular period during which that identity has non-zero exposure. Terminal once closed, but the identity can start a new instance.
+
+Example:
+```
+PositionIdentity X: (user, NIFTY, expiry, 24000, CE)
+
+Lifecycle Instance #1:
+  OPEN (net +10) → CLOSED (net 0)
+
+Lifecycle Instance #2:
+  OPEN (net +5) → OPEN ...
+```
+
+A `CLOSED` lifecycle instance is terminal for THAT instance. The position identity is NOT permanently terminal. A subsequent non-zero exposure creates a new lifecycle instance for the same identity.
+
+#### Position Lifecycle Instance transition matrix
 
 | From | Event | To | Valid | Terminal |
 |------|-------|----|-------|----------|
-| (none — first contribution) | `PositionOpened` | `OPEN` | ✅ | no |
+| (none — first contribution or new instance) | `PositionOpened` | `OPEN` | ✅ | no |
 | `OPEN` | `PositionUpdated` | `OPEN` | ✅ | no |
-| `OPEN` | `PositionClosed` | `CLOSED` | ✅ | yes |
-| `CLOSED` | any | — | ❌ | terminal |
+| `OPEN` | `PositionClosed` | `CLOSED` | ✅ | yes (for this instance) |
+| `CLOSED` (same instance) | any | — | ❌ | terminal (this instance) |
 
-`PositionUpdated` carries: `position_identity`, `net_quantity`, `average_entry_price`, `realized_pnl`. The `execution_id` in the event payload records attribution (which execution contributed), NOT ownership.
+**Key rules:**
+- `PositionClosed` is terminal for the current lifecycle instance (net_quantity = 0).
+- A later `PositionOpened` for the same `position_identity` starts a **new lifecycle instance**, not a transition from `CLOSED → OPEN` on the same instance.
+- The instance is implicitly identified by the ordered sequence of `PositionOpened → ... → PositionClosed` pairs within the event stream.
+- No explicit `position_instance_id` field is required: replay tracks the instance boundary by state transition. When the current instance is `CLOSED` and a new `PositionOpened` arrives, a new instance begins deterministically.
 
-### Multiple executions contributing to one position — CORRECTED
+#### Position event semantics (corrected)
 
-Example: two executions, same instrument:
+`PositionUpdated` carries: `position_identity`, `net_quantity`, `average_entry_price`, `realized_pnl`, `execution_id` (attribution, NOT ownership).
+
+The `execution_id` in the event payload records which execution contributed to the position change — it does NOT imply execution-scoped ownership.
+
+#### Cross-execution position reconstruction
+
+Multiple executions contribute to the same netted position per instrument:
 
 ```
 Execution A (execution_id="exec-a"):
+  PositionOpened: position_identity=(NIFTY,24000,CE), net=+10
+  PositionUpdated: position_identity=(NIFTY,24000,CE), net=+10, exec=exec-a
+
+Execution B (execution_id="exec-b"):
+  PositionUpdated: position_identity=(NIFTY,24000,CE), net=+5, exec=exec-b
+```
+
+Replay aggregates: position_identity=(NIFTY,24000,CE), lifecycle instance #1, net_quantity=+5.
+
+If Execution C later closes the position:
+```
+Execution C (execution_id="exec-c"):
+  PositionUpdated: position_identity=(NIFTY,24000,CE), net=0, exec=exec-c
+  PositionClosed: position_identity=(NIFTY,24000,CE), realized_pnl=...
+```
+
+Lifecycle instance #1 → CLOSED. Identity remains available for future instances.
+
+#### Lifecycle instance boundaries in replay
+
+Replay tracks lifecycle instances implicitly:
+- `PositionOpened` starts a new instance (only valid when no open instance exists for this `position_identity`).
+- `PositionUpdated` modifies the current open instance.
+- `PositionClosed` terminates the current open instance (only valid when net_quantity = 0).
+- A subsequent `PositionOpened` for the same identity begins a new instance.
   Order: BUY 10 NIFTY 24000 CE
   → FillRecorded: order_id=1, qty=10, price=125.00
   → PositionUpdated: position_identity=(NIFTY,24000,CE), net_quantity=+10, avg_entry=125.00
@@ -191,14 +263,15 @@ Authoritative position: `NIFTY 24000 CE, net_quantity = +5`. Both lifecycle even
 |-------------|------|-------|----|-------|---------------|------------|----------|
 | Fill | (any) | `FillRecorded` | (append) | ✅ | order_id, fill_quantity, fill_price, fill_timestamp, price_source | cumulative ≤ order.quantity; fill_quantity > 0; fill_price > 0 | n/a (append-only) |
 
-### Position Lifecycle (instrument-netted, NOT execution-owned)
+### Position Lifecycle (instrument-netted, NOT execution-owned, with lifecycle instances)
 
 | Sub-machine | From | Event | To | Valid | Required data | Invariants | Terminal |
 |-------------|------|-------|----|-------|---------------|------------|----------|
-| Position | (none) | `PositionOpened` | `OPEN` | ✅ | position_identity (user/symbol/expiry/strike/type), initial_quantity | net_quantity ≠ 0; unique | no |
-| Position | `OPEN` | `PositionUpdated` | `OPEN` | ✅ | position_identity, net_quantity, average_entry_price, realized_pnl, execution_id (attribution) | net_quantity may be +, −, or 0 | no |
-| Position | `OPEN` | `PositionClosed` | `CLOSED` | ✅ | position_identity, realized_pnl | net_quantity = 0; no exposure remains | yes |
-| Position | `CLOSED` | any | — | ❌ | — | terminal-state protection | — |
+| Position | (none or previous instance CLOSED) | `PositionOpened` | `OPEN` | ✅ | position_identity (user/symbol/expiry/strike/type), initial_quantity | net_quantity ≠ 0; unique per identity; no open instance exists | no (new instance) |
+| Position | `OPEN` (current instance) | `PositionUpdated` | `OPEN` | ✅ | position_identity, net_quantity, average_entry_price, realized_pnl, execution_id (attribution) | net_quantity may be +, −, or 0; same identity | no |
+| Position | `OPEN` (current instance) | `PositionClosed` | `CLOSED` | ✅ | position_identity, realized_pnl | net_quantity = 0; no exposure remains | yes (this instance) |
+| Position | `CLOSED` (same instance) | any | — | ❌ | — | terminal for this instance | — |
+| Position | `CLOSED` (previous instance) + new exposure | `PositionOpened` | `OPEN` | ✅ | position_identity, initial_quantity | net_quantity ≠ 0; starts new lifecycle instance | no (new instance) |
 
 ## 7. Execution Status Reconciliation (CORRECTED — §5 mapping to authoritative)
 
@@ -433,53 +506,150 @@ SQLite serializes writes at the process level (single writer). `SELECT ... FOR U
 
 Content integrity is validated by the reducer (§15) during replay, not at insert time (events are append-only). Duplicate/conflicting `event_id` at insert time is the only insert-time integrity guard.
 
-## 12. Replay Algorithm (CORRECTED — deterministic, all-or-nothing)
+## 12. Replay Algorithm (CORRECTED — two reconstruction scopes)
 
+### Two distinct replay paths
+
+**Path A: Trade Lifecycle Replay (execution-scoped)**
+Reconstructs execution state, order states, fill history, and execution-scoped lifecycle facts. Answers: "What happened during this execution?"
+
+**Path B: Position Reconstruction (position-identity-scoped)**
+Reconstructs netted position state from ALL lifecycle events belonging to the same `(user_id, symbol, expiry, strike, option_type)`. Answers: "What position resulted from all lifecycle contributions to this instrument?"
+
+**Execution replay ≠ Position reconstruction.** Execution-scoped replay cannot know about other executions affecting the same instrument. Position reconstruction aggregates contributions from all executions belonging to the same tenant/instrument.
+
+### Path A — Trade Lifecycle Replay
+
+```python
+def replay_lifecycle(aggregate_id: str, tenant_id: str, db: Session) -> TradeLifecycleAggregate:
+    """Reconstruct execution-scoped lifecycle state.
+
+    Scope: all events for this execution_id + tenant_id.
+    Returns: execution state, order states, fill history.
+    Does NOT reconstruct netted position across executions.
+    """
+    events = db.execute(
+        SELECT * FROM trade_lifecycle_events
+        WHERE aggregate_id = ? AND tenant_id = ?
+        ORDER BY sequence ASC
+    ).fetchall()
+
+    state = empty_lifecycle_aggregate(aggregate_id, tenant_id)
+
+    for event in events:
+        # Tenant check — FAIL CLOSED
+        if event.tenant_id != tenant_id:
+            raise ReplaySecurityError("TENANT_MISMATCH")
+        # Aggregate check — FAIL CLOSED
+        if event.aggregate_id != aggregate_id:
+            raise ReplaySecurityError("AGGREGATE_MISMATCH")
+        # Version check
+        if event.event_version not in SUPPORTED_VERSIONS:
+            raise ReplayUnknownVersion(event.event_version)
+        # Sequence monotonicity
+        expected_seq = state.last_sequence + 1
+        if event.sequence != expected_seq:
+            raise ReplaySequenceGap(expected=expected_seq, actual=event.sequence)
+        # Payload validation
+        if not valid_payload(event.event_type, event.payload_json):
+            raise ReplayCorruptPayload(event.event_id)
+        # Apply transition (per §6 matrices — execution, order, fill only)
+        apply_lifecycle_transition(state, event)
+        state.last_sequence = event.sequence
+
+    return state
 ```
-replay_aggregate(aggregate_id, tenant_id, db) -> TradeLifecycleAggregate:
 
-  # 1. Load events ordered by sequence
-  events = db.execute(
-      SELECT * FROM trade_lifecycle_events
-      WHERE aggregate_id = ? AND tenant_id = ?
-      ORDER BY sequence ASC
-  ).fetchall()
+### Path B — Position Reconstruction
 
-  # 2. Initialize empty projection state
-  state = empty_aggregate(aggregate_id, tenant_id)
+```python
+def reconstruct_position(position_identity: tuple, tenant_id: str, db: Session) -> PositionReconstruction:
+    """Reconstruct netted position state across ALL executions.
 
-  # 3. Process each event — canonical deterministic path
-  for event in events:
-      # 3a. Tenant check — FAIL CLOSED
-      if event.tenant_id != tenant_id:
-          raise ReplaySecurityError("TENANT_MISMATCH")
+    Scope: all events with matching position_identity + tenant_id.
+    Aggregates contributions from multiple executions.
+    Tracks lifecycle instances (OPEN → CLOSED → new OPEN).
+    """
+    events = db.execute(
+        SELECT * FROM trade_lifecycle_events
+        WHERE tenant_id = ?
+        AND event_type IN ('PositionOpened', 'PositionUpdated', 'PositionClosed')
+        ORDER BY aggregate_id ASC, sequence ASC  # global ordering across executions
+    ).fetchall()
 
-      # 3b. Aggregate check — FAIL CLOSED
-      if event.aggregate_id != aggregate_id:
-          raise ReplaySecurityError("AGGREGATE_MISMATCH")
+    # Filter to events affecting this position_identity
+    relevant = [e for e in events if position_identity_matches(e, position_identity)]
 
-      # 3c. Version check
-      if event.event_version not in SUPPORTED_VERSIONS:
-          raise ReplayUnknownVersion(event.event_version)
+    projection = empty_position_projection(position_identity)
+    current_instance = None
 
-      # 3d. Sequence monotonicity
-      expected_seq = state.last_sequence + 1
-      if event.sequence != expected_seq:
-          raise ReplaySequenceGap(expected=expected_seq, actual=event.sequence)
+    for event in relevant:
+        # Tenant check — FAIL CLOSED
+        if event.tenant_id != tenant_id:
+            raise ReplaySecurityError("TENANT_MISMATCH")
+        # Version check
+        if event.event_version not in SUPPORTED_VERSIONS:
+            raise ReplayUnknownVersion(event.event_version)
+        # Apply position transition with lifecycle instance tracking
+        apply_position_projection(projection, event, current_instance)
 
-      # 3e. Payload validation
-      if not valid_payload(event.event_type, event.payload_json):
-          raise ReplayCorruptPayload(event.event_id)
-
-      # 3f. Apply transition (per §6 matrices)
-      apply_transition(state, event)
-
-      # 3g. Record sequence
-      state.last_sequence = event.sequence
-
-  # 4. Return reconstructed projection — NEVER writes to DB
-  return state
+    return projection
 ```
+
+### Position projection behavior
+
+```python
+def apply_position_projection(projection, event, current_instance):
+    if event.event_type == "PositionOpened":
+        # New lifecycle instance — only valid if no open instance exists
+        if current_instance and current_instance.is_open:
+            raise ReplayInvalidTransition("PositionOpened while instance open")
+        current_instance = LifecycleInstance(open_sequence=event.sequence)
+        projection.current_instance = current_instance
+        projection.instances.append(current_instance)
+        current_instance.net_quantity = event.payload["initial_quantity"]
+
+    elif event.event_type == "PositionUpdated":
+        if not current_instance or not current_instance.is_open:
+            raise ReplayInvalidTransition("PositionUpdated without open instance")
+        current_instance.net_quantity = event.payload["net_quantity"]
+        current_instance.average_entry_price = event.payload["average_entry_price"]
+        current_instance.realized_pnl = event.payload["realized_pnl"]
+        current_instance.attribution.append(event.payload["execution_id"])
+
+    elif event.event_type == "PositionClosed":
+        if not current_instance or not current_instance.is_open:
+            raise ReplayInvalidTransition("PositionClosed without open instance")
+        if current_instance.net_quantity != 0:
+            raise ReplayInvalidTransition("PositionClosed with non-zero net")
+        current_instance.is_open = False
+        current_instance.closed_sequence = event.sequence
+        current_instance.final_realized_pnl = event.payload["final_realized_pnl"]
+```
+
+### Replay reconstruction scopes (CORRECTED — two separate scopes)
+
+```text
+Execution replay (execution_id scope)
+    ↓ reconstructs execution state + orders + fills
+
+Position reconstruction (position_identity scope)
+    ↓ aggregates contributions from ALL executions affecting same instrument
+    ↓ reconstructs netted position + lifecycle instances
+
+These are NOT the same replay. Execution replay answers "what happened in this execution?". Position reconstruction answers "what position exists for this instrument across all executions?"
+```
+
+### Replay must not confuse scopes
+
+- `replay_aggregate(aggregate_id=execution_id, ...)` reconstructs execution-scoped state. It does NOT produce netted position state (it collects position events but does not aggregate them with other executions).
+- `reconstruct_position(position_identity=(user, symbol, expiry, strike, option_type), ...)` aggregates all `PositionOpened/Updated/Closed` events across all `execution_id` values, ordered globally, to reconstruct the netted position with lifecycle instances.
+- No single replay call produces both results automatically. The design provides both paths explicitly.
+- Replay of one execution does not imply replay of the position it contributed to — position reconstruction is a separate operation.
+
+### Replay must remain read-only (correction preserved)
+
+No replay writes to authoritative tables (`PaperOrder`, `Position`, `StrategyExecution`). Replay produces projection objects only.
 
 ### Replay rejects (all deterministic, no best-effort)
 
@@ -491,8 +661,21 @@ replay_aggregate(aggregate_id, tenant_id, db) -> TradeLifecycleAggregate:
 | Unknown version | `ReplayUnknownVersion` | Stop |
 | Tenant mismatch | `ReplaySecurityError` | Stop (fail closed) |
 | Aggregate mismatch | `ReplaySecurityError` | Stop (fail closed) |
+| Position instance open violation | `ReplayInvalidTransition` (instance not closed but new `PositionOpened` arrives) | Stop |
+| Position instance closed violation | `ReplayInvalidTransition` (update on closed instance) | Stop |
+| Position close with non-zero net | `ReplayInvalidTransition` | Stop |
+| PositionOpened while instance open | `ReplayInvalidTransition` | Stop |
+| PositionClosed with non-zero net | `ReplayInvalidTransition` | Stop |
+| PositionUpdated without open instance | `ReplayInvalidTransition` | Stop |
 
 Canonical replay is all-or-nothing. No partial state is ever silently reconstructed.
+
+### Ordering across executions for position reconstruction
+
+Position reconstruction aggregates events from multiple executions. The ordering rule:
+- Events are ordered by `(aggregate_id ASC, sequence ASC)` — global ordering across executions.
+- This ensures deterministic reconstruction regardless of event insertion order, as long as each aggregate's internal sequence is valid.
+- Different execution orderings produce the same final position projection (determinism).
 
 ## 13. Transaction Architecture (CORRECTED — fail-closed)
 
@@ -563,24 +746,34 @@ No refactoring, no reordering, no new execution path, no `can_transition()` chan
 | No authorization implied | No event type carries authorization vocabulary | Structural (enum) |
 | No command created during append | Events record facts, not requests | Structural (enum) |
 
-### Replay-time invariants (checked in `replay_aggregate()`)
+### Replay-time invariants (checked during replay)
 
 | Invariant | Check | Failure |
 |-----------|-------|---------|
 | Tenant match | `event.tenant_id == requested_tenant_id` | Stop (fail closed) |
-| Aggregate match | `event.aggregate_id == requested_aggregate_id` | Stop |
+| Aggregate match | `event.aggregate_id == requested_aggregate_id` | Stop (execution replay) |
 | Sequence monotonicity | `event.sequence == last_sequence + 1` | Stop (gap) |
-| Terminal-state protection | No event applied to terminal state | Stop (invalid transition) |
+| Terminal-state protection (execution) | No event applied to terminal execution state | Stop |
+| Terminal-state protection (order) | No event applied to terminal order state | Stop |
+| Terminal-state protection (position instance) | No event applied to closed lifecycle instance | Stop |
+| PositionOpened only when no open instance | `PositionOpened` requires no current open instance for this identity | Stop |
+| PositionClosed requires net=0 | `PositionClosed` only when `net_quantity == 0` | Stop |
+| PositionUpdated requires open instance | `PositionUpdated` only when open instance exists | Stop |
 | Fill quantity consistency | `Σ fill_qty ≤ order_qty`; `= order_qty` when FILLED | Stop |
-| Position netting consistency | Position events track correctly; `PositionClosed` requires net=0 | Stop |
+| Position netting consistency | Multiple executions contribute to same netted position per instrument | Structural (projection) |
 | Event version | `event.version ∈ SUPPORTED_VERSIONS` | Stop |
 | Sequence uniqueness | Impossible by `UNIQUE(aggregate_id, sequence)` constraint | N/A |
-| Position is instrument-netted | Position events affect the same `(user_id, symbol, expiry, strike, option_type)` regardless of `execution_id` | Structural (event payload) |
+| Position identity invariant | `position_identity` is `(user_id, symbol, expiry, strike, option_type)` scoped | Structural (event payload) |
+| Attribution invariant | `execution_id` identifies contribution, not ownership | Structural (event payload) |
+| Instance invariant | Closed lifecycle instance cannot receive updates | Stop |
+| Netting invariant | Multiple executions affecting same instrument contribute to same reconstructed netted position | Structural (projection) |
+| Reopen invariant | Later non-zero exposure may create new lifecycle instance for same identity | Structural (event ordering) |
 
 ### Which invariants checked where
 
 - **Append time**: aggregate identity, tenant identity, version, structural invariants (write safety).
-- **Replay time**: sequence, terminal, fill/position consistency, tenant, version, aggregate (reconstruction safety).
+- **Execution replay**: sequence, terminal (execution/order), fill consistency, tenant, version, aggregate.
+- **Position reconstruction**: position identity, lifecycle instance boundaries, netting, tenant, version, terminal (instance).
 
 ## 15. Tenant / Security Model (fail-closed)
 
@@ -610,7 +803,15 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 | Execution attribution does not create independent ownership | Two execution_ids contribute to same `position_identity`; position is single |
 | Position close requires net=0 across ALL contributions | Cannot close position if other executions have open exposure |
 | Position netting consistency | After replay, position net quantity matches authoritative `Position.net_quantity` |
-| Same instrument across executions: NOT separate positions | Explicit test proving single netted position, not two execution-owned ones |
+| Cross-execution netting — same instrument | Execution A: BUY 10 NIFTY 24000 CE; Execution B: SELL 5 NIFTY 24000 CE → reconstructed position = +5 (not separate) |
+| Cross-execution netting — same instrument | Execution A: BUY 10 NIFTY 24000 CE; Execution B: SELL 5 NIFTY 24000 CE → reconstructed position = +5 (not separate) |
+| Execution attribution retained | Both events retain `execution_id`; position reconstruction aggregates by identity, not by execution |
+| Multiple executions, same instrument — 3+ | Three executions affecting same instrument reconstruct one netted position |
+| Close and reopen — lifecycle instance #1 CLOSED, instance #2 OPEN | BUY 10 → SELL 10 (instance #1 CLOSED) → BUY 5 (instance #2 OPEN, net +5) |
+| Closed instance terminal protection | `PositionClosed` on instance prevents updates; new `PositionOpened` starts new instance |
+| Different instruments | Different `position_identity` values remain independent |
+| Cross-tenant isolation | Same instrument for different tenants never combine |
+| Deterministic reconstruction | Same event sequence → same reconstructed netted position regardless of insertion order |
 
 ### Sequence allocation / concurrency (§10)
 
@@ -651,7 +852,8 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 |------|-------------|
 | Execution: all valid transitions | `CREATED→ACTIVE→COMPLETED`, `→FAILED`, `→CANCELLED` |
 | Order: all valid transitions | `PENDING→SUBMITTED→FILLED`, `→PARTIALLY_FILLED→FILLED`, `→CANCELLED`, `→REJECTED` |
-| Position: valid transitions | `OPEN→UPDATED→CLOSED` |
+| Position: valid transitions | `OPEN→UPDATED→CLOSED` (instance #1), `OPEN→UPDATED→CLOSED` (instance #2) |
+| Position: lifecycle instance creation | `PositionOpened` after prior instance CLOSED creates new instance |
 | Fill: append-only | Multiple fills per order; cumulative invariant |
 
 ### Invalid / terminal transitions (§6)
@@ -660,7 +862,8 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 |------|-------------|
 | Execution terminal: reject all | `COMPLETED→ACTIVE`, `FAILED→COMPLETED`, etc. (5 terminal states × events) |
 | Order terminal: reject all | `FILLED→PENDING`, `CANCELLED→FILLED`, etc. |
-| Position terminal: reject all | `CLOSED→OPEN`, `CLOSED→UPDATED` |
+| Position instance terminal: reject all | `CLOSED→OPEN`, `CLOSED→UPDATED` on same instance |
+| Position instance: new OPEN after CLOSED allowed | `PositionOpened` after prior instance CLOSED creates new instance (not invalid) |
 | Invalid order transition | `CANCELLED→FILLED` via `can_transition()` (Day 34 regression) |
 
 ### Duplicate / conflict (§11)
@@ -893,7 +1096,7 @@ No refactoring, no reordering, no `can_transition()` changes, no new execution p
 
 ## Design Conclusion
 
-Final corrected Day 38 design addresses all 10 mandatory corrections:
+Final corrected Day 38 design satisfies all 12 mandatory corrections (10 prior + 2 final):
 
 1. ✅ Position ownership/netting corrected — user/instrument-netted; execution attribution only.
 2. ✅ First-event sequence concurrency — `StrategyExecution` row lock via `FOR UPDATE`.
@@ -905,5 +1108,7 @@ Final corrected Day 38 design addresses all 10 mandatory corrections:
 8. ✅ Full consistency pass across all sections.
 9. ✅ Test matrix expanded to ~105 covering all corrected areas.
 10. ✅ Final output per Control Center requirements.
+11. ✅ **Execution replay vs Position reconstruction separated** — two distinct scopes; execution attribution not ownership; independent replay paths.
+12. ✅ **Position lifecycle instances** — CLOSED = terminal for instance; identity reusable; `PositionOpened` starts new instance; no `CLOSED → OPEN` on same instance.
 
 No code, no tests, no migration, no tracker edit. Control Center approval required before implementation.
