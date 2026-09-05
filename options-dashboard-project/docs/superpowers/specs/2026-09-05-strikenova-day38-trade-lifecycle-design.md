@@ -27,11 +27,11 @@ Status: DESIGN ONLY — corrected per Control Center mandatory corrections. No c
 21. **`quantity_delta` made a real relational column** — authoritative field on `trade_lifecycle_events`, not payload JSON.
 22. **PositionClosed carries final delta** — `Σ quantity_delta` for lifecycle instance = 0 at closure.
 23. **Zero-crossing explicitly prohibited** — position must close before reversing direction; decomposition rule defined.
-24. **Repository HEAD corrected** to `33aad78`.
+24. **Repository HEAD corrected** to `9d5ed8f`.
 
 ## 1. Repository State
 
-- Branch: `feat/strikenova-day35-portfolio-intelligence`; HEAD: `33aad78`.
+- Branch: `feat/strikenova-day35-portfolio-intelligence`; HEAD: `9d5ed8f`.
 - Day 37: approved `2828554` (`DomainEvent` frozen envelope; `EventBus` with failure isolation; `HandlerScopedIdempotency`; no forbidden deps).
 - Existing lifecycle: `app/services/paper_execution.py`; `app/models.py` (`StrategyExecution`, `PaperOrder`, `Position`, `PaperTransaction`, `StrategyLegExposure`, `ExitExposureAllocation`, `BulkExitRecord`); `can_transition()`/`transition()` pure validators.
 - Risk gate chain: `Opportunity → StrategyCandidate → StrategyEvaluation → CentralRisk (Day-33) → PortfolioAnalytics (Day-35) → FinalRiskGate (Day-36) → User Decision → Execution`.
@@ -225,9 +225,9 @@ Replay then applies: `+10 +10 -15 = +5`. Reconstructed `net_quantity = +5`.
 If Execution C later closes the position:
 ```
 Execution C (execution_id="exec-c"):
-  PositionUpdated: position_identity=(NIFTY,24000,CE), quantity_delta=-5, exec=exec-c
-                                                                           → net = 0
-  PositionClosed: position_identity=(NIFTY,24000,CE), quantity_delta=0, final_realized_pnl=...
+  PositionUpdated: position_identity=(NIFTY,24000,CE), quantity_delta=-2, exec=exec-c
+                                                                           → net = +3
+  PositionClosed: position_identity=(NIFTY,24000,CE), quantity_delta=-3, final_realized_pnl=...
                                                                            → instance CLOSED (net = 0)
 ```
 
@@ -1546,6 +1546,6 @@ Final corrected Day 38 design satisfies all 24 mandatory corrections across 4 re
 21. ✅ **`quantity_delta` is a real relational column** — `Integer NULLABLE` on `trade_lifecycle_events`; replay reads `event.quantity_delta` column, NOT `event.payload["quantity_delta"]`.
 22. ✅ **PositionClosed carries final delta** — `quantity_delta` brings `Σ quantity_delta` for lifecycle instance to exactly 0; invariant verified at replay.
 23. ✅ **Zero-crossing explicitly prohibited** — `PositionUpdated` MUST NOT cross zero within a lifecycle instance; caller must decompose into `PositionClosed` + `PositionOpened` before persist; replay rejects zero-crossing.
-24. ✅ **Repository metadata corrected** — HEAD updated to `33aad78`.
+24. ✅ **Repository metadata corrected** — HEAD updated to `9d5ed8f`.
 
 No code, no tests, no migration, no tracker edit. Control Center approval required before implementation.
