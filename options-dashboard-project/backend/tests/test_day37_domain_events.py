@@ -621,7 +621,7 @@ class TestEventBusFailureHandling:
         assert len(failing_handler.handled_events) == 1
     
     def test_multi_handler_failure_semantics_are_deterministic(self) -> None:
-        """When multiple handlers, failure stops propagation to subsequent handlers."""
+        """All handlers are called even if one fails; the first exception is raised."""
         bus = EventBus()
         handler_good = TestEventHandler("good-1", TEST_EVENT_TYPE)
         handler_failing = FailingEventHandler("failing-1", TEST_EVENT_TYPE)
@@ -635,16 +635,14 @@ class TestEventBusFailureHandling:
         
         event = _make_base_event()
         
-        # First handler should process, second should fail and stop propagation
+        # We expect the first exception (from the failing handler) to be raised
         with pytest.raises(ValueError, match="Handler failed intentionally"):
             bus.publish(event)
         
-        # First handler processed
+        # All handlers should have been called (the failing handler's handle was called, even though it failed)
         assert len(handler_good.handled_events) == 1
-        # Failing handler was called (event in its list) but failed
         assert len(handler_failing.handled_events) == 1
-        # Third handler should not have been called due to early exception
-        assert len(handler_also_good.handled_events) == 0
+        assert len(handler_also_good.handled_events) == 1
 
 
 class TestEventBusTenantIsolation:
@@ -839,6 +837,267 @@ class TestEventBusLifecycleMethods:
         bus.subscribe(handler)  # Re-subscribe
         bus.publish(event)
         assert len(handler.handled_events) == 2  # Processed once before reset, once after
+
+
+class TestDay37RemediationRequiredTests:
+    """Regression tests required by Day 37 remediation.
+
+    These tests cover the 12 required test categories from the remediation
+    specification and ensure handler failure isolation and idempotency correctness.
+    """
+
+    # --- 1. Successful multiple-handler execution ---
+    def test_all_handlers_execute_on_success(self) -> None:
+        """When all handlers succeed, all execute exactly once."""
+        bus = EventBus()
+        h1 = TestEventHandler("h1", TEST_EVENT_TYPE)
+        h2 = TestEventHandler("h2", TEST_EVENT_TYPE)
+        h3 = TestEventHandler("h3", TEST_EVENT_TYPE)
+        bus.subscribe(h1)
+        bus.subscribe(h2)
+        bus.subscribe(h3)
+
+        event = _make_base_event()
+        bus.publish(event)
+
+        assert len(h1.handled_events) == 1
+        assert len(h2.handled_events) == 1
+        assert len(h3.handled_events) == 1
+
+    # --- 2. First handler failure does not suppress later handler ---
+    def test_first_handler_failure_does_not_suppress_later_handlers(self) -> None:
+        """A failure in the first handler does not prevent later handlers from executing."""
+        bus = EventBus()
+        h_fail = FailingEventHandler("h-fail", TEST_EVENT_TYPE)
+        h_fail.fail = True
+        h2 = TestEventHandler("h2", TEST_EVENT_TYPE)
+        h3 = TestEventHandler("h3", TEST_EVENT_TYPE)
+        bus.subscribe(h_fail)
+        bus.subscribe(h2)
+        bus.subscribe(h3)
+
+        event = _make_base_event()
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(h_fail.handled_events) == 1
+        assert len(h2.handled_events) == 1
+        assert len(h3.handled_events) == 1
+
+    # --- 3. Middle handler failure does not suppress later handler ---
+    def test_middle_handler_failure_does_not_suppress_later_handlers(self) -> None:
+        """A failure in the middle handler does not prevent later handlers from executing."""
+        bus = EventBus()
+        h1 = TestEventHandler("h1", TEST_EVENT_TYPE)
+        h_fail = FailingEventHandler("h-fail", TEST_EVENT_TYPE)
+        h_fail.fail = True
+        h3 = TestEventHandler("h3", TEST_EVENT_TYPE)
+        bus.subscribe(h1)
+        bus.subscribe(h_fail)
+        bus.subscribe(h3)
+
+        event = _make_base_event()
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(h1.handled_events) == 1
+        assert len(h_fail.handled_events) == 1
+        assert len(h3.handled_events) == 1
+
+    # --- 4. Last handler failure is observable ---
+    def test_last_handler_failure_is_observable(self) -> None:
+        """A failure in the last handler is propagated to the caller."""
+        bus = EventBus()
+        h1 = TestEventHandler("h1", TEST_EVENT_TYPE)
+        h_fail = FailingEventHandler("h-fail", TEST_EVENT_TYPE)
+        h_fail.fail = True
+        bus.subscribe(h1)
+        bus.subscribe(h_fail)
+
+        event = _make_base_event()
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(h1.handled_events) == 1
+        assert len(h_fail.handled_events) == 1
+
+    # --- 5. Multiple handler failures remain observable ---
+    def test_multiple_handler_failures_all_observable(self) -> None:
+        """When multiple handlers fail, all are invoked and the first failure is observable."""
+        bus = EventBus()
+        h_fail1 = FailingEventHandler("h-fail1", TEST_EVENT_TYPE)
+        h_fail1.fail = True
+        h_fail2 = FailingEventHandler("h-fail2", TEST_EVENT_TYPE)
+        h_fail2.fail = True
+        h_success = TestEventHandler("h-success", TEST_EVENT_TYPE)
+        bus.subscribe(h_fail1)
+        bus.subscribe(h_success)
+        bus.subscribe(h_fail2)
+
+        event = _make_base_event()
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(h_fail1.handled_events) == 1
+        assert len(h_success.handled_events) == 1
+        assert len(h_fail2.handled_events) == 1
+
+    # --- 6. Successful handler is idempotently suppressed on duplicate ---
+    def test_successful_duplicate_is_suppressed(self) -> None:
+        """After successful processing, a duplicate is suppressed for the same handler."""
+        bus = EventBus()
+        handler = TestEventHandler("h1", TEST_EVENT_TYPE)
+        bus.subscribe(handler)
+
+        event = _make_base_event(event_id="idempotent-ok")
+        bus.publish(event)
+        bus.publish(event)
+
+        assert len(handler.handled_events) == 1
+
+    # --- 7. Failed handler can be retried ---
+    def test_failed_handler_can_be_retried(self) -> None:
+        """After a handler fails, a retry re-invokes the handler (not suppressed)."""
+        bus = EventBus()
+        handler = FailingEventHandler("h-retry", TEST_EVENT_TYPE)
+        handler.fail = True
+        bus.subscribe(handler)
+
+        event = _make_base_event(event_id="retry-test")
+
+        # First publish: handler fails
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(handler.handled_events) == 1
+
+        # Disable failure and retry: handler should execute again
+        handler.fail = False
+        bus.publish(event)
+
+        # Handler was invoked twice: once on the failed attempt, once on retry
+        assert len(handler.handled_events) == 2
+
+    # --- 8. Retry does not re-execute already-successful handlers ---
+    def test_retry_does_not_re_execute_successful_handlers(self) -> None:
+        """When one handler fails and is retried, previously successful handlers
+        are not re-executed (idempotency is per event_id + handler_id)."""
+        bus = EventBus()
+        h_success = TestEventHandler("h-success", TEST_EVENT_TYPE)
+        h_fail = FailingEventHandler("h-fail", TEST_EVENT_TYPE)
+        h_fail.fail = True
+        bus.subscribe(h_success)
+        bus.subscribe(h_fail)
+
+        event = _make_base_event(event_id="retry-idempotent")
+
+        # First publish: h_success succeeds, h_fail fails
+        with pytest.raises(ValueError, match="Handler failed intentionally"):
+            bus.publish(event)
+
+        assert len(h_success.handled_events) == 1
+        assert len(h_fail.handled_events) == 1
+
+        # Disable failure and retry
+        h_fail.fail = False
+        bus.publish(event)
+
+        # h_success is NOT re-invoked (idempotent); h_fail is invoked again
+        assert len(h_success.handled_events) == 1
+        assert len(h_fail.handled_events) == 2
+
+    # --- 9. (event_id, handler_id) remains the idempotency boundary ---
+    def test_event_id_handler_id_boundary(self) -> None:
+        """Idempotency key is (event_id, handler_id), not just event_id."""
+        bus = EventBus()
+        h_a = TestEventHandler("handler-A", TEST_EVENT_TYPE)
+        h_b = TestEventHandler("handler-B", TEST_EVENT_TYPE)
+        bus.subscribe(h_a)
+        bus.subscribe(h_b)
+
+        event = _make_base_event(event_id="boundary-test")
+        bus.publish(event)
+
+        # Both handlers process the same event independently
+        assert len(h_a.handled_events) == 1
+        assert len(h_b.handled_events) == 1
+
+        # Second publish: both are suppressed as duplicates
+        bus.publish(event)
+        assert len(h_a.handled_events) == 1
+        assert len(h_b.handled_events) == 1
+
+        # Different event_id: both handlers process again
+        event2 = _make_base_event(event_id="boundary-test-2")
+        bus.publish(event2)
+        assert len(h_a.handled_events) == 2
+        assert len(h_b.handled_events) == 2
+
+    # --- 10. Deterministic handler execution order ---
+    def test_deterministic_execution_order(self) -> None:
+        """Handlers execute in registration order, every time."""
+        bus = EventBus()
+        execution_order: List[str] = []
+
+        class OrderTrackingHandler:
+            def __init__(self, hid: str):
+                self._handler_id = hid
+                self._event_type = TEST_EVENT_TYPE
+
+            @property
+            def handler_id(self) -> str:
+                return self._handler_id
+
+            @property
+            def event_type(self) -> str:
+                return self._event_type
+
+            def handle(self, event: DomainEvent) -> None:
+                execution_order.append(self._handler_id)
+
+        h1 = OrderTrackingHandler("first")
+        h2 = OrderTrackingHandler("second")
+        h3 = OrderTrackingHandler("third")
+        bus.subscribe(h1)
+        bus.subscribe(h2)
+        bus.subscribe(h3)
+
+        event = _make_base_event()
+        bus.publish(event)
+        assert execution_order == ["first", "second", "third"]
+
+    # --- 11. Tenant context remains preserved ---
+    def test_tenant_context_preserved_through_failure_isolation(self) -> None:
+        """Tenant context reaches all handlers even when some fail."""
+        bus = EventBus()
+        h1 = TestEventHandler("h1", TEST_EVENT_TYPE)
+        h_fail = FailingEventHandler("h-fail", TEST_EVENT_TYPE)
+        h_fail.fail = True
+        h3 = TestEventHandler("h3", TEST_EVENT_TYPE)
+        bus.subscribe(h1)
+        bus.subscribe(h_fail)
+        bus.subscribe(h3)
+
+        tenant = "remediation-tenant"
+        event = _make_base_event(tenant_id=tenant)
+
+        with pytest.raises(ValueError):
+            bus.publish(event)
+
+        # All handlers received the event with correct tenant
+        assert all(
+            e.tenant_id == tenant
+            for e in h1.handled_events + h_fail.handled_events + h3.handled_events
+        )
+
+    # --- 12. Unknown event type still raises ValueError ---
+    def test_unknown_event_type_still_raises_valueerror(self) -> None:
+        """Unknown event types still raise ValueError deterministically."""
+        bus = EventBus()
+        event = _make_base_event(event_type="UnknownType")
+
+        with pytest.raises(ValueError, match="No handlers registered for event type: UnknownType"):
+            bus.publish(event)
 
 
 if __name__ == "__main__":

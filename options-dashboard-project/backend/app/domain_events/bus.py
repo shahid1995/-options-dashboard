@@ -55,28 +55,40 @@ class EventBus(EventPublisher):
             - Looks up handlers registered for event.event_type
             - Invokes each handler in registration order
             - Applies handler-scoped idempotency (event_id, handler_id)
-            - Propagates any handler exceptions to the caller
+            - If a handler fails, its exception is recorded but all remaining
+              handlers are still invoked
+            - The first handler exception (if any) is propagated to the caller
+              after all handlers have been invoked
             - Events with no registered handlers raise a ValueError deterministically
 
         Raises:
-            Exception: If any handler raises an exception, it is propagated
-                      immediately and subsequent handlers are not invoked.
+            ValueError: If no handlers are registered for the event's type.
+            Exception: If any handler raises an exception, the first exception
+                       encountered is propagated after all handlers have been invoked.
         """
         handlers = self._handlers.get(event.event_type, [])
         if not handlers:
             raise ValueError(f"No handlers registered for event type: {event.event_type}")
 
+        first_exception = None
         for handler in handlers:
             # Check idempotency before processing
             if self._idempotency.is_duplicate(event, handler):
                 # Skip duplicate delivery to same handler
                 continue
 
-            # Mark as processed before invocation to handle reentrant cases
-            self._idempotency.mark_processed(event, handler)
+            try:
+                handler.handle(event)
+                # Only mark as processed if the handler succeeded
+                self._idempotency.mark_processed(event, handler)
+            except Exception as e:
+                # Record the first exception but continue to invoke remaining handlers
+                if first_exception is None:
+                    first_exception = e
 
-            # Invoke handler - any exception will propagate to caller
-            handler.handle(event)
+        # If any handler failed, raise the first exception after all handlers have been invoked
+        if first_exception is not None:
+            raise first_exception
 
     def reset_idempotency(self) -> None:
         """Reset the idempotency tracker.
