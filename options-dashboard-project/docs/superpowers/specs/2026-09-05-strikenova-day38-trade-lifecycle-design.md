@@ -1,8 +1,8 @@
-# Day 38 Design — Trade Lifecycle State Machine (Final Corrected — Remediation #3)
+# Day 38 Design — Trade Lifecycle State Machine (Final Corrected — Remediation #4)
 
 Status: DESIGN ONLY — corrected per Control Center mandatory corrections. No code, no tests, no migration, no tracker edit.
 
-## Corrections Applied (through Remediation #3)
+## Corrections Applied (through Remediation #4)
 
 1. Position ownership/netting corrected — position is user/instrument-netted; execution provides attribution only.
 2. First-event sequence concurrency — lockable `StrategyExecution` anchor row; `FOR UPDATE` on first event.
@@ -22,10 +22,16 @@ Status: DESIGN ONLY — corrected per Control Center mandatory corrections. No c
 16. Delta semantics applied consistently — `quantity_delta` = lifecycle contribution; `net_quantity` = reconstructed state (never a payload field).
 17. Event lifecycle order defined — sequence allocation → `event_id` derivation → duplicate check → persist.
 18. Canonical duplicate comparison defined — full canonical content representation including `position_sequence` and all identity fields.
+19. **Position sequence uniqueness scoped to PositionIdentity** — `UNIQUE(tenant_id, position_identity_*, position_sequence)`, not global.
+20. **Rollback semantics corrected** — transactional rollback reverts sequence allocation; no "burned" gaps.
+21. **`quantity_delta` made a real relational column** — authoritative field on `trade_lifecycle_events`, not payload JSON.
+22. **PositionClosed carries final delta** — `Σ quantity_delta` for lifecycle instance = 0 at closure.
+23. **Zero-crossing explicitly prohibited** — position must close before reversing direction; decomposition rule defined.
+24. **Repository HEAD corrected** to `33aad78`.
 
 ## 1. Repository State
 
-- Branch: `feat/strikenova-day35-portfolio-intelligence`; HEAD: `238e4eb`.
+- Branch: `feat/strikenova-day35-portfolio-intelligence`; HEAD: `33aad78`.
 - Day 37: approved `2828554` (`DomainEvent` frozen envelope; `EventBus` with failure isolation; `HandlerScopedIdempotency`; no forbidden deps).
 - Existing lifecycle: `app/services/paper_execution.py`; `app/models.py` (`StrategyExecution`, `PaperOrder`, `Position`, `PaperTransaction`, `StrategyLegExposure`, `ExitExposureAllocation`, `BulkExitRecord`); `can_transition()`/`transition()` pure validators.
 - Risk gate chain: `Opportunity → StrategyCandidate → StrategyEvaluation → CentralRisk (Day-33) → PortfolioAnalytics (Day-35) → FinalRiskGate (Day-36) → User Decision → Execution`.
@@ -230,23 +236,63 @@ Lifecycle instance #1 → CLOSED. Identity remains available for future instance
 #### Lifecycle instance boundaries in replay
 
 Replay tracks lifecycle instances implicitly:
-- `PositionOpened` starts a new instance (only valid when no open instance exists for this `position_identity`).
-- `PositionUpdated` modifies the current open instance.
-- `PositionClosed` terminates the current open instance (only valid when reconstructed net = 0, i.e. `Σ quantity_delta` for the current instance = 0).
-- A subsequent `PositionOpened` for the same identity begins a new instance.
-```
-Execution A (execution_id="exec-a"):
-  Order: BUY 10 NIFTY 24000 CE
-  → FillRecorded: order_id=1, qty=10, price=125.00
-  → PositionOpened: position_identity=(NIFTY,24000,CE), quantity_delta=+10
+- `PositionOpened` starts a new instance (only valid when no open instance exists for this `position_identity`). Allocates a `position_sequence` for the PositionIdentity.
+- `PositionUpdated` modifies the current open instance. `position_sequence` allocated. **MUST NOT cross zero** — if the cumulative `quantity_delta` would cross zero, the event must be decomposed by the caller into `PositionClosed` + `PositionOpened` (see zero-crossing rule below).
+- `PositionClosed` terminates the current open instance. `position_sequence` allocated. The `quantity_delta` must bring the reconstructed net to exactly 0. Invariant: `Σ quantity_delta for lifecycle instance == 0`.
+- A subsequent `PositionOpened` for the same identity begins a new instance. Allocates a new `position_sequence` after the prior instance's final `position_sequence`.
 
-Execution B (execution_id="exec-b"):
-  Order: SELL 5 NIFTY 24000 CE
-  → FillRecorded: order_id=2, qty=5, price=140.00
-  → PositionUpdated: position_identity=(NIFTY,24000,CE), quantity_delta=-5
+#### Zero-crossing rule (CORRECTED)
+
+A `PositionUpdated` event MUST NOT cross zero within a lifecycle instance. If the update would cause the net quantity to cross from positive to negative or vice versa, the caller must decompose the event BEFORE persisting:
+
+```text
+Current state: net = +10, incoming delta = -15
+
+MUST be decomposed into:
+  PositionClosed  {quantity_delta: -10}   → net = 0 (instance CLOSED)
+  PositionOpened  {quantity_delta: -5}    → new instance, net = -5
+
+NOT:
+  PositionUpdated {quantity_delta: -15}   → net = -5 (INVALID — zero crossing)
 ```
 
-Authoritative position: `NIFTY 24000 CE, net_quantity = +5` (reconstructed from `+10 -5 = +5`). Both lifecycle event streams contribute to the same netted position. Replay aggregates contributions by `position_identity` and `position_sequence`, NOT by `execution_id` or execution-scoped `sequence`.
+Similarly:
+
+```text
+Current state: net = -10, incoming delta = +15
+
+MUST be decomposed into:
+  PositionClosed  {quantity_delta: +10}   → net = 0 (instance CLOSED)
+  PositionOpened  {quantity_delta: +5}    → new instance, net = +5
+```
+
+This preserves lifecycle determinism:
+- Each lifecycle instance has a consistent directional exposure (long, flat, or short).
+- `CLOSED` is terminal for the current instance.
+- The same `PositionIdentity` can later start a new lifecycle instance with the opposite direction.
+- `position_sequence` orders all position events chronologically, including the decomposition events.
+- Position ownership remains user/instrument-based, not execution-based. Decomposition is a lifecycle-persistence concern, not an execution concern.
+
+Canonical example (full lifecycle):
+
+```text
+Execution A: BUY 10 NIFTY 24000 CE
+  PositionOpened  {quantity_delta: +10}    → net = +10, pos_seq = 1
+
+Execution B: SELL 5 NIFTY 24000 CE
+  PositionUpdated {quantity_delta: -5}     → net = +5, pos_seq = 2
+
+Execution C: SELL 5 NIFTY 24000 CE
+  PositionClosed  {quantity_delta: -5}     → net = 0, pos_seq = 3  (instance CLOSED)
+
+Execution D: SELL 3 NIFTY 24000 CE  (new short)
+  PositionOpened  {quantity_delta: -3}     → net = -3, pos_seq = 4  (new instance)
+
+Execution E: BUY 3 NIFTY 24000 CE
+  PositionClosed  {quantity_delta: +3}     → net = 0, pos_seq = 5  (instance CLOSED)
+```
+
+Note: Execution D opens a new short position for the same `PositionIdentity` after the long position was closed. The identity is reusable; the lifecycle instance is new.
 
 ## 6. Complete Transition Matrix
 
@@ -430,19 +476,27 @@ Reconciliation with Day 37 `DomainEvent`: the Day 37 `DomainEvent` is an **immut
     - The reconstructed state is: `net_quantity = Σ quantity_delta across all events in this lifecycle instance`.
 
 14. `PositionClosed` — position lifecycle instance fully closed (net = 0); payload: `{position_identity, quantity_delta: <int>, final_realized_pnl: <float>}`
-    - `quantity_delta`: the final signed change that brings net to 0 (e.g., -5 to close +5).
+    - `quantity_delta`: the FINAL signed contribution that brings `Σ quantity_delta` for the lifecycle instance to exactly 0.
     - `final_realized_pnl`: total realized P&L for this lifecycle instance.
+    - **Invariant**: after applying this `quantity_delta`, reconstructed `net_quantity == 0`.
 
 ### Position reconstruction semantics (DELTA)
 
 Replay computes: `net_quantity = Σ quantity_delta` for all events in the current lifecycle instance (ordered by `position_sequence`).
 
-Example:
+Example — full lifecycle:
 ```
 Event 1: PositionOpened  {quantity_delta: +10}   → net = +10
 Event 2: PositionUpdated {quantity_delta: -5}     → net = +5
 Event 3: PositionClosed  {quantity_delta: -5}     → net = 0 (instance CLOSED)
 Event 4: PositionOpened  {quantity_delta: +5}     → NEW instance, net = +5
+```
+
+Example — zero-crossing decomposition (BUY 10, then SELL 15):
+```
+Event 1: PositionOpened  {quantity_delta: +10}   → net = +10
+Event 2: PositionClosed  {quantity_delta: -10}   → net = 0 (instance CLOSED)
+Event 3: PositionOpened  {quantity_delta: -5}    → NEW instance, net = -5
 ```
 
 **Key rule**: `quantity_delta` is the lifecycle contribution. `net_quantity` is a **reconstructed state**, never an event payload field. Replay validates: after `PositionClosed`, `Σ quantity_delta == 0`.
@@ -476,23 +530,31 @@ Two new Alembic-managed tables:
 | `event_type` | `String(32)` | NOT NULL, indexed | One of 14 types |
 | `event_version` | `String(16)` | NOT NULL | `"1.0"` |
 | `tenant_id` | `String(128)` | NOT NULL, indexed | `user_id` |
-| `sequence` | `Integer` | NOT NULL | Monotonic per aggregate |
+| `sequence` | `Integer` | NOT NULL | Monotonic per aggregate (execution-scoped) |
 | `position_sequence` | `Integer` | NULLABLE, indexed | Position-scoped causal order; NULL for non-position events |
+| `quantity_delta` | `Integer` | NULLABLE | Signed lifecycle quantity contribution; NULL for non-position events. `PositionOpened/Updated/Closed` MUST populate this. Authoritative: replay reads this column, NOT `payload_json`. |
 | `position_identity_user_id` | `String(128)` | NULLABLE, indexed | `user_id` component of PositionIdentity; NULL for non-position events |
 | `position_identity_symbol` | `String(16)` | NULLABLE | Symbol component of PositionIdentity |
 | `position_identity_expiry` | `String(10)` | NULLABLE | Expiry component of PositionIdentity |
 | `position_identity_strike` | `Float` | NULLABLE | Strike component of PositionIdentity |
 | `position_identity_option_type` | `String(8)` | NULLABLE | Option type component of PositionIdentity |
 | `occurred_at` | `DateTime(timezone=True)` | NOT NULL | Caller-supplied aware datetime |
-| `payload_json` | `Text` | NOT NULL | `json.dumps(payload, sort_keys=True)` — additional event data; NOT authoritative for ordering/quantities |
+| `payload_json` | `Text` | NOT NULL | `json.dumps(payload, sort_keys=True)` — supplemental event data; NOT authoritative for ordering or quantity reconstruction |
 | `metadata_json` | `Text` | NULLABLE | Optional JSON metadata |
 | `created_at` | `DateTime(timezone=True)` | NOT NULL | DB write time (default utcnow) |
 
 Constraints:
 - PK: `event_id`
-- `UNIQUE(aggregate_id, sequence)` — ordering invariant (integrity guard, §10)
-- `UNIQUE(position_sequence)` — position-scoped ordering invariant (partial unique index where `position_sequence IS NOT NULL`)
-- Indexed: `(aggregate_id, sequence)`, `(tenant_id, occurred_at)`, `(aggregate_type, event_type)`, `(position_identity_user_id, position_identity_symbol, position_identity_expiry, position_identity_strike, position_identity_option_type, position_sequence)`
+- `UNIQUE(aggregate_id, sequence)` — execution-scoped ordering invariant (integrity guard, §10a)
+- `UNIQUE(tenant_id, position_identity_user_id, position_identity_symbol, position_identity_expiry, position_identity_strike, position_identity_option_type, position_sequence)` — position-scoped ordering invariant (partial unique; only rows where `position_sequence IS NOT NULL`)
+- Indexed: `(aggregate_id, sequence)`, `(tenant_id, occurred_at)`, `(aggregate_type, event_type)`, `(tenant_id, position_identity_user_id, position_identity_symbol, position_identity_expiry, position_identity_strike, position_identity_option_type, position_sequence)`
+
+**`quantity_delta` semantics:**
+- `NULL` for non-position events (`TradeIntentCreated`, `ExecutionActivated`, `ExecutionCompleted`, `ExecutionFailed`, `ExecutionCancelled`, `OrderCreated`, `OrderSubmitted`, `OrderFilled`, `OrderCancelled`, `OrderRejected`, `FillRecorded`).
+- Required (non-NULL) for all position events (`PositionOpened`, `PositionUpdated`, `PositionClosed`).
+- Signed integer: positive = increase (BUY), negative = decrease (SELL).
+- **Authoritative relational field**: replay uses `event.quantity_delta` column directly, NOT `event.payload["quantity_delta"]`.
+- `payload_json` may contain the same value for supplementary information, but the column is the single source of truth.
 
 ### PositionSequenceAnchor (minimal anchor table for position-scoped sequence allocation)
 
@@ -594,7 +656,7 @@ def allocate_position_sequence(
 - Two concurrent transactions both attempt the upsert.
 - PostgreSQL's `ON CONFLICT DO UPDATE` is atomic: one transaction wins the upsert, the other waits on the row lock, then updates to +2.
 - No separate `SELECT ... FOR UPDATE` + `INSERT` gap exists.
-- If a transaction rolls back, the allocated sequence is "burned" (gap) — this is acceptable for audit sequencing.
+- **If a transaction rolls back**, the anchor update, event insert, and sequence allocation ALL roll back. The anchor retains its pre-transaction value. The next successful transaction allocates the same sequence value. No sequence is "burned" — all allocations are transactionally consistent.
 
 **Sequence assignment order in transaction:**
 1. Allocate `sequence` (execution-scoped) by locking `StrategyExecution`.
@@ -604,7 +666,7 @@ def allocate_position_sequence(
 
 **Constraints as guards:**
 - `UNIQUE(aggregate_id, sequence)` — execution ordering guard.
-- `UNIQUE(position_sequence)` partial index — position ordering guard.
+- `UNIQUE(tenant_id, position_identity_user_id, position_identity_symbol, position_identity_expiry, position_identity_strike, position_identity_option_type, position_sequence)` — position-scoped ordering guard; allows same `position_sequence` value in different PositionIdentity scopes.
 - PK on `PositionSequenceAnchor` — ensures one anchor per PositionIdentity.
 
 ### Concurrency model summary
@@ -614,8 +676,8 @@ def allocate_position_sequence(
 | **First position event for new PositionIdentity** | Atomic upsert creates anchor with `last_position_sequence=1`; returns 1. |
 | **Concurrent first position events for same PositionIdentity** | First upsert wins; second blocks on row lock, then updates to 2. No race. |
 | **Concurrent later position events** | Both upsert on existing anchor row; serialized by row lock; each gets unique increment. |
-| **Transaction rollback** | Allocated sequence "burned" (gap); anchor retains higher value; no duplicate possible. |
-| **Retry after rollback** | New attempt allocates next sequence (gap preserved); anchor state consistent. |
+| **Transaction rollback** | All rolled back atomically — anchor, event, and sequence allocation revert; no sequence "burned". |
+| **Retry after rollback** | New attempt allocates same sequence (anchor reverted); transaction succeeds independently. |
 | **Different PositionIdentity** | Different anchor rows; no contention. |
 | **Tenant isolation** | PK includes `tenant_id`; cross-tenant allocation impossible. |
 
@@ -705,7 +767,7 @@ def append_lifecycle_event(db, event):
 | C-b | Same `(aggregate_type, aggregate_id, sequence)` | **Different event** | Ordering/integrity conflict → rejected → rollback |
 | D | Same PositionIdentity + same `position_sequence` | **Different event** | Integrity/order conflict → rejected → rollback |
 
-**Case D mechanics**: The `position_sequence` is allocated atomically per identity (§10b), so a conflict means two events claimed the same position slot. A `UNIQUE` partial index on `(position_identity_* , position_sequence)` OR the concurrency-safe anchor allocation ensures this cannot silently pass. If a conflict is detected at insert, rollback.
+**Case D mechanics**: The `position_sequence` is allocated atomically per identity (§10b), so a conflict means two events claimed the same position slot for the same PositionIdentity. A `UNIQUE(tenant_id, position_identity_*, position_sequence)` constraint ensures this cannot silently pass — same PositionIdentity cannot have two events at the same `position_sequence`. Different PositionIdentities may legitimately share the same `position_sequence` value. If a conflict is detected at insert, rollback.
 
 The database `ON CONFLICT(event_id) DO NOTHING` remains ONLY as a final race-condition guard; application behavior MUST distinguish identical duplicate from conflicting duplicate BEFORE relying on it.
 
@@ -804,7 +866,7 @@ def reconstruct_position(position_identity: tuple, tenant_id: str, db: Session) 
     return projection
 ```
 
-### Position projection behavior (DELTA semantics)
+### Position projection behavior (DELTA semantics — uses `quantity_delta` column, NOT payload JSON)
 
 ```python
 def apply_position_projection(projection, event, current_instance):
@@ -815,27 +877,32 @@ def apply_position_projection(projection, event, current_instance):
         current_instance = LifecycleInstance(open_sequence=event.sequence)
         projection.current_instance = current_instance
         projection.instances.append(current_instance)
-        current_instance.net_quantity = event.payload["quantity_delta"]  # reconstruct from delta
+        current_instance.net_quantity = event.quantity_delta  # from relational column, NOT payload
 
     elif event.event_type == "PositionUpdated":
         if not current_instance or not current_instance.is_open:
             raise ReplayInvalidTransition("PositionUpdated without open instance")
         # DELTA: accumulate, never assign a snapshot
-        current_instance.net_quantity += event.payload["quantity_delta"]
-        current_instance.average_entry_price = event.payload["average_entry_price"]
-        current_instance.realized_pnl = event.payload["realized_pnl"]
-        current_instance.attribution.append(event.payload["execution_id"])
+        current_instance.net_quantity += event.quantity_delta  # from relational column, NOT payload
+        # Zero-crossing check: caller must decompose before persist; replay rejects if violated
+        if current_instance.net_quantity < 0 and event.quantity_delta > 0:
+            raise ReplayZeroCrossing(event.event_id)
+        if current_instance.net_quantity > 0 and event.quantity_delta < 0:
+            raise ReplayZeroCrossing(event.event_id)
+        current_instance.average_entry_price = event.payload_json.get("average_entry_price")
+        current_instance.realized_pnl = event.payload_json.get("realized_pnl")
+        current_instance.attribution.append(event.payload_json.get("execution_id"))
 
     elif event.event_type == "PositionClosed":
         if not current_instance or not current_instance.is_open:
             raise ReplayInvalidTransition("PositionClosed without open instance")
         # DELTA: apply the final delta, then verify net reaches exactly 0
-        current_instance.net_quantity += event.payload["quantity_delta"]
+        current_instance.net_quantity += event.quantity_delta  # from relational column, NOT payload
         if current_instance.net_quantity != 0:
             raise ReplayInvalidTransition("PositionClosed with non-zero net")
         current_instance.is_open = False
         current_instance.closed_sequence = event.sequence
-        current_instance.final_realized_pnl = event.payload["final_realized_pnl"]
+        current_instance.final_realized_pnl = event.payload_json.get("final_realized_pnl")
 ```
 
 ### Replay reconstruction scopes (CORRECTED — two separate scopes)
@@ -889,9 +956,12 @@ The previous rule `(aggregate_id ASC, sequence ASC)` is **deterministic but not 
 
 ### Position-scoped sequence (`position_sequence`)
 
+`position_sequence` is scoped to a PositionIdentity, NOT globally unique. Two different PositionIdentities may both legitimately have `position_sequence = 1`.
+
 | Property | Value |
 |----------|-------|
-| Scope | `(user_id, symbol, expiry, strike, option_type)` = `PositionIdentity` |
+| Scope | `(tenant_id, user_id, symbol, expiry, strike, option_type)` = PositionIdentity |
+| Uniqueness | Scoped per PositionIdentity + tenant: `UNIQUE(tenant_id, position_identity_*, position_sequence)` |
 | Allocation | Per position-affecting event (`PositionOpened`, `PositionUpdated`, `PositionClosed`) |
 | Storage | Column `position_sequence` on `trade_lifecycle_events` (nullable for non-position events); indexed, not in payload_json |
 | Allocation anchor | `PositionSequenceAnchor` table (minimal: `position_identity` PK, `last_position_sequence` int, default 0) |
@@ -1078,15 +1148,16 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 
 | Test | Description |
 |------|-------------|
-| First position event for new PositionIdentity | Anchor created with `last_position_sequence=1`; event persisted |
-| Second position event for same PositionIdentity | Anchor upserted to `last_position_sequence=2`; event persisted |
+| First position event for new PositionIdentity | Anchor upsert creates with `last_position_sequence=1`; event persisted with `position_sequence=1` |
+| Second position event for same PositionIdentity | Anchor upserted to `last_position_sequence=2`; event persisted with `position_sequence=2` |
 | Concurrent first position events for same PositionIdentity | Both transactions attempt upsert; PostgreSQL serializes via row lock; both get unique sequences (1, 2) |
 | Concurrent later position events for same PositionIdentity | Both upsert on existing anchor; each gets unique increment |
-| Unique position_sequence per identity | After N position events, all `position_sequence` values are distinct |
-| Rollback during position sequence allocation | One transaction rolls back; anchor retains higher sequence (gap); no duplicate possible |
-| Retry after rollback | New attempt allocates next sequence after gap; anchor state consistent |
-| Cross-execution ordering — lexical execution order opposite to causal order | Execution B (BUY) happens before Execution A (SELL) in real time, but `exec-A < exec-B` lexically. Position reconstruction uses `position_sequence`, NOT `aggregate_id` |
-| Tenant isolation — position sequences per identity | Same PositionIdentity in different tenants get independent sequences |
+| Unique position_sequence per PositionIdentity | After N position events, all `position_sequence` values for same identity are distinct |
+| Different PositionIdentities both have position_sequence=1 | Tenant A NIFTY 24000 CE and Tenant B NIFTY 24000 CE can both have `position_sequence=1` — uniqueness is scoped per identity |
+| Transaction rollback — all revert atomically | TX A allocates seq=3, rolls back; anchor, event, sequence ALL revert; no sequence "burned" |
+| Retry after rollback | New attempt allocates the same sequence (anchor reverted); transaction succeeds |
+| Cross-execution ordering — lexical execution order opposite to causal order | Execution B (BUY) before Execution A (SELL) in real time; `exec-A < exec-B` lexically; position reconstruction uses `position_sequence`, NOT `aggregate_id` |
+| Tenant isolation — independent sequences | Same PositionIdentity for different tenants get independent anchors and sequences |
 
 ### Delta semantics (§8b)
 
@@ -1096,6 +1167,18 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 | `+10, -5 = +5` | Open + reduce → net +5 (partial close) |
 | `+10, +10, -5 = +15` | Multiple contributions → net +15 |
 | `position_sequence ordering applied correctly` | Position reconstruction processes deltas in position_sequence order, not execution_id order |
+
+### Zero-crossing behavior (§5d)
+
+| Test | Description |
+|------|-------------|
+| Long-to-flat-to-new-short | `+10` → `PositionClosed -10` (net 0) → `PositionOpened -3` (new instance, net -3) |
+| Short-to-flat-to-new-long | `-5` → `PositionClosed +5` (net 0) → `PositionOpened +10` (new instance, net +10) |
+| Long-to-short via decomposition | `+10`, incoming `-15` → decomposed to `PositionClosed -10` + `PositionOpened -5` |
+| Short-to-long via decomposition | `-10`, incoming `+15` → decomposed to `PositionClosed +10` + `PositionOpened +5` |
+| Direct zero-crossing rejected at replay | `PositionUpdated -15` when net=+10 → `ReplayZeroCrossing` |
+| Direct zero-crossing rejected at replay (reverse) | `PositionUpdated +15` when net=-10 → `ReplayZeroCrossing` |
+| PositionClosed brings net to exactly 0 | `PositionClosed` with `quantity_delta` that makes net ≠ 0 → `ReplayInvalidTransition` |
 
 ### Lifecycle instance (§5d)
 
@@ -1284,11 +1367,12 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 | Authoritative write fails → events never attempted | No partial events |
 | DB connection lost → rollback | Failure safety |
 
-### Total: ~105 tests
+### Total: ~115 tests
 
 | Category | Count |
 |----------|-------|
-| Position sequencing (§10b) | 9 |
+| Position sequencing (§10b) | 10 |
+| Zero-crossing behavior | 7 |
 | Delta semantics | 4 |
 | Lifecycle instance | 4 |
 | Duplicate semantics (§11) | 6 |
@@ -1310,7 +1394,7 @@ Never silently skip security-relevant events. Never reconstruct partial state.
 | No authorization / no bypass | 4 |
 | Days 33–37 regression | 5 |
 | Transaction rollback | 3 |
-| **Total** | **~105** |
+| **Total** | **~115** |
 
 ## 17. Risk / Execution Boundary (preserved)
 
@@ -1386,7 +1470,7 @@ No refactoring, no reordering, no `can_transition()` changes, no new execution p
 | `app/trade_lifecycle/persistence.py` | New | DB model + `append_lifecycle_events()` + `next_sequence()` |
 | `app/trade_lifecycle/event_id.py` | New | Deterministic event_id construction (§8a) |
 | `app/trade_lifecycle/position_anchor.py` | New | `PositionSequenceAnchor` model + `allocate_position_sequence()` (§10b) |
-| `tests/test_day38_trade_lifecycle.py` | New | ~105 tests (see §24) |
+| `tests/test_day38_trade_lifecycle.py` | New | ~115 tests (see §16) |
 | `alembic/versions/<hash>_add_trade_lifecycle_events_and_position_anchor.py` | New | Migration (both tables) |
 | `app/services/paper_execution.py` | **Modified** (minimal) | Add required import + `append_lifecycle_events()` call in `execute_strategy()` and `apply_exit()` |
 | `docs/superpowers/specs/...` | This file | Design document |
@@ -1425,7 +1509,7 @@ No refactoring, no reordering, no `can_transition()` changes, no new execution p
 
 ## Design Conclusion
 
-Final corrected Day 38 design satisfies all 18 mandatory corrections across 3 remediation rounds:
+Final corrected Day 38 design satisfies all 24 mandatory corrections across 4 remediation rounds:
 
 **Round 1 (10 corrections):**
 
@@ -1453,5 +1537,14 @@ Final corrected Day 38 design satisfies all 18 mandatory corrections across 3 re
 16. ✅ **Delta semantics applied consistently** — `quantity_delta` = lifecycle contribution; `net_quantity` = reconstructed state (never a payload field); all event catalog, pseudocode, test matrix, and replay invariants updated.
 17. ✅ **Event lifecycle order defined** — validate → allocate aggregate sequence → allocate position_sequence → construct canonical representation → derive event_id → duplicate check → persist → return. Reconciled with Day 37 `DomainEvent`.
 18. ✅ **Canonical duplicate comparison defined** — full canonical content including `tenant_id`, `aggregate_type`, `aggregate_id`, `sequence`, `position_sequence`, `position_identity`, `event_type`, `event_version`, `occurred_at`, `payload`, `metadata`. Five cases (A–D) with explicit idempotent vs conflict semantics.
+
+**Round 4 (6 corrections):**
+
+19. ✅ **Position sequence uniqueness scoped to PositionIdentity** — `UNIQUE(tenant_id, position_identity_*, position_sequence)` allows same `position_sequence` in different PositionIdentity scopes.
+20. ✅ **Transactional rollback semantics corrected** — rollback reverts anchor, event, and sequence atomically; no "burned" gaps.
+21. ✅ **`quantity_delta` is a real relational column** — `Integer NULLABLE` on `trade_lifecycle_events`; replay reads `event.quantity_delta` column, NOT `event.payload["quantity_delta"]`.
+22. ✅ **PositionClosed carries final delta** — `quantity_delta` brings `Σ quantity_delta` for lifecycle instance to exactly 0; invariant verified at replay.
+23. ✅ **Zero-crossing explicitly prohibited** — `PositionUpdated` MUST NOT cross zero within a lifecycle instance; caller must decompose into `PositionClosed` + `PositionOpened` before persist; replay rejects zero-crossing.
+24. ✅ **Repository metadata corrected** — HEAD updated to `33aad78`.
 
 No code, no tests, no migration, no tracker edit. Control Center approval required before implementation.
