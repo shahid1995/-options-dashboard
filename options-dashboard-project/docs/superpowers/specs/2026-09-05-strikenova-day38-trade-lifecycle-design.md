@@ -719,12 +719,13 @@ canonical_event = {
     "aggregate_type": aggregate_type,
     "aggregate_id": aggregate_id,
     "sequence": sequence,
-    "position_sequence": position_sequence,   # when position-affecting
+    "position_sequence": position_sequence,         # when position-affecting
     "position_identity": {user_id, symbol, expiry, strike, option_type},  # when position-affecting
     "event_type": event_type,
     "event_version": event_version,
     "occurred_at": occurred_at.isoformat(),
-    "payload": payload,                        # structured dict
+    "quantity_delta": quantity_delta,               # authoritative relational field; NULL for non-position events
+    "payload": payload,                             # supplemental event data (not authoritative for quantity reconstruction)
     "metadata": metadata,
 }
 ```
