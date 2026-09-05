@@ -388,10 +388,32 @@ This means:
 **Fill events (fill-scoped, append-only):**
 11. `FillRecorded` — fill ledger entry; payload: `{order_id, execution_id, fill_quantity, fill_price, fill_timestamp, price_source}`
 
-**Position events (instrument-netted, NOT execution-owned):**
-12. `PositionOpened` — new position created; payload: `{position_identity: {user_id, symbol, expiry, strike, option_type}, initial_quantity, lot_size, execution_id (attribution)}`
-13. `PositionUpdated` — position netting changed; payload: `{position_identity, net_quantity, average_entry_price, realized_pnl, execution_id (attribution)}`
-14. `PositionClosed` — position fully closed; payload: `{position_identity, final_realized_pnl}`
+**Position events (instrument-netted, NOT execution-owned) — DELTA semantics:**
+
+12. `PositionOpened` — new position created (first contribution or new lifecycle instance); payload: `{position_identity: {user_id, symbol, expiry, strike, option_type}, quantity_delta: <int>, lot_size: <int>, execution_id (attribution)}`
+    - `quantity_delta`: signed change to net quantity (e.g., +10 for BUY 10, -5 for SELL 5). NOT the resulting `net_quantity`.
+
+13. `PositionUpdated` — position netting changed; payload: `{position_identity, quantity_delta: <int>, average_entry_price: <float>, realized_pnl: <float>, execution_id (attribution)}`
+    - `quantity_delta`: signed change from this contribution (e.g., -5 for a reduction of 5 lots). NOT the resulting `net_quantity`.
+    - The reconstructed state is: `net_quantity = Σ quantity_delta across all events in this lifecycle instance`.
+
+14. `PositionClosed` — position lifecycle instance fully closed (net = 0); payload: `{position_identity, quantity_delta: <int>, final_realized_pnl: <float>}`
+    - `quantity_delta`: the final signed change that brings net to 0 (e.g., -5 to close +5).
+    - `final_realized_pnl`: total realized P&L for this lifecycle instance.
+
+### Position reconstruction semantics (DELTA)
+
+Replay computes: `net_quantity = Σ quantity_delta` for all events in the current lifecycle instance (ordered by `position_sequence`).
+
+Example:
+```
+Event 1: PositionOpened  {quantity_delta: +10}   → net = +10
+Event 2: PositionUpdated {quantity_delta: -5}     → net = +5
+Event 3: PositionClosed  {quantity_delta: -5}     → net = 0 (instance CLOSED)
+Event 4: PositionOpened  {quantity_delta: +5}     → NEW instance, net = +5
+```
+
+**Key rule**: `quantity_delta` is the lifecycle contribution. `net_quantity` is a **reconstructed state**, never an event payload field. Replay validates: after `PositionClosed`, `Σ quantity_delta == 0`.
 
 ### Event semantics (CORRECTED — no premature broker semantics)
 
@@ -433,7 +455,7 @@ Constraints:
 
 Append-only: no UPDATE or DELETE by application code.
 
-Idempotent insert: `INSERT ... ON CONFLICT (event_id) DO NOTHING`.
+Idempotent insert: primary mechanism is canonical content comparison; if same `event_id` exists with identical content → no insert. Database `ON CONFLICT(event_id) DO NOTHING` is a secondary guard. Different content with same `event_id` → integrity conflict (should not happen if §8a encoding correct; if it does, treat as error, rollback).
 
 ## 10. Sequence Allocation (CORRECTED — lockable anchor)
 
@@ -495,16 +517,63 @@ SQLite serializes writes at the process level (single writer). `SELECT ... FOR U
 
 `SELECT ... FOR UPDATE` on `StrategyExecution` row acquires an exclusive row lock. Concurrent writers on the same `execution_id` block until the lock is released (commit or rollback). Writers on different `execution_id` values proceed independently.
 
-## 11. Duplicate / Conflict Semantics
+## 11. Duplicate / Conflict Semantics (CORRECTED — must distinguish identical from different)
+
+Because `event_id` is derived from `(aggregate_type, aggregate_id, event_type, sequence)` (§8a), same `event_id` ALWAYS means exactly those fields match. If payload differs but the key fields match, the encoding would produce a different `event_id`; therefore same `event_id` with different payload is structurally impossible by construction. The persistence logic must enforce this deterministically.
+
+### Exact semantics
+
+```text
+Same event_id + identical canonical content
+    → idempotent success (DO NOTHING or compare-then-accept)
+
+Same event_id + different canonical content
+    → IMPOSSIBLE by deterministic encoding (§8a) IF event_id derivation is correct
+    → If forced (corruption, manual insertion error, encoding bug): integrity conflict → rollback
+
+Same aggregate_type + aggregate_id + sequence + identical event
+    → Idempotent success (same event_id; same content)
+
+Same aggregate_type + aggregate_id + sequence + different event
+    → Ordering/integrity conflict → IntegrityError → rollback
+```
+
+### Implementation procedure for idempotent insert
+
+```python
+def append_lifecycle_event(db, event):
+    # Compute canonical content hash for comparison
+    canonical = canonical_json(event.payload)
+    
+    existing = db.execute(
+        SELECT event_id, payload_json FROM trade_lifecycle_events WHERE event_id = ?
+    ).fetchone()
+    
+    if existing is not None:
+        # Same event_id exists — compare content
+        if existing.payload_json == canonical:
+            # Identical — idempotent success
+            return  # do not insert
+        else:
+            # Different content — integrity conflict (should not happen if §8a correct)
+            raise EventIntegrityConflict(event.event_id)
+    
+    # No existing row — insert
+    db.execute(
+        INSERT INTO trade_lifecycle_events (...) VALUES (...)
+    )
+```
+
+The database-level `ON CONFLICT(event_id) DO NOTHING` is a secondary guard, not the primary mechanism. The primary mechanism is: compute canonical content; if existing row with same `event_id` has identical content → idempotent; if different → conflict (should not occur with correct encoding; if it does, treat as error, not silent success).
+
+### Sequence-conflict guard (independent of event_id)
 
 | Scenario | Resolution |
 |----------|-----------|
-| **Same `event_id` + identical event** | Idempotent: `ON CONFLICT (event_id) DO NOTHING`. First write wins. |
-| **Same `event_id` + different payload** | **Integrity conflict** (impossible if `event_id` derived per §8a, since content differs → different `event_id`). If somehow forced: reject, rollback. |
-| **Same `aggregate_id` + same `sequence` + identical event** | Handled by `event_id` idempotency. |
-| **Same `aggregate_id` + same `sequence` + different event** | **Ordering conflict**: `UNIQUE(aggregate_id, sequence)` rejects insert → `IntegrityError` → rollback. Two different events cannot claim the same lifecycle position. |
+| `UNIQUE(aggregate_id, sequence)` satisfied by identical event | Idempotent (event_id handles) |
+| `UNIQUE(aggregate_id, sequence)` violated by different event | `IntegrityError` → rollback |
 
-Content integrity is validated by the reducer (§15) during replay, not at insert time (events are append-only). Duplicate/conflicting `event_id` at insert time is the only insert-time integrity guard.
+The uniqueness constraint acts as a final guard, not the primary duplicate-detection mechanism.
 
 ## 12. Replay Algorithm (CORRECTED — two reconstruction scopes)
 
@@ -670,12 +739,72 @@ No replay writes to authoritative tables (`PaperOrder`, `Position`, `StrategyExe
 
 Canonical replay is all-or-nothing. No partial state is ever silently reconstructed.
 
-### Ordering across executions for position reconstruction
+### Ordering across executions for position reconstruction — Canonical causal ordering (CORRECTED)
 
-Position reconstruction aggregates events from multiple executions. The ordering rule:
-- Events are ordered by `(aggregate_id ASC, sequence ASC)` — global ordering across executions.
-- This ensures deterministic reconstruction regardless of event insertion order, as long as each aggregate's internal sequence is valid.
-- Different execution orderings produce the same final position projection (determinism).
+The previous rule `(aggregate_id ASC, sequence ASC)` is **deterministic but not causal** for position netting. Lexical `execution_id` order ≠ causal position order.
+
+**Canonical ordering for position reconstruction**: `position_sequence` — a position-scoped sequence number, independent of execution-scoped `sequence`.
+
+### Position-scoped sequence (`position_sequence`)
+
+| Property | Value |
+|----------|-------|
+| Scope | `(user_id, symbol, expiry, strike, option_type)` = `PositionIdentity` |
+| Allocation | Per position-affecting event (`PositionOpened`, `PositionUpdated`, `PositionClosed`) |
+| Storage | Column `position_sequence` on `trade_lifecycle_events` (nullable for non-position events); persisted in event payload |
+| Allocation anchor | `PositionSequenceAnchor` table (minimal: `position_identity` PK, `last_position_sequence` int, default 0) |
+| Allocation algorithm | `SELECT ... FOR UPDATE` on `PositionSequenceAnchor` row; `next = last + 1`; `INSERT ... ON CONFLICT DO UPDATE` if first time |
+| First event | Anchor created in same transaction if missing; sequence = 1 |
+| Concurrency | `FOR UPDATE` serializes concurrent writers on same `PositionIdentity`; different identities proceed independently |
+| Replay ordering | Position reconstruction orders by `(position_sequence ASC)` only |
+
+### Why not `aggregate_id ASC, sequence ASC`
+
+- `aggregate_id = execution_id`. Lexical execution ID order ≠ causal position order.
+- Example: Execution B BUY 10 followed by Execution A SELL 10. If `exec-A < exec-B` lexically, `aggregate_id ASC` would process SELL before BUY → invalid (position doesn't exist yet).
+- `position_sequence` captures the **true causal order** of position contributions regardless of execution IDs.
+
+### Replay with dual ordering
+
+```python
+def replay_lifecycle(aggregate_id: str, tenant_id: str, db: Session) -> TradeLifecycleAggregate:
+    # Execution-scoped: order by execution `sequence`
+    events = db.execute(
+        SELECT * FROM trade_lifecycle_events
+        WHERE aggregate_id = ? AND tenant_id = ?
+        ORDER BY sequence ASC
+    ).fetchall()
+    ...
+
+def reconstruct_position(position_identity: tuple, tenant_id: str, db: Session) -> PositionReconstruction:
+    # Position-scoped: order by position_sequence
+    events = db.execute(
+        SELECT * FROM trade_lifecycle_events
+        WHERE tenant_id = ?
+        AND event_type IN ('PositionOpened', 'PositionUpdated', 'PositionClosed')
+        AND payload_json @> ('{"position_identity": ' + json.dumps(dict(position_identity)) + '}')::jsonb
+        ORDER BY payload_json->>'position_sequence' ASC
+    ).fetchall()
+    ...
+```
+
+### First-event concurrency (position-scoped)
+
+Two concurrent executions contributing to the same new instrument:
+- Writer A: `FOR UPDATE` on `PositionSequenceAnchor` (creates if missing), allocates sequence = 1.
+- Writer B: blocks on same `FOR UPDATE`; after A commits, sees sequence = 1, allocates sequence = 2.
+- `UNIQUE(aggregate_id, sequence)` on event table + `UNIQUE(position_identity, position_sequence)` on anchor table provide integrity guards.
+
+### Causal ordering invariant
+
+```text
+For a given PositionIdentity:
+all PositionOpened/Updated/Closed events
+have a total order by position_sequence
+and replay applies them in that order.
+```
+
+No lexical `execution_id` ordering is used for position reconstruction.
 
 ## 13. Transaction Architecture (CORRECTED — fail-closed)
 
