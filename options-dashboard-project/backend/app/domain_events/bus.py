@@ -56,7 +56,7 @@ class EventBus(EventPublisher):
             - Invokes each handler in registration order
             - Applies handler-scoped idempotency (event_id, handler_id)
             - Propagates any handler exceptions to the caller
-            - Events with no registered handlers are ignored deterministically
+            - Events with no registered handlers raise a ValueError deterministically
 
         Raises:
             Exception: If any handler raises an exception, it is propagated
@@ -64,8 +64,7 @@ class EventBus(EventPublisher):
         """
         handlers = self._handlers.get(event.event_type, [])
         if not handlers:
-            # Deterministic handling of unknown event type: do nothing
-            return
+            raise ValueError(f"No handlers registered for event type: {event.event_type}")
 
         for handler in handlers:
             # Check idempotency before processing

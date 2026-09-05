@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from app.domain_events.contracts import DomainEvent
 from app.domain_events.publisher import EventPublisher
@@ -432,13 +432,16 @@ class TestEventBusRouting:
     def test_nonmatching_event_type_does_not_route_to_handler(self) -> None:
         """Handlers do not receive events with non-matching event types."""
         bus = EventBus()
-        handler = TestEventHandler("handler-1", "DifferentEventType")
-        bus.subscribe(handler)
-        
-        event = _make_base_event(event_type=TEST_EVENT_TYPE)  # Different from handler
+        handler_correct = TestEventHandler("handler-correct", TEST_EVENT_TYPE)
+        handler_wrong = TestEventHandler("handler-wrong", "DifferentEventType")
+        bus.subscribe(handler_correct)
+        bus.subscribe(handler_wrong)
+
+        event = _make_base_event(event_type=TEST_EVENT_TYPE)
         bus.publish(event)
-        
-        assert len(handler.handled_events) == 0
+
+        assert len(handler_correct.handled_events) == 1
+        assert len(handler_wrong.handled_events) == 0
     
     def test_multiple_handlers_receive_same_event(self) -> None:
         """Multiple handlers subscribed to same event type all receive the event."""
@@ -494,21 +497,23 @@ class TestEventBusRouting:
         assert invocation_order == ["handler-A", "handler-B", "handler-C"]
     
     def test_unknown_event_type_has_deterministic_behavior(self) -> None:
-        """Publishing event with no registered handlers does nothing (deterministic)."""
+        """Publishing event with no registered handlers raises ValueError deterministically."""
         bus = EventBus()
         # No handlers subscribed
-        
+
         event = _make_base_event(event_type="UnregisteredEventType")
-        # Should not raise exception
-        bus.publish(event)
-        
+        # Should raise ValueError
+        with pytest.raises(ValueError, match="No handlers registered for event type: UnregisteredEventType"):
+            bus.publish(event)
+
         # Also test that we can subscribe after and it works
         handler = TestEventHandler("handler-1", "UnregisteredEventType")
         bus.subscribe(handler)
-        
+
         event2 = _make_base_event(event_type="UnregisteredEventType")
+        # Should not raise exception now
         bus.publish(event2)
-        
+
         assert len(handler.handled_events) == 1
 
 
