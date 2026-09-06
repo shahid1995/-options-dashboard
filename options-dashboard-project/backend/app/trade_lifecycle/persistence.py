@@ -15,6 +15,7 @@ Conventions:
 """
 
 import hashlib
+import json as _json
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -35,22 +36,109 @@ from app.db import Base, SessionLocal
 
 
 # ---------------------------------------------------------------------------
-# Deterministic event identity
+# Deterministic event identity (tenant-scoped)
 # ---------------------------------------------------------------------------
 
+_CANONICAL_SEP = "\x1f"
+
+
+def _canonical_str(*parts: object) -> str:
+    """Join parts with the ASCII Unit Separator (\\x1f)."""
+    return _CANONICAL_SEP.join(str(p) for p in parts)
+
+
 def event_id(
+    tenant_id: str,
     aggregate_type: str,
     aggregate_id: str,
     event_type: str,
     sequence: int,
 ) -> str:
-    """Deterministic SHA256 event identity.
+    """Deterministic SHA256 event identity — tenant-scoped.
 
-    Uses ASCII Unit Separator (\\x1f) as an unambiguous delimiter so that
-    no valid identifier can ever collide with the separator.
+    The identity includes tenant_id so that identical lifecycle
+    coordinates in two tenants produce different event IDs.
     """
-    canonical = f"{aggregate_type}\x1f{aggregate_id}\x1f{event_type}\x1f{sequence}"
+    canonical = _canonical_str(tenant_id, aggregate_type, aggregate_id, event_type, sequence)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Canonical event content for duplicate / conflict detection
+# ---------------------------------------------------------------------------
+
+def _canonical_event_content(
+    *,
+    tenant_id: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    sequence: int,
+    event_type: str,
+    event_version: str,
+    position_sequence: Optional[int],
+    quantity_delta: Optional[int],
+    position_identity_user_id: Optional[str],
+    position_identity_symbol: Optional[str],
+    position_identity_expiry: Optional[str],
+    position_identity_strike: Optional[float],
+    position_identity_option_type: Optional[str],
+    occurred_at: datetime,
+    payload_json: str,
+    metadata_json: Optional[str],
+) -> str:
+    """Canonical byte-level representation of every semantically relevant
+    persisted lifecycle field.
+
+    Used for idempotent-vs-conflict duplicate detection.  The string is
+    deterministic: sorted field names, no date/DB-server values.
+
+    occurred_at is normalized to UTC naive for canonical representation
+    because SQLite does not preserve timezone info and we store in UTC.
+    """
+    # Normalize occurred_at to UTC naive for canonical representation
+    if occurred_at.tzinfo is not None:
+        occurred_at = occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
+    fields = {
+        "tenant_id": tenant_id,
+        "aggregate_type": aggregate_type,
+        "aggregate_id": aggregate_id,
+        "sequence": sequence,
+        "event_type": event_type,
+        "event_version": event_version,
+        "position_sequence": position_sequence,
+        "quantity_delta": quantity_delta,
+        "position_identity_user_id": position_identity_user_id,
+        "position_identity_symbol": position_identity_symbol,
+        "position_identity_expiry": position_identity_expiry,
+        "position_identity_strike": position_identity_strike,
+        "position_identity_option_type": position_identity_option_type,
+        "occurred_at": occurred_at.isoformat(),
+        "payload_json": payload_json,
+        "metadata_json": metadata_json,
+    }
+    return _json.dumps(fields, sort_keys=True, ensure_ascii=True)
+
+
+def _event_to_canonical(ev: "TradeLifecycleEvent") -> str:
+    """Build canonical content from a persisted event row."""
+    return _canonical_event_content(
+        tenant_id=ev.tenant_id,
+        aggregate_type=ev.aggregate_type,
+        aggregate_id=ev.aggregate_id,
+        sequence=ev.sequence,
+        event_type=ev.event_type,
+        event_version=ev.event_version,
+        position_sequence=ev.position_sequence,
+        quantity_delta=ev.quantity_delta,
+        position_identity_user_id=ev.position_identity_user_id,
+        position_identity_symbol=ev.position_identity_symbol,
+        position_identity_expiry=ev.position_identity_expiry,
+        position_identity_strike=ev.position_identity_strike,
+        position_identity_option_type=ev.position_identity_option_type,
+        occurred_at=ev.occurred_at,
+        payload_json=ev.payload_json,
+        metadata_json=ev.metadata_json,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +187,11 @@ class TradeLifecycleEvent(Base):
 
     __table_args__ = (
         UniqueConstraint(
+            "tenant_id",
+            "aggregate_type",
             "aggregate_id",
             "sequence",
-            name="uq_lifecycle_aggregate_sequence",
+            name="uq_lifecycle_tenant_aggregate_sequence",
         ),
         UniqueConstraint(
             "tenant_id",
@@ -150,17 +240,20 @@ class PositionSequenceAnchor(Base):
 # Sequence allocation helpers
 # ---------------------------------------------------------------------------
 
-def next_event_sequence(db: SessionLocal, aggregate_id: str) -> int:
-    """Allocate the next execution-scoped sequence for a lifecycle aggregate.
+def next_event_sequence(db: SessionLocal, tenant_id: str, aggregate_type: str, aggregate_id: str) -> int:
+    """Allocate the next tenant-scoped sequence for a lifecycle aggregate.
 
-    Returns ``MAX(sequence) + 1`` for the given ``aggregate_id``.  The
-    caller is responsible for holding the ``StrategyExecution`` row lock
+    Returns ``MAX(sequence) + 1`` for the given
+    ``(tenant_id, aggregate_type, aggregate_id)``.  The caller is
+    responsible for holding the ``StrategyExecution`` row lock
     (``SELECT ... FOR UPDATE``) before calling this function so that
     concurrent writers to the same aggregate are serialized.
     """
     max_seq = db.execute(
         select(func.max(TradeLifecycleEvent.sequence)).where(
-            TradeLifecycleEvent.aggregate_id == aggregate_id
+            TradeLifecycleEvent.tenant_id == tenant_id,
+            TradeLifecycleEvent.aggregate_type == aggregate_type,
+            TradeLifecycleEvent.aggregate_id == aggregate_id,
         )
     ).scalar()
     return (max_seq or 0) + 1
@@ -190,9 +283,11 @@ def allocate_position_sequence(
         text(
             """
             INSERT INTO position_sequence_anchor
-                (tenant_id, user_id, symbol, expiry, strike, option_type, last_position_sequence, created_at, updated_at)
+                (tenant_id, user_id, symbol, expiry, strike, option_type,
+                 last_position_sequence, created_at, updated_at)
             VALUES
-                (:tenant_id, :user_id, :symbol, :expiry, :strike, :option_type, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                (:tenant_id, :user_id, :symbol, :expiry, :strike, :option_type,
+                 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT (tenant_id, user_id, symbol, expiry, strike, option_type)
             DO UPDATE SET
                 last_position_sequence = position_sequence_anchor.last_position_sequence + 1,
@@ -210,7 +305,6 @@ def allocate_position_sequence(
         ),
     ).scalar()
     if result is None:
-        # Defensive fallback: should never happen with the upsert above.
         raise RuntimeError("Failed to allocate position_sequence")
     return int(result)
 
@@ -239,65 +333,72 @@ def append_lifecycle_event(
     Implements the approved duplicate/conflict semantics:
       - same event_id + identical canonical content → idempotent (no insert)
       - same event_id + different content → integrity conflict (raises)
-      - same (aggregate_id, sequence) + identical → idempotent
-      - same (aggregate_id, sequence) + different → conflict (raises)
+      - same (tenant_id, aggregate_type, aggregate_id, sequence) + identical → idempotent
+      - same (tenant_id, aggregate_type, aggregate_id, sequence) + different → conflict (raises)
     """
-    computed_id = event_id(aggregate_type, aggregate_id, event_type, sequence)
+    computed_id = event_id(tenant_id, aggregate_type, aggregate_id, event_type, sequence)
 
-    payload_json = __import__("json").dumps(payload, sort_keys=True)
+    payload_json = _json.dumps(payload, sort_keys=True)
     metadata_json = (
-        __import__("json").dumps(metadata, sort_keys=True) if metadata else None
+        _json.dumps(metadata, sort_keys=True) if metadata else None
     )
 
-    # Canonical content for duplicate/conflict detection
-    canonical_payload = payload_json
-    canonical_meta = metadata_json or ""
+    pos_identity = position_identity or {}
+    pi_user = pos_identity.get("user_id")
+    pi_symbol = pos_identity.get("symbol")
+    pi_expiry = pos_identity.get("expiry")
+    pi_strike = pos_identity.get("strike")
+    pi_option_type = pos_identity.get("option_type")
 
+    incoming_canonical = _canonical_event_content(
+        tenant_id=tenant_id,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        sequence=sequence,
+        event_type=event_type,
+        event_version=event_version,
+        position_sequence=position_sequence,
+        quantity_delta=quantity_delta,
+        position_identity_user_id=pi_user,
+        position_identity_symbol=pi_symbol,
+        position_identity_expiry=pi_expiry,
+        position_identity_strike=pi_strike,
+        position_identity_option_type=pi_option_type,
+        occurred_at=occurred_at,
+        payload_json=payload_json,
+        metadata_json=metadata_json,
+    )
+
+    # --- Check by event_id ---
     existing = db.execute(
         select(TradeLifecycleEvent).where(TradeLifecycleEvent.event_id == computed_id)
     ).scalar_one_or_none()
 
     if existing is not None:
-        # Same event_id: compare full canonical content
-        same_content = (
-            existing.aggregate_type == aggregate_type
-            and existing.aggregate_id == aggregate_id
-            and existing.event_type == event_type
-            and existing.event_version == event_version
-            and existing.tenant_id == tenant_id
-            and existing.sequence == sequence
-            and existing.position_sequence == position_sequence
-            and existing.payload_json == canonical_payload
-            and (existing.metadata_json or "") == canonical_meta
-            and existing.quantity_delta == quantity_delta
-        )
-        if same_content:
+        if _event_to_canonical(existing) == incoming_canonical:
             return existing  # idempotent — identical duplicate
         raise IntegrityError(
             f"event_id {computed_id} exists with different canonical content"
         )
 
-    # Check aggregate+sequence conflict (independent of event_id)
+    # --- Check by (tenant_id, aggregate_type, aggregate_id, sequence) ---
     agg_seq_conflict = db.execute(
         select(TradeLifecycleEvent).where(
+            TradeLifecycleEvent.tenant_id == tenant_id,
+            TradeLifecycleEvent.aggregate_type == aggregate_type,
             TradeLifecycleEvent.aggregate_id == aggregate_id,
             TradeLifecycleEvent.sequence == sequence,
         )
     ).scalar_one_or_none()
     if agg_seq_conflict is not None:
-        same_content = (
-            agg_seq_conflict.aggregate_type == aggregate_type
-            and agg_seq_conflict.event_type == event_type
-            and agg_seq_conflict.payload_json == canonical_payload
-            and agg_seq_conflict.quantity_delta == quantity_delta
+        if _event_to_canonical(agg_seq_conflict) == incoming_canonical:
+            return agg_seq_conflict  # idempotent
+        raise IntegrityError(
+            f"(tenant={tenant_id}, agg_type={aggregate_type}, agg_id={aggregate_id}, "
+            f"seq={sequence}) already has different event"
         )
-        if not same_content:
-            raise IntegrityError(
-                f"Aggregate {aggregate_id} sequence {sequence} already has different event"
-            )
-        return agg_seq_conflict  # idempotent
 
-    pos_identity = position_identity or {}
+    # --- Insert new event ---
     ev = TradeLifecycleEvent(
         event_id=computed_id,
         aggregate_type=aggregate_type,
@@ -308,11 +409,11 @@ def append_lifecycle_event(
         sequence=sequence,
         position_sequence=position_sequence,
         quantity_delta=quantity_delta,
-        position_identity_user_id=pos_identity.get("user_id"),
-        position_identity_symbol=pos_identity.get("symbol"),
-        position_identity_expiry=pos_identity.get("expiry"),
-        position_identity_strike=pos_identity.get("strike"),
-        position_identity_option_type=pos_identity.get("option_type"),
+        position_identity_user_id=pi_user,
+        position_identity_symbol=pi_symbol,
+        position_identity_expiry=pi_expiry,
+        position_identity_strike=pi_strike,
+        position_identity_option_type=pi_option_type,
         occurred_at=occurred_at,
         payload_json=payload_json,
         metadata_json=metadata_json,

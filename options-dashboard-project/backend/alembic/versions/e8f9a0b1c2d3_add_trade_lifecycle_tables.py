@@ -42,7 +42,13 @@ def upgrade() -> None:
         sa.Column("metadata_json", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("event_id"),
-        sa.UniqueConstraint("aggregate_id", "sequence", name="uq_lifecycle_aggregate_sequence"),
+        sa.UniqueConstraint(
+            "tenant_id",
+            "aggregate_type",
+            "aggregate_id",
+            "sequence",
+            name="uq_lifecycle_tenant_aggregate_sequence",
+        ),
         sa.UniqueConstraint(
             "tenant_id",
             "position_identity_user_id",
@@ -54,7 +60,7 @@ def upgrade() -> None:
             name="uq_position_sequence",
         ),
     )
-    op.create_index("ix_lifecycle_events_aggregate", "trade_lifecycle_events", ["aggregate_id", "sequence"], unique=False)
+    op.create_index("ix_lifecycle_events_tenant_agg", "trade_lifecycle_events", ["tenant_id", "aggregate_type", "aggregate_id", "sequence"], unique=False)
     op.create_index("ix_lifecycle_events_tenant", "trade_lifecycle_events", ["tenant_id"], unique=False)
     op.create_index("ix_lifecycle_events_position_seq", "trade_lifecycle_events", ["position_sequence"], unique=False)
 
@@ -80,6 +86,6 @@ def downgrade() -> None:
     op.drop_table("position_sequence_anchor")
     op.drop_index("ix_lifecycle_events_position_seq", table_name="trade_lifecycle_events")
     op.drop_index("ix_lifecycle_events_tenant", table_name="trade_lifecycle_events")
-    op.drop_index("ix_lifecycle_events_aggregate", table_name="trade_lifecycle_events")
+    op.drop_index("ix_lifecycle_events_tenant_agg", table_name="trade_lifecycle_events")
     op.drop_table("trade_lifecycle_events")
     # ### end Alembic commands ###
