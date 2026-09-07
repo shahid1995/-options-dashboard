@@ -30,3 +30,11 @@ from .replay import (
     SUPPORTED_EVENT_VERSIONS,
     EXECUTION_EVENT_TYPES,
 )
+from .position_replay import (
+    PositionStatus,
+    PositionInstanceState,
+    PositionLifecycleState,
+    decompose_position_delta,
+    replay_position_events,
+    POSITION_EVENT_TYPES,
+)
