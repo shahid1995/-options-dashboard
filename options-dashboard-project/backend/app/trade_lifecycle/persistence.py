@@ -272,8 +272,10 @@ def append_lifecycle_event(
     computed_id = event_id(tenant_id, aggregate_type, aggregate_id, event_type, sequence)
 
     payload_json = _json.dumps(payload, sort_keys=True)
+    # DD-3 / Task2 Finding #1: metadata=None must persist as NULL while
+    # metadata={} must persist as "{}".  These are deliberately distinct.
     metadata_json = (
-        _json.dumps(metadata, sort_keys=True) if metadata else None
+        None if metadata is None else _json.dumps(metadata, sort_keys=True)
     )
 
     pos_identity = position_identity or {}
@@ -352,13 +354,21 @@ def append_lifecycle_event(
         metadata_json=metadata_json,
         created_at=datetime.now(timezone.utc),
     )
+    # Task2 Finding #2: never take ownership of the caller's transaction.
+    #
+    # ``ev`` is added and flushed inside a nested SAVEPOINT.  If a concurrent
+    # writer commits a duplicate event_id (or a conflicting unique constraint is
+    # hit), the DB-level IntegrityError only rolls back the savepoint — the
+    # caller's outer transaction remains intact and reusable.  We deliberately
+    # NEVER call db.rollback() here: on a genuine conflict we raise
+    # IntegrityError and let the caller decide whether to roll back the whole
+    # transaction.
     try:
-        db.add(ev)
-        db.flush()  # trigger INSERT
+        with db.begin_nested():
+            db.add(ev)
+            db.flush()  # trigger INSERT
     except SAIntegrityError:
-        # Race: another transaction committed the same event_id
-        # or a conflicting unique constraint was hit.
-        db.rollback()
+        # Only the savepoint was rolled back; the caller's transaction is intact.
         existing = db.execute(
             select(TradeLifecycleEvent).where(TradeLifecycleEvent.event_id == computed_id)
         ).scalar_one_or_none()
@@ -368,8 +378,9 @@ def append_lifecycle_event(
             raise IntegrityError(
                 f"event_id {computed_id} exists with different canonical content"
             )
-        # Event not found after rollback: another transaction rolled back or deleted.
-        # Re-raise to surface the underlying conflict.
+        # No visible duplicate: the conflicting row belonged to another
+        # transaction that was itself rolled back. Re-raise to surface the
+        # underlying conflict so the caller can decide on the transaction.
         raise
     return ev
 

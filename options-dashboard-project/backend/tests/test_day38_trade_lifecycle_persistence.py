@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from app.trade_lifecycle.persistence import (
@@ -905,6 +906,166 @@ def test_position_sequence_anchor_independent_by_symbol(fresh_db):
 
 # ===========================================================================
 # POSITION IDENTITY INSERTED FROM dict (Remediation 3 regression)
+# ===========================================================================
+
+def _append_standard_event(db, *, metadata=None, **overrides):
+    """Append a canonical lifecycle event with configurable metadata/overrides."""
+    params = dict(
+        aggregate_type="execution",
+        aggregate_id="exec-1",
+        event_type="PositionOpened",
+        event_version="1.0",
+        tenant_id="tenant-1",
+        sequence=1,
+        position_sequence=1,
+        quantity_delta=10,
+        position_identity={
+            "user_id": "u1",
+            "symbol": "NIFTY",
+            "expiry": "2026-12-31",
+            "strike": 24000.0,
+            "option_type": "CE",
+        },
+        occurred_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        payload={"symbol": "NIFTY"},
+        metadata=metadata,
+    )
+    params.update(overrides)
+    return append_lifecycle_event(db=db, **params)
+
+
+# ===========================================================================
+# REMEDIATION (Day38 Task2 Finding #1) — metadata=None vs metadata={}
+# ===========================================================================
+
+def test_metadata_none_persists_as_null(fresh_db):
+    """metadata=None must persist as SQL NULL, not '{}'."""
+    db = _session()
+    ev = _append_standard_event(db, metadata=None)
+    db.commit()
+    row = db.execute(
+        text("SELECT metadata_json FROM trade_lifecycle_events WHERE event_id = :eid"),
+        {"eid": ev.event_id},
+    ).scalar()
+    assert row is None
+    db.close()
+
+
+def test_metadata_empty_dict_persists_as_json_object(fresh_db):
+    """metadata={} must persist as the JSON string '{}', not NULL."""
+    db = _session()
+    ev = _append_standard_event(db, metadata={})
+    db.commit()
+    row = db.execute(
+        text("SELECT metadata_json FROM trade_lifecycle_events WHERE event_id = :eid"),
+        {"eid": ev.event_id},
+    ).scalar()
+    assert row == "{}"
+    db.close()
+
+
+def test_metadata_empty_dict_idempotent_replay(fresh_db):
+    """Re-appending the identical event with metadata={} stays idempotent."""
+    db = _session()
+    ev1 = _append_standard_event(db, metadata={})
+    db.commit()
+    ev2 = _append_standard_event(db, metadata={})
+    db.commit()
+    assert ev1.event_id == ev2.event_id
+    count = db.execute(text("SELECT COUNT(*) FROM trade_lifecycle_events")).scalar()
+    assert count == 1
+    db.close()
+
+
+def test_metadata_none_vs_empty_dict_is_canonical_conflict(fresh_db):
+    """Changing metadata None -> {} on the same event_id is a content conflict."""
+    db = _session()
+    _append_standard_event(db, metadata=None)
+    db.commit()
+    with pytest.raises(IntegrityError):
+        _append_standard_event(db, metadata={})
+    db.close()
+
+
+def test_metadata_empty_dict_vs_none_is_canonical_conflict(fresh_db):
+    """Changing metadata {} -> None on the same event_id is a content conflict."""
+    db = _session()
+    _append_standard_event(db, metadata={})
+    db.commit()
+    with pytest.raises(IntegrityError):
+        _append_standard_event(db, metadata=None)
+    db.close()
+
+
+# ===========================================================================
+# REMEDIATION (Day38 Task2 Finding #2) — persistence must NOT rollback the
+# caller's transaction
+# ===========================================================================
+
+def test_persistence_failure_does_not_rollback_caller_transaction(fresh_db):
+    """A lifecycle persistence failure must leave the caller's transaction usable.
+
+    Behavior test (not a syntactic check): the caller writes unrelated rows in
+    the same transaction, then triggers a real insert-time IntegrityError inside
+    ``append_lifecycle_event``.  The helper must not roll back the caller's
+    unrelated work — the caller must still be able to commit.
+
+    The insert-time conflict is forced by leaving a conflicting row PENDING in
+    the same session (autoflush=False) so it is invisible to the helper's
+    pre-check SELECT but is flushed together with the new event, raising the
+    DB-level IntegrityError inside the helper's own savepoint.
+    """
+    db = _session()
+
+    # Caller's unrelated work in the same transaction.
+    db.execute(text("CREATE TABLE scratch_txn (id INTEGER PRIMARY KEY, note TEXT)"))
+    db.execute(text("INSERT INTO scratch_txn (id, note) VALUES (1, 'caller-work')"))
+
+    computed_id = event_id("tenant-1", "execution", "exec-1", "PositionOpened", 1)
+
+    # A conflicting row with the SAME event_id but different content, left
+    # pending (autoflush=False) so the helper's pre-check does not see it.
+    conflicting = TradeLifecycleEvent(
+        event_id=computed_id,
+        aggregate_type="execution",
+        aggregate_id="exec-1",
+        event_type="PositionClosed",
+        event_version="1.0",
+        tenant_id="tenant-1",
+        sequence=1,
+        position_sequence=1,
+        quantity_delta=-10,
+        position_identity_user_id="u1",
+        position_identity_symbol="NIFTY",
+        position_identity_expiry="2026-12-31",
+        position_identity_strike=24000.0,
+        position_identity_option_type="CE",
+        occurred_at=datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        payload_json='{"symbol": "NIFTY"}',
+        metadata_json="null",
+    )
+    db.add(conflicting)
+
+    # The helper's own flush must raise here — either the raw DB IntegrityError
+    # (if the duplicate is not yet visible after the savepoint rollback) or the
+    # domain IntegrityError (if the conflicting row is found with different
+    # content).  Either way the caller's transaction must survive.
+    with pytest.raises((SAIntegrityError, IntegrityError)):
+        _append_standard_event(db, metadata=None)
+
+    # The caller's transaction must NOT have been rolled back by the helper:
+    # commit must succeed and the unrelated caller work must persist.
+    db.commit()
+    row = db.execute(
+        text("SELECT note FROM scratch_txn WHERE id = 1")
+    ).scalar()
+    assert row == "caller-work"
+    db.close()
+
+
+# ===========================================================================
+# REMEDIATION 3 (Task1) — canonical comparison uses ALL fields, incl. position
+# identity (unchanged by Task2 remediation)
 # ===========================================================================
 
 def test_complete_canonical_content_includes_all_fields(fresh_db):

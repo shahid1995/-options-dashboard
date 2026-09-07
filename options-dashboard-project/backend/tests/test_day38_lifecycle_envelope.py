@@ -127,6 +127,64 @@ def test_payload_and_metadata_are_defensively_copied():
     assert event.metadata == {"source": "paper_engine"}
 
 
+# ===========================================================================
+# REMEDIATION (Day38 Task2 Finding #3) — deep (nested) immutability
+# ===========================================================================
+
+def test_original_nested_dict_mutation_does_not_change_envelope():
+    """Mutating the caller's original nested dicts after construction must not
+    change the envelope's payload/metadata or canonical content."""
+    payload = {"details": {"source": "paper_engine"}}
+    metadata = {"tags": ["a", "b"], "context": {"depth": 1}}
+    event = make_event(payload=payload, metadata=metadata)
+    before = canonical_event_content(event)
+
+    # Mutate the caller's ORIGINAL nested structures after construction.
+    payload["details"]["source"] = "changed"
+    payload["details"]["extra"] = "x"
+    payload["top_level"] = "added"
+    metadata["tags"].append("c")
+    metadata["context"]["depth"] = 99
+    metadata["new_key"] = "y"
+
+    assert event.payload["details"]["source"] == "paper_engine"
+    assert event.metadata["context"]["depth"] == 1
+    assert list(event.metadata["tags"]) == ["a", "b"]
+    assert canonical_event_content(event) == before
+
+
+def test_nested_mutation_through_envelope_is_rejected():
+    """Callers must not be able to mutate nested payload/metadata via the envelope."""
+    event = make_event(
+        payload={"details": {"source": "paper_engine"}, "tags": ["a", "b"]},
+        metadata={"ctx": {"depth": 1}},
+    )
+    with pytest.raises(TypeError):
+        event.payload["details"]["source"] = "changed"  # nested dict write
+    with pytest.raises(TypeError):
+        event.payload["tags"][0] = "z"  # nested list write
+    with pytest.raises(TypeError):
+        event.payload["new_top_key"] = "x"  # top-level write
+    with pytest.raises(TypeError):
+        event.metadata["ctx"]["depth"] = 99  # nested metadata write
+
+    # Structures remain intact after rejected mutations.
+    assert event.payload["details"]["source"] == "paper_engine"
+    assert list(event.payload["tags"]) == ["a", "b"]
+    assert event.metadata["ctx"] == {"depth": 1}
+
+
+def test_canonical_content_stable_under_original_mutation():
+    """Canonical content is construction-time stable even if the caller later
+    mutates the nested structures they originally passed in."""
+    payload = {"details": {"source": "paper_engine"}}
+    event = make_event(payload=payload)
+    c1 = canonical_event_content(event)
+    payload["details"]["source"] = "hacked"
+    c2 = canonical_event_content(event)
+    assert c1 == c2
+
+
 def test_to_domain_event_produces_day37_compatible_envelope():
     from app.domain_events.contracts import DomainEvent
 

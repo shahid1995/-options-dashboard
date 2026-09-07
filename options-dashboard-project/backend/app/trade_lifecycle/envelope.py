@@ -26,6 +26,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,35 @@ def canonical_persisted_content(
         "metadata_json": metadata_json,
     }
     return json.dumps(fields, sort_keys=True, ensure_ascii=True)
+
+
+# ---------------------------------------------------------------------------
+# Deep-freeze helpers (Task2 Finding #3)
+# ---------------------------------------------------------------------------
+
+def _deep_freeze(value: Any) -> Any:
+    """Recursively freeze a JSON-like value into an immutable, serializable form.
+
+    Mappings become ``MappingProxyType`` and lists become tuples.  Because an
+    entirely fresh structure is built, mutating the caller's ORIGINAL nested
+    structures after construction cannot change the envelope; and because the
+    stored structure is immutable, a caller cannot mutate it through the
+    envelope either.
+    """
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(v) for v in value)
+    return value
+
+
+def _deep_unfreeze(value: Any) -> Any:
+    """Convert the frozen form back to plain dict/list for deterministic JSON."""
+    if isinstance(value, Mapping):
+        return {k: _deep_unfreeze(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_unfreeze(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +261,15 @@ class TradeLifecycleEventEnvelope:
         if self.metadata is not None and not isinstance(self.metadata, Mapping):
             raise TypeError("metadata must be a mapping or None")
 
-        # DD-3: defensively copy mutable mappings so the canonical
-        # representation is construction-time stable.
-        object.__setattr__(self, "payload", dict(self.payload))
+        # DD-3 + Task2 Finding #3: deep-freeze payload/metadata so that BOTH
+        # mutation of the caller's original nested structures AND mutation
+        # through the envelope cannot change canonical content after
+        # construction.
+        object.__setattr__(self, "payload", _deep_freeze(self.payload))
         object.__setattr__(
-            self, "metadata", None if self.metadata is None else dict(self.metadata)
+            self,
+            "metadata",
+            None if self.metadata is None else _deep_freeze(self.metadata),
         )
 
     # ------------------------------------------------------------------
@@ -280,9 +314,11 @@ class TradeLifecycleEventEnvelope:
             position_identity_strike=identity.strike if identity else None,
             position_identity_option_type=identity.option_type if identity else None,
             occurred_at=self.occurred_at,
-            payload_json=json.dumps(self.payload, sort_keys=True),
+            payload_json=json.dumps(_deep_unfreeze(self.payload), sort_keys=True),
             metadata_json=(
-                None if self.metadata is None else json.dumps(self.metadata, sort_keys=True)
+                None
+                if self.metadata is None
+                else json.dumps(_deep_unfreeze(self.metadata), sort_keys=True)
             ),
         )
 
@@ -294,6 +330,9 @@ class TradeLifecycleEventEnvelope:
         """Build a Day 37 ``DomainEvent`` from this envelope."""
         from app.domain_events.contracts import DomainEvent
 
+        # Hand DomainEvent plain (deep-copied) mappings — the same JSON-able
+        # structures Day 37 expects — while this envelope keeps its immutable
+        # frozen copies internally.
         return DomainEvent(
             event_id=self.event_id,
             event_type=self.event_type,
@@ -302,8 +341,10 @@ class TradeLifecycleEventEnvelope:
             occurred_at=self.occurred_at,
             tenant_id=self.tenant_id,
             event_version=self.event_version,
-            payload=self.payload,
-            metadata=self.metadata,
+            payload=_deep_unfreeze(self.payload),
+            metadata=(
+                None if self.metadata is None else _deep_unfreeze(self.metadata)
+            ),
         )
 
 
