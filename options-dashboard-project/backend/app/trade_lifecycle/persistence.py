@@ -14,7 +14,6 @@ Conventions:
   required (e.g. Integer for quantity_delta, Float for strike).
 """
 
-import hashlib
 import json as _json
 from datetime import datetime, timezone
 from typing import Optional
@@ -30,93 +29,27 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
 
 from app.db import Base, SessionLocal
+from app.trade_lifecycle.envelope import canonical_persisted_content, event_id
 
 
 # ---------------------------------------------------------------------------
 # Deterministic event identity (tenant-scoped)
 # ---------------------------------------------------------------------------
-
-_CANONICAL_SEP = "\x1f"
-
-
-def _canonical_str(*parts: object) -> str:
-    """Join parts with the ASCII Unit Separator (\\x1f)."""
-    return _CANONICAL_SEP.join(str(p) for p in parts)
-
-
-def event_id(
-    tenant_id: str,
-    aggregate_type: str,
-    aggregate_id: str,
-    event_type: str,
-    sequence: int,
-) -> str:
-    """Deterministic SHA256 event identity — tenant-scoped.
-
-    The identity includes tenant_id so that identical lifecycle
-    coordinates in two tenants produce different event IDs.
-    """
-    canonical = _canonical_str(tenant_id, aggregate_type, aggregate_id, event_type, sequence)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
+# event_id and canonical_persisted_content are defined in the pure-domain
+# module app.trade_lifecycle.envelope (Day 38 Task 2) and re-exported here so
+# the Task 1 public API is unchanged. Identity is tenant-scoped SHA-256 over
+# \x1f-joined (tenant_id, aggregate_type, aggregate_id, event_type, sequence);
+# canonical content covers every semantically relevant persisted field.
 # ---------------------------------------------------------------------------
+
+
 # Canonical event content for duplicate / conflict detection
-# ---------------------------------------------------------------------------
-
-def _canonical_event_content(
-    *,
-    tenant_id: str,
-    aggregate_type: str,
-    aggregate_id: str,
-    sequence: int,
-    event_type: str,
-    event_version: str,
-    position_sequence: Optional[int],
-    quantity_delta: Optional[int],
-    position_identity_user_id: Optional[str],
-    position_identity_symbol: Optional[str],
-    position_identity_expiry: Optional[str],
-    position_identity_strike: Optional[float],
-    position_identity_option_type: Optional[str],
-    occurred_at: datetime,
-    payload_json: str,
-    metadata_json: Optional[str],
-) -> str:
-    """Canonical byte-level representation of every semantically relevant
-    persisted lifecycle field.
-
-    Used for idempotent-vs-conflict duplicate detection.  The string is
-    deterministic: sorted field names, no date/DB-server values.
-
-    occurred_at is normalized to UTC naive for canonical representation
-    because SQLite does not preserve timezone info and we store in UTC.
-    """
-    # Normalize occurred_at to UTC naive for canonical representation
-    if occurred_at.tzinfo is not None:
-        occurred_at = occurred_at.astimezone(timezone.utc).replace(tzinfo=None)
-    fields = {
-        "tenant_id": tenant_id,
-        "aggregate_type": aggregate_type,
-        "aggregate_id": aggregate_id,
-        "sequence": sequence,
-        "event_type": event_type,
-        "event_version": event_version,
-        "position_sequence": position_sequence,
-        "quantity_delta": quantity_delta,
-        "position_identity_user_id": position_identity_user_id,
-        "position_identity_symbol": position_identity_symbol,
-        "position_identity_expiry": position_identity_expiry,
-        "position_identity_strike": position_identity_strike,
-        "position_identity_option_type": position_identity_option_type,
-        "occurred_at": occurred_at.isoformat(),
-        "payload_json": payload_json,
-        "metadata_json": metadata_json,
-    }
-    return _json.dumps(fields, sort_keys=True, ensure_ascii=True)
+# (moved verbatim to envelope.canonical_persisted_content)
+_canonical_event_content = canonical_persisted_content
 
 
 def _event_to_canonical(ev: "TradeLifecycleEvent") -> str:
@@ -398,7 +331,7 @@ def append_lifecycle_event(
             f"seq={sequence}) already has different event"
         )
 
-    # --- Insert new event ---
+    # --- Insert new event (atomic, race-safe) ---
     ev = TradeLifecycleEvent(
         event_id=computed_id,
         aggregate_type=aggregate_type,
@@ -419,7 +352,25 @@ def append_lifecycle_event(
         metadata_json=metadata_json,
         created_at=datetime.now(timezone.utc),
     )
-    db.add(ev)
+    try:
+        db.add(ev)
+        db.flush()  # trigger INSERT
+    except SAIntegrityError:
+        # Race: another transaction committed the same event_id
+        # or a conflicting unique constraint was hit.
+        db.rollback()
+        existing = db.execute(
+            select(TradeLifecycleEvent).where(TradeLifecycleEvent.event_id == computed_id)
+        ).scalar_one_or_none()
+        if existing is not None:
+            if _event_to_canonical(existing) == incoming_canonical:
+                return existing  # idempotent — identical duplicate
+            raise IntegrityError(
+                f"event_id {computed_id} exists with different canonical content"
+            )
+        # Event not found after rollback: another transaction rolled back or deleted.
+        # Re-raise to surface the underlying conflict.
+        raise
     return ev
 
 

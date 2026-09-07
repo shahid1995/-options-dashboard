@@ -1,3 +1,9 @@
+from .envelope import (
+    PositionIdentity,
+    TradeLifecycleEventEnvelope,
+    canonical_event_content,
+    event_id,
+)
 from .persistence import (
     event_id,
     TradeLifecycleEvent,
