@@ -13,3 +13,20 @@ from .persistence import (
     append_lifecycle_event,
     IntegrityError,
 )
+from .replay import (
+    LifecycleReplayError,
+    LifecycleSequenceError,
+    ReplaySequenceGap,
+    ReplayInvalidTransition,
+    ReplaySecurityError,
+    ReplayUnknownVersion,
+    ReplayCorruptPayload,
+    ExecutionStatus,
+    OrderStatus,
+    FillRecord,
+    OrderProjection,
+    ExecutionLifecycleState,
+    replay_execution_events,
+    SUPPORTED_EVENT_VERSIONS,
+    EXECUTION_EVENT_TYPES,
+)
