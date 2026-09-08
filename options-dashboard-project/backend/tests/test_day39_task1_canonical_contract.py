@@ -306,3 +306,121 @@ def test_factory_requires_received_at_or_defaults_to_now() -> None:
     )
     after = datetime.now(timezone.utc)
     assert before <= ev.received_at <= after
+
+
+# ===========================================================================
+# Day39 Remediation — Deterministic Identity Tests
+# ===========================================================================
+
+def test_independent_identical_events_have_identical_ids() -> None:
+    """Two separately constructed, semantically identical events must produce the same canonical_id."""
+    ev1 = _make_event(provider_event_id=None, broker_order_id="ord-1", canonical_sequence=1)
+    ev2 = _make_event(provider_event_id=None, broker_order_id="ord-1", canonical_sequence=1)
+    assert ev1.canonical_id == ev2.canonical_id
+
+
+def test_canonical_identity_independent_of_object_identity() -> None:
+    """Canonical identity must NOT depend on Python object identity (id(self))."""
+    # Create many events with same stable fields — all must have same ID
+    events = [
+        _make_event(provider_event_id=None, broker_order_id="ord-1", canonical_sequence=1)
+        for _ in range(10)
+    ]
+    ids = {ev.canonical_id for ev in events}
+    assert len(ids) == 1, f"Expected 1 unique ID, got {len(ids)}"
+
+
+def test_tenant_isolation_in_identity() -> None:
+    """Same provider identity but different tenants must produce different canonical IDs."""
+    ev_a = _make_event(tenant_id="tenant-A", provider_event_id="prov-1")
+    ev_b = _make_event(tenant_id="tenant-B", provider_event_id="prov-1")
+    assert ev_a.canonical_id != ev_b.canonical_id
+
+
+def test_different_event_types_do_not_collide() -> None:
+    """Same order/provider identity but different event types must produce distinct IDs."""
+    ev_accepted = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_type=BrokerEventType.ORDER_ACCEPTED.value,
+    )
+    ev_cancelled = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_type=BrokerEventType.ORDER_CANCELLED.value,
+    )
+    assert ev_accepted.canonical_id != ev_cancelled.canonical_id
+
+
+def test_different_sequences_produce_distinct_ids() -> None:
+    """Distinct canonical sequences must produce distinct canonical identities."""
+    ev1 = _make_event(provider_event_id=None, broker_order_id="ord-1", canonical_sequence=1)
+    ev2 = _make_event(provider_event_id=None, broker_order_id="ord-1", canonical_sequence=2)
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_fill_identity_distinguishes_events() -> None:
+    """Two fill events for the same order with different fill_ids must have distinct identities."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-002", fill_quantity=5),
+    )
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_insufficient_identity_fails_closed() -> None:
+    """An event lacking sufficient deterministic identity must fail rather than use id(self)/uuid4/datetime.now."""
+    # No provider_event_id, no broker_order_id, no canonical_sequence, no fill_facts
+    with pytest.raises(ValueError, match="insufficient"):
+        _make_event(
+            provider_event_id=None,
+            broker_order_id=None,
+            canonical_sequence=None,
+            fill_facts=None,
+        )
+
+
+def test_received_timestamp_does_not_change_identity() -> None:
+    """Equivalent events with different received_at must have identical canonical IDs."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        received_at=datetime(2026, 9, 8, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        received_at=datetime(2026, 9, 8, 11, 0, 0, tzinfo=timezone.utc),
+    )
+    assert ev1.canonical_id == ev2.canonical_id
+
+
+def test_broker_timestamp_not_used_for_identity() -> None:
+    """Broker event timestamp must not participate in canonical identity."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_timestamp=datetime(2026, 9, 8, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ord-1",
+        canonical_sequence=1,
+        event_timestamp=datetime(2026, 9, 8, 11, 0, 0, tzinfo=timezone.utc),
+    )
+    assert ev1.canonical_id == ev2.canonical_id

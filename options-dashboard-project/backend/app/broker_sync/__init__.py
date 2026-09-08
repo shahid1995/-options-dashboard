@@ -214,6 +214,17 @@ class BrokerSyncEvent:
         if self.metadata is not None:
             object.__setattr__(self, "metadata", _deep_freeze(self.metadata))
 
+        # --- Fail closed: insufficient deterministic identity ---
+        # Identity must never depend on object memory address, random UUIDs,
+        # or wall-clock timestamps.  If insufficient stable identity is available,
+        # reject the event at construction time.
+        if not self.provider_event_id:
+            if not self.broker_order_id and self.canonical_sequence is None and self.fill_facts is None:
+                raise ValueError(
+                    "insufficient deterministic identity: "
+                    "provider_event_id missing and no broker_order_id, canonical_sequence, or fill_facts available"
+                )
+
     # ------------------------------------------------------------------
     # Derived deterministic identity
     # ------------------------------------------------------------------
@@ -222,22 +233,65 @@ class BrokerSyncEvent:
     def canonical_id(self) -> str:
         """Deterministic tenant-scoped event identity (design §6).
 
+        Identity hierarchy:
+
+        **Case A — Provider event ID exists:**
+        ``(tenant_id, broker, provider_event_id, event_type)``
+
+        **Case B — Provider event ID unavailable:**
+        ``(tenant_id, broker, broker_order_id, event_type, canonical_sequence, fill_id, fill_facts_digest)``
+
+        Where:
+        - ``canonical_sequence`` is included when available (must be positive).
+        - ``fill_id`` participates when ``fill_facts`` carries a stable fill ID.
+        - ``fill_facts_digest`` is a SHA-256 digest of the canonical fill facts when no fill_id exists
+          but fill facts are present.  This ensures two different fill events for the same order
+          never collapse into one identity.
+
         Identity is derived from stable identifiers so that:
         - identical events produce the same canonical_id (idempotent);
         - different tenants with the same broker coordinates differ;
         - when no durable provider_event_id exists, the broker_order_id
           plus event_type and canonical_sequence distinguish legitimate
           state changes.
+
+        Raises:
+            ValueError: If insufficient stable identity information is available
+                to deterministically identify the event.  This is a fail-closed
+                mechanism — identity is never invented from object memory addresses,
+                random UUIDs, or wall-clock timestamps.
         """
         if self.provider_event_id:
             parts = (self.tenant_id, self.broker, self.provider_event_id, self.event_type)
-        elif self.broker_order_id and self.canonical_sequence is not None:
-            parts = (self.tenant_id, self.broker, self.broker_order_id, self.event_type, str(self.canonical_sequence))
         else:
-            # Fall back to a deterministic hash over all stable coordinates
-            # (ensures distinctness even when neither provider_event_id nor
-            # broker_order_id + sequence are available)
-            parts = (self.tenant_id, self.broker, self.event_type, str(id(self)))
+            # Fallback requires at minimum tenant_id, broker, event_type,
+            # and one of: broker_order_id, canonical_sequence, or fill_facts.
+            # This is guaranteed by __post_init__ validation.
+            parts = [self.tenant_id, self.broker, self.event_type]
+
+            if self.broker_order_id:
+                parts.append(self.broker_order_id)
+
+            if self.canonical_sequence is not None:
+                parts.append(str(self.canonical_sequence))
+
+            if self.fill_facts is not None:
+                if self.fill_facts.fill_id:
+                    parts.append(self.fill_facts.fill_id)
+                else:
+                    # Use a stable digest of fill facts to distinguish events
+                    # when fill_id is not available but fill facts are.
+                    # Canonical serialization: sorted-key JSON of all non-None fill fields.
+                    fill_dict = {}
+                    for field_name in ("fill_quantity", "fill_price", "cumulative_filled_after", "remaining_after", "fill_timestamp"):
+                        val = getattr(self.fill_facts, field_name)
+                        if val is not None:
+                            fill_dict[field_name] = val.isoformat() if isinstance(val, datetime) else str(val)
+                    fill_digest = hashlib.sha256(
+                        json.dumps(fill_dict, sort_keys=True, ensure_ascii=True).encode("utf-8")
+                    ).hexdigest()
+                    parts.append(fill_digest)
+
         canonical = _CANONICAL_SEP.join(str(p) for p in parts)
         return _sha256_hex(canonical)
 
