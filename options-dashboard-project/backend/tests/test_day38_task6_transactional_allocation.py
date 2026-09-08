@@ -533,6 +533,9 @@ class TestPostgresTransactionalAllocation:
     def test_pg_caller_owns_transaction(self, pg_tables):
         """Scenario E on PostgreSQL: caller owns commit/rollback."""
         db = _pg_session()
+        # Clean up any leftover scratch table from previous runs
+        db.execute(text("DROP TABLE IF EXISTS pg_scratch"))
+        db.commit()
         db.execute(text("CREATE TABLE pg_scratch (id INTEGER PRIMARY KEY, note TEXT)"))
         db.execute(text("INSERT INTO pg_scratch (id, note) VALUES (1, 'caller-work')"))
 
