@@ -44,13 +44,80 @@ _engine = create_engine(
 )
 _TestSessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
 
+# broker_order_ids used across the suite — each maps to a seeded
+# authoritative application order (PaperOrder.client_order_id) so Task2 can
+# resolve to the real execution identity.
+_STANDARD_ORDER_IDS = ["ORD-1", "ORD-A", "ORD-B", "ORD-DET", "ORD-SEQLESS"]
+
+
+def _seed_app_order(db, broker_order_id: str, tenant_id: str = "tenant-1",
+                    execution_id: str | None = None) -> str:
+    """Seed an authoritative StrategyExecution + PaperOrder for a broker order.
+
+    Task2 resolves a canonical application order reference
+    (``OrderFacts.order_id``) to ``PaperOrder.client_order_id`` and then to
+    the owning ``StrategyExecution.execution_id``.  In the test fixtures the
+    canonical application order reference equals the broker order id, and the
+    ``PaperOrder.client_order_id`` is seeded to match, so resolution succeeds
+    deterministically.
+    """
+    from app.models import PaperOrder, StrategyExecution
+
+    exec_id = execution_id or f"EXEC-{broker_order_id}"
+    exec_row = StrategyExecution(
+        user_id=tenant_id,
+        execution_id=exec_id,
+        client_order_id=f"exec-{broker_order_id}",
+        strategy_id="strat-1",
+        strategy_tag="Test",
+        symbol="NIFTY",
+        status="FILLED",
+        entry_net=0.0,
+        entry_at=_NOW,
+    )
+    db.add(exec_row)
+    db.flush()
+
+    order = PaperOrder(
+        user_id=tenant_id,
+        client_order_id=broker_order_id,
+        execution_id=exec_id,
+        kind="entry",
+        symbol="NIFTY",
+        expiry="2026-10-29",
+        strike=24500.0,
+        option_type="CE",
+        action="buy",
+        quantity=100,
+        lot_size=1,
+        status="FILLED",
+        filled_quantity=100,
+        fill_price=100.0,
+    )
+    db.add(order)
+    db.flush()
+    return exec_id
+
 
 @pytest.fixture()
 def db():
-    """Provide a clean SQLite database session for each test (deterministic)."""
+    """Provide a clean SQLite database session for each test (deterministic).
+
+    Seeds authoritative StrategyExecution + PaperOrder context so Task2 can
+    resolve broker events to the real execution identity (v5).
+    """
     from app.db import Base
+    import app.models  # noqa: F401  (registers all tables on Base.metadata)
+    import app.broker_sync.models  # noqa: F401
+    import app.trade_lifecycle.persistence  # noqa: F401
+
     Base.metadata.create_all(_engine)
     session = _TestSessionLocal()
+    for oid in _STANDARD_ORDER_IDS:
+        _seed_app_order(session, oid)
+    # Commit the authoritative application context so test-level rollbacks
+    # (e.g. rollback-on-failure tests) do not destroy the seeded execution/order.
+    session.commit()
     yield session
     session.rollback()
     session.close()
@@ -662,7 +729,8 @@ class TestDay38Integration:
 
         assert row is not None
         assert row.aggregate_type == "TradeLifecycle"
-        assert row.aggregate_id == "ORD-1"
+        # v5: aggregate_id is the ACTUAL resolved execution, not the broker order
+        assert row.aggregate_id == "EXEC-ORD-1"
         # ORDER_SUBMITTED → OrderSubmitted (explicit Day38 mapping)
         assert row.event_type == "OrderSubmitted"
         assert row.sequence == 1
@@ -1076,22 +1144,63 @@ class TestDay38ReplayCompatibility:
     TradeLifecycleEventEnvelope construction).
     """
 
-    def _create_execution_foundation(self, db, tenant, aggregate_id, order_id, quantity):
+    def _create_execution_foundation(self, db, tenant, order_id, quantity=100):
         """Create execution foundation using authoritative append_lifecycle_event.
 
         This is the SAME path that the production Day38 code uses to establish
         an execution. No synthetic events are created.
+
+        Also seeds an authoritative StrategyExecution + PaperOrder (the app
+        context the broker event resolves to) and uses the ACTUAL execution_id
+        as the Day38 lifecycle aggregate — never the broker order id (v5).
+
+        Returns (execution_id, next_sequence).
         """
+        from app.models import PaperOrder, StrategyExecution
         from app.trade_lifecycle.persistence import append_lifecycle_event
+
+        # Seed authoritative application context (StrategyExecution + PaperOrder)
+        execution_id = f"EXEC-{order_id}"
+        exec_row = StrategyExecution(
+            user_id=tenant,
+            execution_id=execution_id,
+            client_order_id=f"exec-{order_id}",
+            strategy_id="strat-1",
+            strategy_tag="Test",
+            symbol="NIFTY",
+            status="FILLED",
+            entry_net=0.0,
+            entry_at=_NOW,
+        )
+        db.add(exec_row)
+        db.flush()
+        app_order = PaperOrder(
+            user_id=tenant,
+            client_order_id=order_id,
+            execution_id=execution_id,
+            kind="entry",
+            symbol="NIFTY",
+            expiry="2026-10-29",
+            strike=24500.0,
+            option_type="CE",
+            action="buy",
+            quantity=100,
+            lot_size=1,
+            status="FILLED",
+            filled_quantity=100,
+            fill_price=100.0,
+        )
+        db.add(app_order)
+        db.flush()
 
         now = _NOW
         seq = 1
 
-        # TradeIntentCreated
+        # TradeIntentCreated — against the ACTUAL execution aggregate
         append_lifecycle_event(
             db=db,
             aggregate_type="TradeLifecycle",
-            aggregate_id=aggregate_id,
+            aggregate_id=execution_id,
             event_type="TradeIntentCreated",
             event_version="1.0",
             tenant_id=tenant,
@@ -1109,7 +1218,7 @@ class TestDay38ReplayCompatibility:
         append_lifecycle_event(
             db=db,
             aggregate_type="TradeLifecycle",
-            aggregate_id=aggregate_id,
+            aggregate_id=execution_id,
             event_type="ExecutionActivated",
             event_version="1.0",
             tenant_id=tenant,
@@ -1127,7 +1236,7 @@ class TestDay38ReplayCompatibility:
         append_lifecycle_event(
             db=db,
             aggregate_type="TradeLifecycle",
-            aggregate_id=aggregate_id,
+            aggregate_id=execution_id,
             event_type="OrderCreated",
             event_version="1.0",
             tenant_id=tenant,
@@ -1141,7 +1250,7 @@ class TestDay38ReplayCompatibility:
         )
         seq += 1
 
-        return seq  # Return next available sequence
+        return execution_id, seq  # (execution_id, next available sequence)
 
     def test_task2_order_submitted_produces_replay_compatible_event(self, db):
         """Task2 ORDER_SUBMITTED → Day38 OrderSubmitted with replay-compatible payload.
@@ -1159,7 +1268,7 @@ class TestDay38ReplayCompatibility:
         now = _NOW
 
         # Step 1: Create execution foundation using authoritative path
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        execution_id, _ = self._create_execution_foundation(db, tenant, order_id)
 
         # Step 2: Task2 ingests a broker ORDER_SUBMITTED event
         event = make_broker_sync_event(
@@ -1186,7 +1295,7 @@ class TestDay38ReplayCompatibility:
         task2_event = rows[3]
         assert task2_event.event_type == "OrderSubmitted"
         assert task2_event.aggregate_type == "TradeLifecycle"
-        assert task2_event.aggregate_id == order_id
+        assert task2_event.aggregate_id == execution_id
         assert task2_event.tenant_id == tenant
 
         # Step 5: Construct envelopes from persisted rows (NO renumbering)
@@ -1230,7 +1339,7 @@ class TestDay38ReplayCompatibility:
         now = _NOW
 
         # Step 1: Create execution foundation
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        execution_id, _ = self._create_execution_foundation(db, tenant, order_id)
 
         # Step 2: Ingest full broker sequence
         broker_events = [
@@ -1325,7 +1434,7 @@ class TestDay38ReplayCompatibility:
         tenant = "tenant-1"
 
         # Create foundation
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        self._create_execution_foundation(db, tenant, order_id)
 
         submit = _make_submitted_event(
             broker_order_id=order_id, canonical_sequence=1,
@@ -1368,7 +1477,7 @@ class TestDay38ReplayCompatibility:
         tenant = "tenant-1"
 
         # Create foundation
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        self._create_execution_foundation(db, tenant, order_id)
 
         submit = _make_submitted_event(
             broker_order_id=order_id, canonical_sequence=1,
@@ -1421,9 +1530,9 @@ class TestDay38ReplayCompatibility:
             received_at=_NOW + timedelta(seconds=1),
         )
         result = ingest_canonical_event(event, db)
-        # Without foundation, Task2 should still apply (it appends to aggregate)
-        # The foundation check is now in the test, not the main code
-        assert result["action"] == "APPLIED"
+        # Unknown broker order: cannot resolve to an existing app execution → REJECTED
+        assert result["action"] == "REJECTED"
+        assert "unresolved" in result["reason"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -1936,15 +2045,39 @@ class TestConcurrentSequenceRace:
 class TestDay38ReplayFromPersistedStream:
     """FIX #3: Day38 replay compatibility must be proven against actual persisted stream."""
 
-    def _create_execution_foundation(self, db, tenant, aggregate_id, order_id, quantity):
-        """Create execution foundation using authoritative append_lifecycle_event."""
+    def _create_execution_foundation(self, db, tenant, order_id, quantity=100):
+        """Create execution foundation using authoritative append_lifecycle_event.
+
+        Also seeds the authoritative StrategyExecution + PaperOrder and uses
+        the ACTUAL execution_id as the lifecycle aggregate (v5).
+
+        Returns (execution_id, next_sequence).
+        """
+        from app.models import PaperOrder, StrategyExecution
         from app.trade_lifecycle.persistence import append_lifecycle_event
+
+        execution_id = f"EXEC-{order_id}"
+        db.add(StrategyExecution(
+            user_id=tenant, execution_id=execution_id,
+            client_order_id=f"exec-{order_id}", strategy_id="strat-1",
+            strategy_tag="Test", symbol="NIFTY", status="FILLED",
+            entry_net=0.0, entry_at=_NOW,
+        ))
+        db.flush()
+        db.add(PaperOrder(
+            user_id=tenant, client_order_id=order_id,
+            execution_id=execution_id, kind="entry", symbol="NIFTY",
+            expiry="2026-10-29", strike=24500.0, option_type="CE",
+            action="buy", quantity=100, lot_size=1, status="FILLED",
+            filled_quantity=100, fill_price=100.0,
+        ))
+        db.flush()
 
         now = _NOW
         seq = 1
 
         append_lifecycle_event(
-            db=db, aggregate_type="TradeLifecycle", aggregate_id=aggregate_id,
+            db=db, aggregate_type="TradeLifecycle", aggregate_id=execution_id,
             event_type="TradeIntentCreated", event_version="1.0", tenant_id=tenant,
             sequence=seq, position_sequence=None, quantity_delta=None,
             position_identity=None, occurred_at=now,
@@ -1953,7 +2086,7 @@ class TestDay38ReplayFromPersistedStream:
         seq += 1
 
         append_lifecycle_event(
-            db=db, aggregate_type="TradeLifecycle", aggregate_id=aggregate_id,
+            db=db, aggregate_type="TradeLifecycle", aggregate_id=execution_id,
             event_type="ExecutionActivated", event_version="1.0", tenant_id=tenant,
             sequence=seq, position_sequence=None, quantity_delta=None,
             position_identity=None, occurred_at=now + timedelta(seconds=1),
@@ -1962,7 +2095,7 @@ class TestDay38ReplayFromPersistedStream:
         seq += 1
 
         append_lifecycle_event(
-            db=db, aggregate_type="TradeLifecycle", aggregate_id=aggregate_id,
+            db=db, aggregate_type="TradeLifecycle", aggregate_id=execution_id,
             event_type="OrderCreated", event_version="1.0", tenant_id=tenant,
             sequence=seq, position_sequence=None, quantity_delta=None,
             position_identity=None, occurred_at=now + timedelta(seconds=1),
@@ -1970,7 +2103,7 @@ class TestDay38ReplayFromPersistedStream:
         )
         seq += 1
 
-        return seq
+        return execution_id, seq
 
     def test_persisted_stream_is_replay_compatible(self, db):
         """The actual Day38 lifecycle events persisted by Task2 must be replay-compatible.
@@ -1987,7 +2120,7 @@ class TestDay38ReplayFromPersistedStream:
         now = _NOW
 
         # Step 0: Create execution foundation using authoritative path
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        execution_id, _ = self._create_execution_foundation(db, tenant, order_id)
 
         # Step 1: Ingest a sequence of broker events
         events = [
@@ -2043,7 +2176,7 @@ class TestDay38ReplayFromPersistedStream:
         for row in rows:
             assert row.tenant_id == tenant
             assert row.aggregate_type == "TradeLifecycle"
-            assert row.aggregate_id == order_id
+            assert row.aggregate_id == execution_id
             assert row.event_type in (
                 "TradeIntentCreated", "ExecutionActivated", "OrderCreated",
                 "OrderSubmitted", "OrderFilled", "FillRecorded",
@@ -2084,7 +2217,7 @@ class TestDay38ReplayFromPersistedStream:
         tenant = "tenant-1"
 
         # Create foundation
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        self._create_execution_foundation(db, tenant, order_id)
 
         submit = _make_submitted_event(
             broker_order_id=order_id, canonical_sequence=1,
@@ -2126,7 +2259,7 @@ class TestDay38ReplayFromPersistedStream:
         tenant = "tenant-1"
 
         # Create foundation
-        self._create_execution_foundation(db, tenant, order_id, order_id, 100)
+        self._create_execution_foundation(db, tenant, order_id)
 
         submit = _make_submitted_event(
             broker_order_id=order_id, canonical_sequence=1,

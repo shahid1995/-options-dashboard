@@ -540,16 +540,20 @@ def _append_lifecycle_from_event(
     db: Session,
     event: BrokerSyncEvent,
     day38_sequence: int,
+    execution_id: str,
 ) -> None:
     """Append a Day38 lifecycle event derived from the canonical broker event.
 
     Maps the broker event type to the approved Day38 vocabulary and uses
     ``next_event_sequence`` to allocate the Day38 aggregate sequence
-    independently of ``canonical_sequence``.
+    independently of ``canonical_sequence``.  The lifecycle aggregate is
+    the ACTUAL StrikeNova execution (``execution_id``) resolved from the
+    canonical application order reference — never a synthetic broker-order
+    aggregate.
     """
     lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
 
-    aggregate_id = event.broker_order_id or event.canonical_id
+    aggregate_id = execution_id
 
     payload: dict[str, Any] = {
         "canonical_id": event.canonical_id,
@@ -643,14 +647,67 @@ def _append_lifecycle_from_event(
     )
 
 
-def _allocate_day38_sequence(db: Session, event: BrokerSyncEvent) -> int:
+def _resolve_execution_identity(
+    db: Session,
+    event: BrokerSyncEvent,
+) -> str | None:
+    """Resolve the actual StrikeNova execution identity for a broker event.
+
+    The Day38 lifecycle aggregate must represent the ACTUAL StrikeNova
+    execution (design §4/§5/§8), NOT the broker order.  A broker order ID
+    is not automatically a StrikeNova execution ID.
+
+    Resolution path:
+        canonical application order reference (order_facts.order_id)
+            → PaperOrder.client_order_id
+            → StrategyExecution.execution_id
+
+    The canonical application order reference is ``OrderFacts.order_id``
+    (the application order ID carried by the broker-neutral event, per
+    design §5 "canonical execution/order/fill references when available").
+    We map it to ``PaperOrder.client_order_id`` — the application's
+    per-order idempotency key (unique per user) — then to the execution
+    that owns that order via ``PaperOrder.execution_id``.
+
+    Returns the resolved execution_id, or None if the broker event cannot
+    be deterministically resolved to an existing execution (FAIL CLOSED).
+    """
+    # Canonical application order reference must be present.
+    # Prefer OrderFacts.order_id (the canonical app order ref carried by the
+    # broker-neutral event, design §5).  When absent, fall back to
+    # broker_order_id — in the current integration the broker order id IS the
+    # application order reference (there is no separate broker_order_id →
+    # PaperOrder mapping; broker execution is Day 40).  Either way we resolve
+    # to the owning execution, never using broker_order_id AS the aggregate.
+    order_ref: str | None = None
+    if event.order_facts is not None and event.order_facts.order_id:
+        order_ref = event.order_facts.order_id
+    if not order_ref:
+        order_ref = event.broker_order_id
+    if not order_ref:
+        return None
+
+    from app.models import PaperOrder
+
+    order = db.execute(
+        select(PaperOrder).where(
+            PaperOrder.user_id == event.tenant_id,
+            PaperOrder.client_order_id == order_ref,
+        )
+    ).scalar_one_or_none()
+    if order is None or not order.execution_id:
+        return None
+    return order.execution_id
+
+
+def _allocate_day38_sequence(db: Session, event: BrokerSyncEvent, execution_id: str) -> int:
     """Allocate the next Day38 aggregate sequence.
 
-    Uses the existing Day38 ``next_event_sequence`` mechanism.
-    The Day38 sequence is allocated independently of ``canonical_sequence``.
+    Uses the existing Day38 ``next_event_sequence`` mechanism against the
+    ACTUAL resolved execution aggregate.  The Day38 sequence is allocated
+    independently of ``canonical_sequence``.
     """
-    aggregate_id = event.broker_order_id or event.canonical_id
-    return next_event_sequence(db, event.tenant_id, "TradeLifecycle", aggregate_id)
+    return next_event_sequence(db, event.tenant_id, "TradeLifecycle", execution_id)
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +842,26 @@ def _do_ingest(
     # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED)
     _lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
 
+    # --- Resolve actual StrikeNova execution identity (v5) ---
+    # The Day38 lifecycle aggregate must be the ACTUAL execution, not the
+    # broker order.  Unknown broker orders FAIL CLOSED (REJECTED) with no
+    # synthetic aggregate, no projection, no idempotency, no lifecycle event.
+    execution_id = _resolve_execution_identity(db, event)
+    if execution_id is None:
+        return {
+            "canonical_id": canonical_id,
+            "action": "REJECTED",
+            "normalized_state": None,
+            "reason": (
+                f"unresolved broker order: cannot map broker_order_id "
+                f"'{event.broker_order_id}' to an existing StrikeNova "
+                f"execution (canonical application order reference "
+                f"'{event.order_facts.order_id if event.order_facts else None}' "
+                f"not found). Failing closed; unknown broker state remains "
+                f"observable for recovery."
+            ),
+        }
+
     # --- Find previous projection (deterministic: ordered by canonical_sequence) ---
     # FIX 4: canonical_sequence is the primary ordering key; id is a deterministic
     # tiebreaker only (not a causal ordering mechanism) for events where
@@ -825,7 +902,8 @@ def _do_ingest(
     projection = _build_projection(event, previous, validated_sequence)
 
     # --- Allocate Day38 sequence (independent of canonical_sequence) ---
-    day38_sequence = _allocate_day38_sequence(db, event)
+    # Allocated against the ACTUAL resolved execution aggregate
+    day38_sequence = _allocate_day38_sequence(db, event, execution_id)
 
     # --- Durable mutation, wrapped in a nested SAVEPOINT ---
     # Concurrency safety (FIX 1): two concurrent workers may pass the same
@@ -871,8 +949,8 @@ def _do_ingest(
             db.add(idem)
             db.flush()
 
-            # Day38 lifecycle integration
-            _append_lifecycle_from_event(db, event, day38_sequence)
+            # Day38 lifecycle integration (against the ACTUAL execution)
+            _append_lifecycle_from_event(db, event, day38_sequence, execution_id)
 
             # Advance broker sequence anchor AFTER all durable effects succeed.
             # This is the serialization point: if a concurrent worker already
