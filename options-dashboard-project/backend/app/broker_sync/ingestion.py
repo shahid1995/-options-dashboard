@@ -180,28 +180,23 @@ def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
 # Broker ordering validation — PostgreSQL-safe atomic pattern
 # ---------------------------------------------------------------------------
 
-def _validate_broker_sequence(
+def _validate_broker_sequence_position(
     db: Session,
     event: BrokerSyncEvent,
-) -> int | None:
-    """Validate canonical_sequence ordering and allocate the next anchor value.
+) -> dict | None:
+    """Validate canonical_sequence ordering position without advancing.
 
-    Uses atomic conditional UPDATE to ensure concurrency safety across
-    multiple workers processing events for the same order concurrently.
+    Returns a dict with position info, or None if sequence is unknown.
 
-    Returns the validated ``canonical_sequence`` for this event.
+    The returned dict contains:
+    - ``incoming``: the event's canonical_sequence
+    - ``last_sequence``: the current anchor's last_sequence
+    - ``is_duplicate``: True if incoming == last_sequence (duplicate seq)
+    - ``broker_order_id``: the normalized broker order ID
 
-    - If ``canonical_sequence`` is None: no broker ordering validation
-      (sequence is unknown).  Returns None.
-    - If ``canonical_sequence`` equals the last applied and UPDATE fails:
-      concurrent worker applied same seq — checks idempotency for
-      DUPLICATE_NOOP vs CONFLICT (fail closed).
-    - If ``canonical_sequence`` is the next expected: accepted and atomically
-      advanced.
-    - If there is a gap (incoming > expected): rejected (quarantine).
-    - If the event is stale (incoming < last applied): rejected.
+    Raises IngestionError for gap/stale sequences.
 
-    Does NOT fabricate missing sequences.
+    Does NOT fabricate missing sequences.  Does NOT advance the anchor.
     """
     if event.canonical_sequence is None:
         return None
@@ -209,7 +204,7 @@ def _validate_broker_sequence(
     incoming = event.canonical_sequence
     broker_order_id = event.broker_order_id or ""
 
-    # --- Step 1: INSERT ... ON CONFLICT DO NOTHING to ensure anchor exists ---
+    # --- Ensure anchor exists ---
     db.execute(
         text(
             """
@@ -229,7 +224,7 @@ def _validate_broker_sequence(
     )
     db.flush()
 
-    # --- Step 2: Read current anchor state ---
+    # --- Read current anchor state ---
     anchor = db.execute(
         select(BrokerSyncSequenceAnchor).where(
             BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
@@ -238,7 +233,6 @@ def _validate_broker_sequence(
         )
     ).scalar_one_or_none()
 
-    # Anchor should always exist after the INSERT above
     if anchor is None:
         raise IngestionError(
             f"failed to ensure sequence anchor for order {broker_order_id}",
@@ -247,7 +241,7 @@ def _validate_broker_sequence(
 
     last_sequence = anchor.last_sequence
 
-    # --- Step 3: Determine action based on incoming vs last_sequence ---
+    # --- Validate position ---
 
     if incoming < last_sequence:
         raise IngestionError(
@@ -265,18 +259,37 @@ def _validate_broker_sequence(
             action="REJECTED",
         )
 
-    # --- Step 4: Handle duplicate sequence (incoming == last_sequence) ---
-    # When the incoming sequence matches the last applied, this is a duplicate
-    # sequence.  Let the durable idempotency layer decide: identical content →
-    # DUPLICATE_NOOP, different content → CONFLICT.  The idempotency layer
-    # compares canonical content fingerprints, not just canonical_id.
-    if incoming == last_sequence:
-        return incoming
+    return {
+        "incoming": incoming,
+        "last_sequence": last_sequence,
+        "is_duplicate": incoming == last_sequence,
+        "broker_order_id": broker_order_id,
+    }
 
-    # --- Step 5: Atomically advance the anchor (incoming == last_sequence + 1) ---
-    # Use conditional UPDATE: only succeeds if last_sequence still matches.
-    # Fails if a concurrent worker already advanced — this is the serialization
-    # point for concurrent consumers of the same next sequence.
+
+def _advance_broker_sequence(
+    db: Session,
+    event: BrokerSyncEvent,
+    position_info: dict | None,
+) -> None:
+    """Atomically advance the broker sequence anchor AFTER successful application.
+
+    This is the serialization point for concurrent consumers.  It must be
+    called AFTER the projection, idempotency record, and Day38 lifecycle event
+    have all been persisted (inside the same SAVEPOINT) so that a failed
+    advancement rolls back all durable effects together.
+
+    Raises IngestionError if a concurrent worker already advanced the anchor.
+    """
+    if position_info is None:
+        return
+
+    if position_info["is_duplicate"]:
+        return  # Duplicate sequence — idempotency layer handles it
+
+    incoming = position_info["incoming"]
+    expected = position_info["last_sequence"]
+    broker_order_id = position_info["broker_order_id"]
 
     result = db.execute(
         text(
@@ -292,7 +305,7 @@ def _validate_broker_sequence(
         ),
         {
             "advance_to": incoming,
-            "expected": last_sequence,
+            "expected": expected,
             "tenant_id": event.tenant_id,
             "broker": event.broker,
             "broker_order_id": broker_order_id,
@@ -302,37 +315,13 @@ def _validate_broker_sequence(
     db.flush()
 
     if result.rowcount == 1:
-        return incoming
+        return
 
-    # --- Step 6: UPDATE failed — concurrent worker advanced ---
-    anchor = db.execute(
-        select(BrokerSyncSequenceAnchor).where(
-            BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
-            BrokerSyncSequenceAnchor.broker == event.broker,
-            BrokerSyncSequenceAnchor.broker_order_id == broker_order_id,
-        )
-    ).scalar_one_or_none()
-
-    if anchor is None:
-        raise IngestionError(
-            f"sequence anchor disappeared for order {broker_order_id}",
-            action="REJECTED",
-        )
-
-    current_last = anchor.last_sequence
-
-    if incoming <= current_last:
-        raise IngestionError(
-            f"concurrent worker already advanced past canonical_sequence={incoming} "
-            f"(current last={current_last})",
-            action="REJECTED",
-        )
-    else:
-        raise IngestionError(
-            f"sequence conflict: expected canonical_sequence={incoming} "
-            f"but anchor advanced to {current_last}",
-            action="REJECTED",
-        )
+    # Concurrent worker advanced — signal failure for re-classification
+    raise IngestionError(
+        f"concurrent worker advanced broker sequence past {incoming}",
+        action="CONFLICT",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -715,9 +704,12 @@ def _do_ingest(
     # --- Compute content fingerprint ---
     fingerprint = _content_fingerprint(event)
 
-    # --- Broker sequence validation (BEFORE idempotency check) ---
-    # Returns canonical_sequence for this event, or None if unknown
-    validated_sequence = _validate_broker_sequence(db, event)
+    # --- Broker sequence position validation (BEFORE idempotency check) ---
+    # Validates ordering without advancing the anchor.  Advancement happens
+    # inside the SAVEPOINT after all durable effects succeed, so a failed
+    # application rolls back the sequence anchor too.
+    sequence_position = _validate_broker_sequence_position(db, event)
+    validated_sequence = sequence_position["incoming"] if sequence_position else None
 
     # --- Durable idempotency check ---
     existing_idem = db.execute(
@@ -746,6 +738,30 @@ def _do_ingest(
                 f"incoming={fingerprint[:16]}...)"
             ),
         }
+
+    # --- FIX 2: Reclassify same-sequence race through idempotency ---
+    # When the broker sequence position indicates a duplicate sequence
+    # (incoming == last_sequence), check if a DIFFERENT canonical event has
+    # already claimed this sequence for the same broker order.  If so, this
+    # is a same-sequence conflict, not an independent observation.
+    if sequence_position is not None and sequence_position["is_duplicate"]:
+        existing_for_sequence = db.execute(
+            select(BrokerSyncIdempotency).where(
+                BrokerSyncIdempotency.tenant_id == event.tenant_id,
+                BrokerSyncIdempotency.broker == event.broker,
+                BrokerSyncIdempotency.broker_order_id == event.broker_order_id,
+                BrokerSyncIdempotency.canonical_sequence == validated_sequence,
+                BrokerSyncIdempotency.canonical_id != canonical_id,
+            )
+        ).scalar_one_or_none()
+        if existing_for_sequence is not None:
+            raise IngestionError(
+                f"canonical_sequence={validated_sequence} already consumed by a "
+                f"different event for order {event.broker_order_id} "
+                f"(existing={existing_for_sequence.canonical_id[:16]}..., "
+                f"incoming={canonical_id[:16]}...)",
+                action="CONFLICT",
+            )
 
     # --- Map to Day38 lifecycle event type (explicit mapping) ---
     # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED)
@@ -801,6 +817,11 @@ def _do_ingest(
     # constraint.  We catch SAIntegrityError at the SAVEPOINT so the caller's
     # outer transaction stays intact and we can re-classify as a graceful
     # DUPLICATE_NOOP / CONFLICT instead of leaking an exception.
+    #
+    # FIX 1 (sequence coupling): the broker sequence anchor is advanced INSIDE
+    # the SAVEPOINT, AFTER projection + idempotency + lifecycle have all been
+    # persisted.  If any step fails, the SAVEPOINT rolls back all four effects
+    # together, so the sequence anchor never represents an unapplied event.
     try:
         with db.begin_nested():
             # Persist projection
@@ -827,6 +848,12 @@ def _do_ingest(
 
             # Day38 lifecycle integration
             _append_lifecycle_from_event(db, event, day38_sequence)
+
+            # Advance broker sequence anchor AFTER all durable effects succeed.
+            # This is the serialization point: if a concurrent worker already
+            # advanced the anchor, this raises IngestionError(CONFLICT) which
+            # rolls back the SAVEPOINT and triggers re-classification below.
+            _advance_broker_sequence(db, event, sequence_position)
     except SAIntegrityError:
         # The SAVEPOINT was rolled back; the caller's outer transaction is
         # intact.  A concurrent worker committed the same canonical_id first.
@@ -864,6 +891,41 @@ def _do_ingest(
                 f"(no committed idempotency record visible)"
             ),
         }
+    except IngestionError as e:
+        # Sequence advancement lost a race — re-classify through idempotency.
+        if e.action == "CONFLICT":
+            concurrent_idem = db.execute(
+                select(BrokerSyncIdempotency).where(
+                    BrokerSyncIdempotency.canonical_id == canonical_id
+                )
+            ).scalar_one_or_none()
+            if concurrent_idem is not None:
+                if concurrent_idem.content_fingerprint == fingerprint:
+                    return {
+                        "canonical_id": canonical_id,
+                        "action": "DUPLICATE_NOOP",
+                        "normalized_state": None,
+                        "reason": "concurrent worker applied identical event (durable)",
+                    }
+                return {
+                    "canonical_id": canonical_id,
+                    "action": "CONFLICT",
+                    "normalized_state": None,
+                    "reason": (
+                        f"concurrent worker applied canonical_id {canonical_id} "
+                        f"with different content"
+                    ),
+                }
+            return {
+                "canonical_id": canonical_id,
+                "action": "CONFLICT",
+                "normalized_state": None,
+                "reason": (
+                    f"concurrent write conflict on canonical_id {canonical_id} "
+                    f"(no committed idempotency record visible)"
+                ),
+            }
+        raise
 
     # --- Build result ---
     normalized_state = {
