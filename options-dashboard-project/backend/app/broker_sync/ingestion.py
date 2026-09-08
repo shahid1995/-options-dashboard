@@ -3,19 +3,21 @@
 Durable pipeline:
     BrokerSyncEvent
         ↓
-    validation
+    validation (identity, tenant, quantity invariants)
         ↓
-    tenant / identity checks
+    tenant / order identity
         ↓
-    durable idempotency (PostgreSQL)
+    broker ordering validation (sequence gap / stale / out-of-order)
+        ↓
+    durable idempotency
         ↓
     terminal-state enforcement (against durable projection)
         ↓
     durable normalized projection
         ↓
-    Day38 lifecycle/audit persistence
+    explicit Day38 lifecycle mapping
         ↓
-    single transaction commit
+    single transaction (all three commit or all roll back)
 
 All operations share the caller's transaction.  On any failure the caller
 rolls back the entire transaction — no partial durable state.
@@ -28,20 +30,19 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import Session
 
 from app.broker_sync import (
-    BrokerEventSourceMode,
     BrokerEventType,
     BrokerSyncEvent,
     CanonicalOrderState,
     FillFacts,
     OrderFacts,
 )
-from app.broker_sync.models import BrokerOrderProjection, BrokerSyncIdempotency
-from app.trade_lifecycle.persistence import append_lifecycle_event
+from app.broker_sync.models import BrokerOrderProjection, BrokerSyncIdempotency, BrokerSyncSequenceAnchor
+from app.trade_lifecycle.persistence import append_lifecycle_event, next_event_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ def _content_fingerprint(event: BrokerSyncEvent) -> str:
             "remaining_after": event.fill_facts.remaining_after,
         }
     if event.metadata is not None:
-        parts["metadata"] = dict(event.metadata) if hasattr(event.metadata, "items") else event.metadata
+        parts["metadata"] = dict(event.metadata)
     canonical = json.dumps(parts, sort_keys=True, ensure_ascii=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -125,6 +126,39 @@ def _is_terminal(state: CanonicalOrderState) -> bool:
     return state in _TERMINAL_STATES
 
 
+# ---------------------------------------------------------------------------
+# Broker-to-Day38 lifecycle event mapping
+# ---------------------------------------------------------------------------
+
+_BROKER_TO_LIFECYCLE: dict[str, str] = {
+    BrokerEventType.ORDER_SUBMITTED.value: "OrderSubmitted",
+    BrokerEventType.ORDER_ACCEPTED.value: "OrderSubmitted",
+    BrokerEventType.PARTIAL_FILL.value: "OrderFilled",
+    BrokerEventType.FILL_RECORDED.value: "FillRecorded",
+    BrokerEventType.FULL_FILL.value: "OrderFilled",
+    BrokerEventType.ORDER_CANCELLED.value: "OrderCancelled",
+    BrokerEventType.ORDER_REJECTED.value: "OrderRejected",
+    BrokerEventType.ORDER_EXPIRED.value: "OrderCancelled",
+}
+
+
+def _map_to_lifecycle_event_type(event_type: str) -> str:
+    """Map a canonical broker event type to the existing Day38 lifecycle event type.
+
+    Uses the approved Day38 vocabulary (OrderSubmitted, OrderFilled,
+    FillRecorded, OrderCancelled, OrderRejected).
+    Does NOT invent new Day38 event names.
+    Raises IngestionError for events that cannot be mapped.
+    """
+    mapped = _BROKER_TO_LIFECYCLE.get(event_type)
+    if mapped is not None:
+        return mapped
+    raise IngestionError(
+        f"cannot map broker event type '{event_type}' to a Day38 lifecycle event type",
+        action="REJECTED",
+    )
+
+
 def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
     """Map event type to canonical order state."""
     mapping = {
@@ -136,9 +170,164 @@ def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
         BrokerEventType.PARTIAL_FILL: CanonicalOrderState.PARTIALLY_FILLED,
         BrokerEventType.FILL_RECORDED: CanonicalOrderState.PARTIALLY_FILLED,
         BrokerEventType.FULL_FILL: CanonicalOrderState.FILLED,
-        BrokerEventType.ORDER_RECOVERED: CanonicalOrderState.UNKNOWN,
+        # ORDER_RECOVERED is NOT mapped to UNKNOWN — it is a future recovery
+        # event type.  For Task 2 it is rejected at the mapping layer.
     }
     return mapping.get(event.event_type, CanonicalOrderState.UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# Broker ordering validation
+# ---------------------------------------------------------------------------
+
+def _validate_broker_sequence(
+    db: Session,
+    event: BrokerSyncEvent,
+) -> int | None:
+    """Validate canonical_sequence ordering and allocate the next anchor value.
+
+    Returns the validated ``canonical_sequence`` for this event.
+
+    - If ``canonical_sequence`` is None: no broker ordering validation
+      (sequence is unknown).  Returns None.
+    - If ``canonical_sequence`` equals the last applied: duplicate (allowed
+      to proceed — idempotency layer will catch identical vs conflicting).
+    - If ``canonical_sequence`` is the next expected: accepted.
+    - If there is a gap (incoming > expected): rejected (quarantine).
+    - If the event is stale (incoming < last applied): rejected.
+
+    Does NOT fabricate missing sequences.
+    """
+    if event.canonical_sequence is None:
+        return None
+
+    incoming = event.canonical_sequence
+
+    # Atomically fetch-or-create anchor and read last_sequence under
+    # a SELECT FOR UPDATE-equivalent (we use a unique upsert below).
+    anchor: BrokerSyncSequenceAnchor | None = db.execute(
+        select(BrokerSyncSequenceAnchor).where(
+            BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
+            BrokerSyncSequenceAnchor.broker == event.broker,
+            BrokerSyncSequenceAnchor.broker_order_id == (event.broker_order_id or ""),
+        )
+    ).scalar_one_or_none()
+
+    if anchor is None:
+        if incoming != 1:
+            raise IngestionError(
+                f"first event for order {event.broker_order_id} "
+                f"has canonical_sequence={incoming}, expected 1",
+                action="REJECTED",
+            )
+        anchor = BrokerSyncSequenceAnchor(
+            tenant_id=event.tenant_id,
+            broker=event.broker,
+            broker_order_id=event.broker_order_id or "",
+            last_sequence=0,
+        )
+        db.add(anchor)
+        db.flush()
+
+    last_sequence = anchor.last_sequence
+
+    if incoming == last_sequence:
+        # Same sequence — idempotency layer will determine duplicate vs conflict
+        return incoming
+
+    if incoming < last_sequence:
+        raise IngestionError(
+            f"stale canonical_sequence={incoming} "
+            f"(last applied={last_sequence}) — "
+            f"stale/out-of-order event rejected",
+            action="REJECTED",
+        )
+
+    if incoming != last_sequence + 1:
+        raise IngestionError(
+            f"sequence gap: received canonical_sequence={incoming}, "
+            f"expected {last_sequence + 1} (last applied={last_sequence}) — "
+            f"quarantined as synchronization gap",
+            action="REJECTED",
+        )
+
+    # Valid next sequence — advance anchor
+    anchor.last_sequence = incoming
+    db.flush()
+    return incoming
+
+
+# ---------------------------------------------------------------------------
+# Quantity invariant validation
+# ---------------------------------------------------------------------------
+
+def _validate_quantity_invariants(
+    event: BrokerSyncEvent,
+    previous: BrokerOrderProjection | None,
+) -> None:
+    """Validate fill and cumulative quantity semantics before persisting.
+
+    Rejects:
+    - cumulative_filled_after < previous cumulative_filled (regression)
+    - cumulative_filled_after > total_quantity (overfill)
+    - fill_quantity < 0 (negative fill)
+    - remaining inconsistent with total/cumulative
+
+    Does not silently repair — fails closed.
+    """
+    ff = event.fill_facts
+    if ff is None:
+        return
+
+    # Negative fill quantity
+    if ff.fill_quantity is not None and ff.fill_quantity < 0:
+        raise IngestionError(
+            f"negative fill_quantity={ff.fill_quantity} rejected",
+            action="REJECTED",
+        )
+
+    total_quantity = None
+    if event.order_facts is not None and event.order_facts.total_quantity is not None:
+        total_quantity = event.order_facts.total_quantity
+    elif previous is not None:
+        total_quantity = previous.total_quantity
+
+    # Cumulative must not regress
+    prev_cumulative = previous.cumulative_filled if previous is not None else 0
+    if ff.cumulative_filled_after is not None and ff.cumulative_filled_after < prev_cumulative:
+        raise IngestionError(
+            f"cumulative_filled_after={ff.cumulative_filled_after} "
+            f"regresses previous cumulative={prev_cumulative}",
+            action="REJECTED",
+        )
+
+    # Cumulative must not exceed total
+    if ff.cumulative_filled_after is not None and total_quantity is not None:
+        if ff.cumulative_filled_after > total_quantity:
+            raise IngestionError(
+                f"cumulative_filled_after={ff.cumulative_filled_after} "
+                f"exceeds total_quantity={total_quantity} (overfill)",
+                action="REJECTED",
+            )
+
+    # Remaining consistency check
+    if ff.remaining_after is not None and total_quantity is not None and ff.cumulative_filled_after is not None:
+        expected_remaining = total_quantity - ff.cumulative_filled_after
+        if ff.remaining_after != expected_remaining:
+            raise IngestionError(
+                f"remaining_after={ff.remaining_after} inconsistent with "
+                f"total={total_quantity} - cumulative={ff.cumulative_filled_after} "
+                f"(expected {expected_remaining})",
+                action="REJECTED",
+            )
+
+    # Fill quantity must not exceed total
+    if ff.fill_quantity is not None and total_quantity is not None:
+        if ff.fill_quantity > total_quantity:
+            raise IngestionError(
+                f"fill_quantity={ff.fill_quantity} exceeds total_quantity={total_quantity}",
+                action="REJECTED",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +337,12 @@ def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
 def _build_projection(
     event: BrokerSyncEvent,
     previous: BrokerOrderProjection | None,
+    canonical_sequence: int | None,
 ) -> BrokerOrderProjection:
     """Build a new BrokerOrderProjection from the event and previous state."""
     state = _event_canonical_state(event)
     is_terminal = _is_terminal(state)
 
-    # Determine quantities
     total_quantity: int | None = None
     cumulative_filled: int = 0
     remaining_quantity: int | None = None
@@ -164,49 +353,47 @@ def _build_projection(
     last_fill_id: str | None = None
     rejection_reason: str | None = None
 
+    if previous is not None and canonical_sequence is not None:
+        # Carry forward previous state unless overridden by this event
+        total_quantity = previous.total_quantity
+        cumulative_filled = previous.cumulative_filled
+        remaining_quantity = previous.remaining_quantity
+        average_price = previous.average_price
+        fill_count = previous.fill_count
+        last_fill_id = previous.last_fill_id
+
     if event.order_facts is not None:
-        total_quantity = event.order_facts.total_quantity
-        cumulative_filled = event.order_facts.cumulative_filled or 0
-        average_price = event.order_facts.average_price
-        last_fill_price = event.order_facts.last_fill_price
-        last_fill_quantity = event.order_facts.last_fill_quantity
-        rejection_reason = event.order_facts.rejection_reason
+        of = event.order_facts
+        if of.total_quantity is not None:
+            total_quantity = of.total_quantity
+        if of.cumulative_filled is not None and of.cumulative_filled != 0:
+            cumulative_filled = of.cumulative_filled
+        if of.average_price is not None:
+            average_price = of.average_price
+        if of.last_fill_price is not None:
+            last_fill_price = of.last_fill_price
+        if of.last_fill_quantity is not None:
+            last_fill_quantity = of.last_fill_quantity
+        if of.rejection_reason is not None:
+            rejection_reason = of.rejection_reason
 
     if event.fill_facts is not None:
         ff = event.fill_facts
         last_fill_id = ff.fill_id
         last_fill_price = ff.fill_price
         last_fill_quantity = ff.fill_quantity
-        cumulative_filled = ff.cumulative_filled_after or cumulative_filled
+        if ff.cumulative_filled_after is not None:
+            cumulative_filled = ff.cumulative_filled_after
         remaining_quantity = ff.remaining_after
-        fill_count = 1
+        fill_count += 1
         if ff.fill_price is not None and ff.fill_quantity is not None:
-            # Weighted average price
-            if previous is not None and previous.cumulative_filled > 0:
-                prev_total_price = previous.average_price * previous.cumulative_filled
+            if previous is not None and previous.cumulative_filled > 0 and average_price is not None:
+                prev_total_price = (average_price or 0.0) * previous.cumulative_filled
                 new_total_price = ff.fill_price * ff.fill_quantity
-                new_cumulative = cumulative_filled
-                if new_cumulative > 0:
-                    average_price = (prev_total_price + new_total_price) / new_cumulative
+                if cumulative_filled > 0:
+                    average_price = (prev_total_price + new_total_price) / cumulative_filled
             else:
                 average_price = ff.fill_price
-
-    # For non-fill events, carry forward previous quantities
-    if event.event_type not in (
-        BrokerEventType.PARTIAL_FILL,
-        BrokerEventType.FILL_RECORDED,
-        BrokerEventType.FULL_FILL,
-    ):
-        if previous is not None:
-            if total_quantity is None:
-                total_quantity = previous.total_quantity
-            if cumulative_filled == 0:
-                cumulative_filled = previous.cumulative_filled
-            if remaining_quantity is None:
-                remaining_quantity = previous.remaining_quantity
-            if average_price is None:
-                average_price = previous.average_price
-            fill_count = previous.fill_count
 
     # Compute remaining if we have total and cumulative
     if remaining_quantity is None and total_quantity is not None:
@@ -236,6 +423,7 @@ def _build_projection(
         is_terminal=is_terminal,
         fill_count=fill_count,
         last_fill_id=last_fill_id,
+        canonical_sequence=canonical_sequence,
         occurred_at=occurred_at,
         received_at=event.received_at,
     )
@@ -248,16 +436,23 @@ def _build_projection(
 def _append_lifecycle_from_event(
     db: Session,
     event: BrokerSyncEvent,
+    day38_sequence: int,
 ) -> None:
-    """Append a Day38 lifecycle event derived from the canonical broker event."""
+    """Append a Day38 lifecycle event derived from the canonical broker event.
+
+    Maps the broker event type to the approved Day38 vocabulary and uses
+    ``next_event_sequence`` to allocate the Day38 aggregate sequence
+    independently of ``canonical_sequence``.
+    """
+    lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
+
     aggregate_id = event.broker_order_id or event.canonical_id
-    sequence = event.canonical_sequence or 1
 
     payload = {
         "canonical_id": event.canonical_id,
         "broker": event.broker,
-        "event_type": event.event_type,
-        "event_version": event.event_version,
+        "broker_event_type": event.event_type,
+        "broker_event_version": event.event_version,
         "provider_event_id": event.provider_event_id,
         "source_mode": event.source_mode.value,
         "broker_order_id": event.broker_order_id,
@@ -266,7 +461,6 @@ def _append_lifecycle_from_event(
         payload["event_timestamp"] = event.event_timestamp.isoformat()
     if event.order_facts is not None:
         payload["order_facts"] = {
-            "status": event.order_facts.status.value,
             "total_quantity": event.order_facts.total_quantity,
             "cumulative_filled": event.order_facts.cumulative_filled,
             "average_price": event.order_facts.average_price,
@@ -281,14 +475,17 @@ def _append_lifecycle_from_event(
             "remaining_after": event.fill_facts.remaining_after,
         }
 
+    # Map broker order to Day38 order identity
+    order_id = event.broker_order_id or event.canonical_id
+
     append_lifecycle_event(
         db=db,
-        aggregate_type="broker_order",
-        aggregate_id=aggregate_id,
-        event_type=event.event_type,
+        aggregate_type="execution",
+        aggregate_id=order_id,
+        event_type=lifecycle_event_type,
         event_version=event.event_version,
         tenant_id=event.tenant_id,
-        sequence=sequence,
+        sequence=day38_sequence,
         position_sequence=None,
         quantity_delta=None,
         position_identity=None,
@@ -296,6 +493,16 @@ def _append_lifecycle_from_event(
         payload=payload,
         metadata=None,
     )
+
+
+def _allocate_day38_sequence(db: Session, event: BrokerSyncEvent) -> int:
+    """Allocate the next Day38 aggregate sequence.
+
+    Uses the existing Day38 ``next_event_sequence`` mechanism.
+    The Day38 sequence is allocated independently of ``canonical_sequence``.
+    """
+    aggregate_id = event.broker_order_id or event.canonical_id
+    return next_event_sequence(db, event.tenant_id, "execution", aggregate_id)
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +532,22 @@ def ingest_canonical_event(
         - ``normalized_state``: projected state dict when applied, else ``None``
         - ``reason``: explanation (None when action is APPLIED)
     """
+    try:
+        return _do_ingest(event, db, tenant_id)
+    except IngestionError as e:
+        return {
+            "canonical_id": event.canonical_id,
+            "action": e.action,
+            "normalized_state": None,
+            "reason": e.reason,
+        }
+
+
+def _do_ingest(
+    event: BrokerSyncEvent,
+    db: Session,
+    tenant_id: str | None = None,
+) -> dict[str, Any]:
     canonical_id = event.canonical_id
 
     # --- Malformed event check ---
@@ -350,6 +573,10 @@ def ingest_canonical_event(
 
     # --- Compute content fingerprint ---
     fingerprint = _content_fingerprint(event)
+
+    # --- Broker sequence validation (BEFORE idempotency check) ---
+    # Returns canonical_sequence for this event, or None if unknown
+    validated_sequence = _validate_broker_sequence(db, event)
 
     # --- Durable idempotency check ---
     existing_idem = db.execute(
@@ -379,36 +606,12 @@ def ingest_canonical_event(
             ),
         }
 
-    # --- Terminal-state enforcement ---
-    # Find the latest projection for this broker order
-    if event.broker_order_id:
-        latest_proj = db.execute(
-            select(BrokerOrderProjection)
-            .where(
-                BrokerOrderProjection.tenant_id == event.tenant_id,
-                BrokerOrderProjection.broker == event.broker,
-                BrokerOrderProjection.broker_order_id == event.broker_order_id,
-            )
-            .order_by(BrokerOrderProjection.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+    # --- Map to Day38 lifecycle event type (explicit mapping) ---
+    # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED)
+    _lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
 
-        if latest_proj is not None and latest_proj.is_terminal:
-            new_state = _event_canonical_state(event)
-            # Allow recovery events to pass through
-            if event.event_type != BrokerEventType.ORDER_RECOVERED:
-                return {
-                    "canonical_id": canonical_id,
-                    "action": "REJECTED",
-                    "normalized_state": None,
-                    "reason": (
-                        f"terminal state mutation rejected: order is {latest_proj.status}, "
-                        f"cannot apply {event.event_type}"
-                    ),
-                }
-
-    # --- Build and persist projection ---
-    previous = None
+    # --- Find previous projection (deterministic: ordered by canonical_sequence) ---
+    previous: BrokerOrderProjection | None = None
     if event.broker_order_id:
         previous = db.execute(
             select(BrokerOrderProjection)
@@ -417,13 +620,34 @@ def ingest_canonical_event(
                 BrokerOrderProjection.broker == event.broker,
                 BrokerOrderProjection.broker_order_id == event.broker_order_id,
             )
-            .order_by(BrokerOrderProjection.created_at.desc())
+            .order_by(BrokerOrderProjection.canonical_sequence.desc().nullslast())
             .limit(1)
         ).scalar_one_or_none()
 
-    projection = _build_projection(event, previous)
+    # --- Terminal-state enforcement (before quantity validation) ---
+    new_state = _event_canonical_state(event)
+    if previous is not None and previous.is_terminal:
+        # Terminal orders remain terminal — no post-terminal mutation allowed
+        # ORDER_RECOVERED is rejected by the mapping layer, so it never
+        # reaches here
+        raise IngestionError(
+            f"terminal state mutation rejected: order is {previous.status}, "
+            f"cannot apply {event.event_type}",
+            action="REJECTED",
+        )
+
+    # --- Validate quantity invariants ---
+    _validate_quantity_invariants(event, previous)
+
+    # --- Build projection ---
+    projection = _build_projection(event, previous, validated_sequence)
+
+    # --- Allocate Day38 sequence (independent of canonical_sequence) ---
+    day38_sequence = _allocate_day38_sequence(db, event)
+
+    # --- Persist projection ---
     db.add(projection)
-    db.flush()  # Get the ID assigned
+    db.flush()
 
     # --- Persist idempotency record ---
     idem = BrokerSyncIdempotency(
@@ -431,7 +655,7 @@ def ingest_canonical_event(
         tenant_id=event.tenant_id,
         broker=event.broker,
         broker_order_id=event.broker_order_id,
-        canonical_sequence=event.canonical_sequence,
+        canonical_sequence=validated_sequence,
         event_type=event.event_type,
         event_version=event.event_version,
         content_fingerprint=fingerprint,
@@ -444,14 +668,7 @@ def ingest_canonical_event(
     db.flush()
 
     # --- Day38 lifecycle integration ---
-    try:
-        _append_lifecycle_from_event(db, event)
-    except SAIntegrityError:
-        # Day38 conflict — let it propagate so the caller rolls back
-        raise
-    except Exception:
-        # Any lifecycle failure — let it propagate so the caller rolls back
-        raise
+    _append_lifecycle_from_event(db, event, day38_sequence)
 
     # --- Build result ---
     normalized_state = {

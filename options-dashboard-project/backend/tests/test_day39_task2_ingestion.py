@@ -1,546 +1,1053 @@
-"""
-Day 39 Task 2 — Durable ingestion pipeline tests.
+"""Day 39 Task 2 — Durable ingestion pipeline tests.
 
 Tests the full durable pipeline:
-  BrokerSyncEvent → validation → tenant check → durable idempotency
-  → terminal-state enforcement → durable projection → Day38 lifecycle
-  → single transaction commit.
+  BrokerSyncEvent → validation → tenant check → broker ordering
+    → durable idempotency → terminal-state enforcement → projection
+    → Day38 lifecycle mapping → single transaction
+
+Behavioral tests — not implementation-coupled.  All idempotency and
+projection assertions hit durable SQL state.
 """
 from __future__ import annotations
 
+import threading
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.broker_sync import (
     BrokerEventType,
+    BrokerEventSourceMode,
+    BrokerSyncEvent,
     CanonicalOrderState,
     FillFacts,
     OrderFacts,
-    ingest_canonical_event,
     make_broker_sync_event,
 )
-from app.broker_sync.models import BrokerOrderProjection, BrokerSyncIdempotency
-from app.trade_lifecycle.persistence import TradeLifecycleEvent
-
+from app.broker_sync.ingestion import IngestionError, ingest_canonical_event
+from app.broker_sync.models import BrokerOrderProjection, BrokerSyncIdempotency, BrokerSyncSequenceAnchor
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Test database setup
 # ---------------------------------------------------------------------------
 
-def _make_event(
-    *,
-    tenant_id="tenant-A",
-    broker="upstox",
-    event_type=BrokerEventType.ORDER_ACCEPTED,
-    provider_event_id=None,
-    broker_order_id="ORD-1",
-    canonical_sequence=1,
-    fill_facts=None,
-    order_facts=None,
-    event_timestamp=None,
-    received_at=None,
-):
-    if received_at is None:
-        from datetime import datetime, timezone
-        received_at = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+from sqlalchemy.pool import StaticPool
+
+_engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
+)
+_TestSessionLocal = sessionmaker(bind=_engine, expire_on_commit=False)
+
+
+@pytest.fixture()
+def db():
+    """Provide a clean SQLite database session for each test (deterministic)."""
+    from app.db import Base
+    Base.metadata.create_all(_engine)
+    session = _TestSessionLocal()
+    yield session
+    session.rollback()
+    session.close()
+    Base.metadata.drop_all(_engine)
+
+
+_NOW = datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _make_submitted_event(
+    broker_order_id: str = "ORD-1",
+    tenant_id: str = "tenant-1",
+    broker: str = "broker-test",
+    canonical_sequence: int | None = 1,
+    event_type: str = BrokerEventType.ORDER_SUBMITTED.value,
+    total_quantity: int | None = 100,
+    received_at: datetime | None = None,
+    event_timestamp: datetime | None = None,
+) -> BrokerSyncEvent:
     return make_broker_sync_event(
         tenant_id=tenant_id,
         broker=broker,
         event_type=event_type,
-        provider_event_id=provider_event_id,
+        event_version="1.0",
         broker_order_id=broker_order_id,
         canonical_sequence=canonical_sequence,
-        fill_facts=fill_facts,
-        order_facts=order_facts,
+        received_at=received_at or (_NOW + timedelta(seconds=1)),
         event_timestamp=event_timestamp,
-        received_at=received_at,
+        order_facts=OrderFacts(
+            broker_order_id=broker_order_id,
+            status=CanonicalOrderState.SUBMITTED,
+            total_quantity=total_quantity,
+            cumulative_filled=0,
+        ),
+    )
+
+
+def _make_accepted_event(
+    broker_order_id: str = "ORD-1",
+    canonical_sequence: int = 2,
+    received_at: datetime | None = None,
+) -> BrokerSyncEvent:
+    return make_broker_sync_event(
+        tenant_id="tenant-1",
+        broker="broker-test",
+        event_type=BrokerEventType.ORDER_ACCEPTED,
+        event_version="1.0",
+        broker_order_id=broker_order_id,
+        canonical_sequence=canonical_sequence,
+        received_at=received_at or (_NOW + timedelta(seconds=2)),
+        order_facts=OrderFacts(
+            broker_order_id=broker_order_id,
+            status=CanonicalOrderState.OPEN,
+            total_quantity=100,
+        ),
+    )
+
+
+def _make_full_fill_event(
+    broker_order_id: str = "ORD-1",
+    canonical_sequence: int | None = 2,
+    cumulative_filled_after: int = 100,
+    total_quantity: int = 100,
+    received_at: datetime | None = None,
+) -> BrokerSyncEvent:
+    return make_broker_sync_event(
+        tenant_id="tenant-1",
+        broker="broker-test",
+        event_type=BrokerEventType.FULL_FILL.value,
+        event_version="1.0",
+        broker_order_id=broker_order_id,
+        canonical_sequence=canonical_sequence,
+        order_facts=OrderFacts(
+            broker_order_id=broker_order_id,
+            status=CanonicalOrderState.FILLED,
+            total_quantity=total_quantity,
+            cumulative_filled=cumulative_filled_after,
+            is_terminal=True,
+        ),
+        fill_facts=FillFacts(
+            fill_quantity=cumulative_filled_after,
+            fill_price=100.0,
+            cumulative_filled_after=cumulative_filled_after,
+            remaining_after=total_quantity - cumulative_filled_after,
+        ),
+        received_at=received_at or (_NOW + timedelta(seconds=2)),
     )
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# 1. Idempotency tests
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def engine():
-    eng = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    from app.broker_sync.models import Base as BrokerBase
-    from app.trade_lifecycle.persistence import Base as LifecycleBase
-    # Create all tables
-    BrokerBase.metadata.create_all(eng)
-    LifecycleBase.metadata.create_all(eng)
-    return eng
+class TestIdempotency:
 
-
-@pytest.fixture
-def db(engine):
-    Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    return Session()
-
-
-# ---------------------------------------------------------------------------
-# 1. First event applies
-# ---------------------------------------------------------------------------
-
-class TestFirstEventApplies:
-    def test_first_event_persists_idempotency_and_projection(self, db):
-        event = _make_event()
-        result = ingest_canonical_event(event, db, tenant_id="tenant-A")
+    def test_first_event_persists_and_applies(self, db):
+        """First event persists and applies."""
+        event = _make_submitted_event()
+        result = ingest_canonical_event(event, db)
         assert result["action"] == "APPLIED"
-        assert result["normalized_state"] is not None
-        assert result["normalized_state"]["status"] == CanonicalOrderState.OPEN
+        assert result["normalized_state"]["status"] == "SUBMITTED"
 
-        # Verify idempotency record persisted
-        idem = db.execute(
-            select(BrokerSyncIdempotency).where(
-                BrokerSyncIdempotency.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert idem is not None
-        assert idem.status == "APPLIED"
+        # Idempotency record is durably persisted
+        row = db.execute(
+            text("SELECT canonical_id, content_fingerprint, status FROM broker_sync_idempotency")
+        ).fetchone()
+        assert row is not None
+        assert row.canonical_id == event.canonical_id
+        assert row.status == "APPLIED"
 
-        # Verify projection persisted
-        proj = db.execute(
-            select(BrokerOrderProjection).where(
-                BrokerOrderProjection.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert proj is not None
-        assert proj.status == CanonicalOrderState.OPEN
-
-    def test_first_event_creates_day38_lifecycle_event(self, db):
-        event = _make_event()
-        result = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert result["action"] == "APPLIED"
-
-        # Verify Day38 lifecycle event was created
-        lifecycle_events = db.execute(
-            select(TradeLifecycleEvent).where(
-                TradeLifecycleEvent.tenant_id == "tenant-A"
-            )
-        ).scalars().all()
-        assert len(lifecycle_events) >= 1
-        # Find the broker_order lifecycle event
-        broker_events = [e for e in lifecycle_events if e.aggregate_type == "broker_order"]
-        assert len(broker_events) == 1
-        assert broker_events[0].event_type == BrokerEventType.ORDER_ACCEPTED
-
-
-# ---------------------------------------------------------------------------
-# 2. Identical duplicate is a durable no-op
-# ---------------------------------------------------------------------------
-
-class TestDuplicateIsNoop:
-    def test_identical_duplicate_is_noop(self, db):
-        event = _make_event()
-        r1 = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
-
-        r2 = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert r2["action"] == "DUPLICATE_NOOP"
-        assert r2["normalized_state"] is None
-
-    def test_duplicate_after_session_recreation_still_detected(self, db, engine):
-        """Duplicate detection survives session recreation (simulates restart)."""
-        event = _make_event()
-        r1 = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
+    def test_identical_duplicate_is_durable_noop(self, db):
+        """Identical duplicate is a durable no-op (survives session recreation)."""
+        event = _make_submitted_event()
+        ingest_canonical_event(event, db)
         db.commit()
 
-        # Recreate session (simulates restart)
-        db.close()
-        Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-        db2 = Session()
+        # Simulate process/session restart — close and reopen session
+        from app.db import Base
+        Base.metadata.create_all(_engine)
+        new_db = _TestSessionLocal()
 
-        r2 = ingest_canonical_event(event, db2, tenant_id="tenant-A")
-        assert r2["action"] == "DUPLICATE_NOOP"
-        db2.close()
+        result = ingest_canonical_event(event, new_db)
+        assert result["action"] == "DUPLICATE_NOOP"
+        # No duplicate projection row
+        count = new_db.execute(
+            text("SELECT COUNT(*) FROM broker_order_projection WHERE canonical_id = :cid"),
+            {"cid": event.canonical_id},
+        ).scalar()
+        assert count == 1
+        new_db.close()
 
+    def test_conflicting_same_identity_rejected(self, db):
+        """Same canonical_id + different content → CONFLICT."""
+        event = _make_submitted_event()
+        ingest_canonical_event(event, db)
 
-# ---------------------------------------------------------------------------
-# 3. Conflicting same identity is rejected
-# ---------------------------------------------------------------------------
+        # Same canonical_id (seq=1) but different total_quantity
+        different_event = BrokerSyncEvent(
+            tenant_id="tenant-1",
+            broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED,
+            event_version="1.0",
+            received_at=_NOW + timedelta(seconds=2),
+            provider_event_id=None,
+            broker_order_id="ORD-1",
+            canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1",
+                status=CanonicalOrderState.SUBMITTED,
+                total_quantity=999,  # different!
+            ),
+        )
+        result = ingest_canonical_event(different_event, db)
+        assert result["action"] == "CONFLICT"
 
-class TestConflictingIdentityRejected:
-    def test_conflicting_content_rejected(self, db):
-        """Same canonical_id but different content → CONFLICT."""
-        event1 = _make_event(order_facts=OrderFacts(total_quantity=100))
-        r1 = ingest_canonical_event(event1, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
+    def test_duplicate_after_session_recreation_detected(self, db):
+        """Duplicate detected after session recreation (durable)."""
+        event = _make_submitted_event()
+        ingest_canonical_event(event, db)
+        db.commit()
 
-        # Create event with same identity but different content
-        event2 = _make_event(order_facts=OrderFacts(total_quantity=200))
-        # event2 has same canonical_id (same tenant, broker, order, seq, no fill_id)
-        assert event1.canonical_id == event2.canonical_id
+        # Recreate session
+        from app.db import Base
+        Base.metadata.create_all(_engine)
+        new_db = _TestSessionLocal()
+        result = ingest_canonical_event(event, new_db)
+        assert result["action"] == "DUPLICATE_NOOP"
+        new_db.close()
 
-        r2 = ingest_canonical_event(event2, db, tenant_id="tenant-A")
-        assert r2["action"] == "CONFLICT"
-
-
-# ---------------------------------------------------------------------------
-# 4. Tenant mismatch is rejected
-# ---------------------------------------------------------------------------
-
-class TestTenantMismatchRejected:
-    def test_tenant_mismatch_rejected(self, db):
-        event = _make_event(tenant_id="tenant-A")
-        result = ingest_canonical_event(event, db, tenant_id="tenant-B")
+    def test_cross_tenant_identity_rejected(self, db):
+        """Cross-tenant identity (different tenant) rejected."""
+        event = _make_submitted_event(tenant_id="tenant-1")
+        result = ingest_canonical_event(event, db, tenant_id="tenant-2")
         assert result["action"] == "REJECTED"
         assert "tenant mismatch" in result["reason"]
 
-    def test_tenant_mismatch_does_not_persist(self, db):
-        event = _make_event(tenant_id="tenant-A")
-        ingest_canonical_event(event, db, tenant_id="tenant-B")
-
-        # No idempotency record should exist
-        idem = db.execute(
-            select(BrokerSyncIdempotency).where(
-                BrokerSyncIdempotency.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert idem is None
-
 
 # ---------------------------------------------------------------------------
-# 5. Malformed event is rejected
+# 2. Projection tests
 # ---------------------------------------------------------------------------
 
-class TestMalformedEventRejected:
-    def test_malformed_event_rejected_at_construction(self):
-        """broker_order_id only, no sequence or fill_facts → construction fails."""
-        with pytest.raises(ValueError, match="insufficient"):
-            make_broker_sync_event(
-                tenant_id="tenant-A",
-                broker="upstox",
-                event_type=BrokerEventType.ORDER_ACCEPTED,
-                broker_order_id="ORD-1",
-                canonical_sequence=None,
-                fill_facts=None,
-            )
+class TestProjection:
 
+    def test_accepted_event_persists_normalized_state(self, db):
+        """ORDER_ACCEPTED persists normalized state OPEN."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
 
-# ---------------------------------------------------------------------------
-# 6. Terminal state cannot be mutated illegally
-# ---------------------------------------------------------------------------
+        accepted = _make_accepted_event(canonical_sequence=2)
+        result = ingest_canonical_event(accepted, db)
+        assert result["action"] == "APPLIED"
+        assert result["normalized_state"]["status"] == "OPEN"
+        assert result["normalized_state"]["total_quantity"] == 100
 
-class TestTerminalStateEnforcement:
-    def test_filled_then_additional_fill_rejected(self, db):
-        """FILLED → additional fill must be rejected."""
-        # Apply accepted
-        accepted = _make_event(event_type=BrokerEventType.ORDER_ACCEPTED)
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
+    def test_submitted_event_persists(self, db):
+        event = _make_submitted_event()
+        result = ingest_canonical_event(event, db)
+        assert result["action"] == "APPLIED"
+        assert result["normalized_state"]["status"] == "SUBMITTED"
 
-        # Apply full fill
-        full_fill = _make_event(
-            event_type=BrokerEventType.FULL_FILL,
-            canonical_sequence=2,
-            fill_facts=FillFacts(
-                fill_id="FILL-001",
-                fill_quantity=10,
-                fill_price=100.0,
-                cumulative_filled_after=10,
-                remaining_after=0,
+    def test_partial_fill_persists_correct_quantities(self, db):
+        """PARTIAL_FILL persists correct cumulative/remaining."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
             ),
-        )
-        r1 = ingest_canonical_event(full_fill, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
-        assert r1["normalized_state"]["status"] == CanonicalOrderState.FILLED
-
-        # Try another fill — should be rejected
-        extra_fill = _make_event(
-            event_type=BrokerEventType.PARTIAL_FILL,
-            canonical_sequence=3,
             fill_facts=FillFacts(
-                fill_id="FILL-002",
-                fill_quantity=5,
-                fill_price=101.0,
-                cumulative_filled_after=15,
-                remaining_after=0,
+                fill_quantity=50, fill_price=100.0,
+                cumulative_filled_after=50, remaining_after=50,
             ),
+            received_at=_NOW + timedelta(seconds=2),
         )
-        r2 = ingest_canonical_event(extra_fill, db, tenant_id="tenant-A")
-        assert r2["action"] == "REJECTED"
-        assert "terminal state mutation rejected" in r2["reason"]
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "APPLIED"
+        ns = result["normalized_state"]
+        assert ns["status"] == "PARTIALLY_FILLED"
+        assert ns["cumulative_filled"] == 50
+        assert ns["remaining_quantity"] == 50
+        assert ns["last_fill_quantity"] == 50
+        assert ns["last_fill_price"] == 100.0
+        assert ns["fill_count"] == 1
+
+    def test_final_fill_persists_filled(self, db):
+        """FULL_FILL persists FILLED (terminal)."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill = _make_full_fill_event(canonical_sequence=2)
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "APPLIED"
+        ns = result["normalized_state"]
+        assert ns["status"] == "FILLED"
+        assert ns["is_terminal"] is True
+
+    def test_cancellation_persists_cancelled(self, db):
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        cancel = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(cancel, db)
+        assert result["action"] == "APPLIED"
+        ns = result["normalized_state"]
+        assert ns["status"] == "CANCELLED"
+        assert ns["is_terminal"] is True
+
+    def test_rejection_persists_rejected(self, db):
+        reject = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_REJECTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.REJECTED,
+                total_quantity=100, rejection_reason="insufficient_margin",
+            ),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        result = ingest_canonical_event(reject, db)
+        assert result["action"] == "APPLIED"
+        ns = result["normalized_state"]
+        assert ns["status"] == "REJECTED"
+        assert ns["is_terminal"] is True
+        assert ns["rejection_reason"] == "insufficient_margin"
+
+    def test_duplicate_fill_does_not_double_count(self, db):
+        """Same canonical fill event applied twice does not double-count."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(
+                fill_quantity=50, fill_price=100.0,
+                cumulative_filled_after=50, remaining_after=50,
+            ),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        # First application
+        result1 = ingest_canonical_event(fill, db)
+        assert result1["action"] == "APPLIED"
+        # Second application (identical duplicate)
+        result2 = ingest_canonical_event(fill, db)
+        assert result2["action"] == "DUPLICATE_NOOP"
+
+        # Projection shows only one fill row with cumulative=50
+        count = db.execute(
+            text("SELECT COUNT(*) FROM broker_order_projection WHERE broker_order_id = 'ORD-1'"),
+        ).scalar()
+        assert count == 2  # submit + fill
+        latest = db.execute(
+            text("SELECT cumulative_filled FROM broker_order_projection "
+                 "WHERE broker_order_id = 'ORD-1' ORDER BY canonical_sequence DESC NULLS LAST LIMIT 1")
+        ).fetchone()
+        assert latest[0] == 50
+
+
+# ---------------------------------------------------------------------------
+# 3. Terminal-state enforcement tests
+# ---------------------------------------------------------------------------
+
+class TestTerminalStates:
+
+    def test_filled_then_fill_rejected(self, db):
+        """FILLED → additional fill is rejected."""
+        # 1: submit, 2: fill to 50, 3: fill to 100 (FILLED), 4: additional fill
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        half_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        ingest_canonical_event(half_fill, db)
+
+        full_fill = _make_full_fill_event(broker_order_id="ORD-1", canonical_sequence=3)
+        ingest_canonical_event(full_fill, db)
+
+        # Now FILLED → additional fill (seq=4, different content)
+        after_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=4,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=80,
+            ),
+            fill_facts=FillFacts(fill_quantity=80, fill_price=100.0,
+                                 cumulative_filled_after=80, remaining_after=20),
+            received_at=_NOW + timedelta(seconds=4),
+        )
+        result = ingest_canonical_event(after_fill, db)
+        assert result["action"] == "REJECTED"
+        assert "terminal" in result["reason"].lower()
+
+    def test_filled_then_cancellation_rejected(self, db):
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        full_fill = _make_full_fill_event(canonical_sequence=2)
+        ingest_canonical_event(full_fill, db)
+
+        cancel = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=3,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        result = ingest_canonical_event(cancel, db)
+        assert result["action"] == "REJECTED"
+        assert "terminal" in result["reason"].lower()
 
     def test_cancelled_then_fill_rejected(self, db):
-        """CANCELLED → fill must be rejected."""
-        accepted = _make_event(event_type=BrokerEventType.ORDER_ACCEPTED)
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
 
-        cancel = _make_event(
-            event_type=BrokerEventType.ORDER_CANCELLED,
-            canonical_sequence=2,
-        )
-        ingest_canonical_event(cancel, db, tenant_id="tenant-A")
-
-        fill = _make_event(
-            event_type=BrokerEventType.PARTIAL_FILL,
-            canonical_sequence=3,
-            fill_facts=FillFacts(
-                fill_id="FILL-001",
-                fill_quantity=10,
-                fill_price=100.0,
-                cumulative_filled_after=10,
-                remaining_after=0,
+        cancel = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                total_quantity=100,
             ),
+            received_at=_NOW + timedelta(seconds=2),
         )
-        r = ingest_canonical_event(fill, db, tenant_id="tenant-A")
-        assert r["action"] == "REJECTED"
+        ingest_canonical_event(cancel, db)
+
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=3,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "REJECTED"
+        assert "terminal" in result["reason"].lower()
 
     def test_rejected_then_fill_rejected(self, db):
-        """REJECTED → fill must be rejected."""
-        reject = _make_event(
-            event_type=BrokerEventType.ORDER_REJECTED,
+        reject = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_REJECTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                status=CanonicalOrderState.REJECTED,
-                is_terminal=True,
-                rejection_reason="bad",
+                broker_order_id="ORD-1", status=CanonicalOrderState.REJECTED,
+                total_quantity=100, rejection_reason="test_reject",
             ),
+            received_at=_NOW + timedelta(seconds=1),
         )
-        ingest_canonical_event(reject, db, tenant_id="tenant-A")
+        ingest_canonical_event(reject, db)
 
-        fill = _make_event(
-            event_type=BrokerEventType.PARTIAL_FILL,
-            canonical_sequence=2,
-            fill_facts=FillFacts(
-                fill_id="FILL-001",
-                fill_quantity=10,
-                fill_price=100.0,
-                cumulative_filled_after=10,
-                remaining_after=0,
-            ),
-        )
-        r = ingest_canonical_event(fill, db, tenant_id="tenant-A")
-        assert r["action"] == "REJECTED"
-
-
-# ---------------------------------------------------------------------------
-# 7. Partial fill and final fill produce correct normalized state
-# ---------------------------------------------------------------------------
-
-class TestFillProjection:
-    def test_partial_fill_persists_correct_quantities(self, db):
-        accepted = _make_event(
-            event_type=BrokerEventType.ORDER_ACCEPTED,
-            order_facts=OrderFacts(total_quantity=100),
-        )
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
-
-        partial = _make_event(
-            event_type=BrokerEventType.PARTIAL_FILL,
-            canonical_sequence=2,
-            fill_facts=FillFacts(
-                fill_id="FILL-001",
-                fill_quantity=10,
-                fill_price=100.0,
-                cumulative_filled_after=10,
-                remaining_after=90,
-            ),
-        )
-        r = ingest_canonical_event(partial, db, tenant_id="tenant-A")
-        assert r["action"] == "APPLIED"
-        ns = r["normalized_state"]
-        assert ns["status"] == CanonicalOrderState.PARTIALLY_FILLED
-        assert ns["cumulative_filled"] == 10
-        assert ns["remaining_quantity"] == 90
-        assert ns["last_fill_price"] == 100.0
-        assert ns["last_fill_quantity"] == 10
-        assert ns["last_fill_id"] == "FILL-001"
-        assert ns["is_terminal"] is False
-
-    def test_full_fill_persists_filled(self, db):
-        accepted = _make_event(
-            event_type=BrokerEventType.ORDER_ACCEPTED,
-            order_facts=OrderFacts(total_quantity=100),
-        )
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
-
-        full = _make_event(
-            event_type=BrokerEventType.FULL_FILL,
-            canonical_sequence=2,
-            fill_facts=FillFacts(
-                fill_id="FILL-002",
-                fill_quantity=100,
-                fill_price=99.0,
-                cumulative_filled_after=100,
-                remaining_after=0,
-            ),
-        )
-        r = ingest_canonical_event(full, db, tenant_id="tenant-A")
-        assert r["action"] == "APPLIED"
-        assert r["normalized_state"]["status"] == CanonicalOrderState.FILLED
-        assert r["normalized_state"]["is_terminal"] is True
-        assert r["normalized_state"]["cumulative_filled"] == 100
-        assert r["normalized_state"]["remaining_quantity"] == 0
-
-
-# ---------------------------------------------------------------------------
-# 8. Cancellation/rejection map correctly
-# ---------------------------------------------------------------------------
-
-class TestCancellationRejection:
-    def test_cancellation_persists_cancelled(self, db):
-        accepted = _make_event()
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
-
-        cancel = _make_event(
-            event_type=BrokerEventType.ORDER_CANCELLED,
-            canonical_sequence=2,
-        )
-        r = ingest_canonical_event(cancel, db, tenant_id="tenant-A")
-        assert r["action"] == "APPLIED"
-        assert r["normalized_state"]["status"] == CanonicalOrderState.CANCELLED
-        assert r["normalized_state"]["is_terminal"] is True
-
-    def test_rejection_persists_rejected_with_reason(self, db):
-        reject = _make_event(
-            event_type=BrokerEventType.ORDER_REJECTED,
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                status=CanonicalOrderState.REJECTED,
-                is_terminal=True,
-                rejection_reason="insufficient_margin",
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
             ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
         )
-        r = ingest_canonical_event(reject, db, tenant_id="tenant-A")
-        assert r["action"] == "APPLIED"
-        assert r["normalized_state"]["status"] == CanonicalOrderState.REJECTED
-        assert r["normalized_state"]["is_terminal"] is True
-        assert r["normalized_state"]["rejection_reason"] == "insufficient_margin"
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "REJECTED"
+        assert "terminal" in result["reason"].lower()
+
+    def test_expired_then_fill_rejected(self, db):
+        """EXPIRED → arbitrary mutation rejected."""
+        expire = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_EXPIRED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.EXPIRED,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        ingest_canonical_event(expire, db)
+
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "REJECTED"
+        assert "terminal" in result["reason"].lower()
+
+    def test_order_recovered_rejected(self, db):
+        """ORDER_RECOVERED must be rejected — not bypass terminal protection."""
+        event = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_RECOVERED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.UNKNOWN,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        result = ingest_canonical_event(event, db)
+        assert result["action"] == "REJECTED"
+        assert "ORDER_RECOVERED" in result["reason"]
 
 
 # ---------------------------------------------------------------------------
-# 9. Transaction atomicity
+# 4. Transactionality tests
 # ---------------------------------------------------------------------------
 
-class TestTransactionAtomicity:
+class TestTransactionality:
+
+    def test_rollback_on_lifecycle_failure_rolls_back_idempotency(self, db):
+        """If Day38 lifecycle persistence fails, idempotency record must roll back."""
+        from app.broker_sync import ingestion as ing_mod
+
+        original = ing_mod.append_lifecycle_event
+
+        def failing_append(*args, **kwargs):
+            raise RuntimeError("simulated lifecycle failure")
+
+        ing_mod.append_lifecycle_event = failing_append
+        try:
+            event = _make_submitted_event()
+            with pytest.raises(RuntimeError):
+                ingest_canonical_event(event, db)
+            db.rollback()
+
+            # Idempotency record must NOT exist
+            count = db.execute(text("SELECT COUNT(*) FROM broker_sync_idempotency")).scalar()
+            assert count == 0
+            # Projection must NOT exist
+            count = db.execute(text("SELECT COUNT(*) FROM broker_order_projection")).scalar()
+            assert count == 0
+        finally:
+            ing_mod.append_lifecycle_event = original
+
+    def test_rollback_on_projection_failure_rolls_back_idempotency(self, db):
+        """If projection fails, idempotency record must roll back."""
+        from app.broker_sync import ingestion as ing_mod
+
+        original = ing_mod._build_projection
+
+        def failing_build(*args, **kwargs):
+            raise RuntimeError("simulated projection failure")
+
+        ing_mod._build_projection = failing_build
+        try:
+            event = _make_submitted_event()
+            with pytest.raises(RuntimeError):
+                ingest_canonical_event(event, db)
+            db.rollback()
+
+            count = db.execute(text("SELECT COUNT(*) FROM broker_sync_idempotency")).scalar()
+            assert count == 0
+        finally:
+            ing_mod._build_projection = original
+
     def test_successful_processing_commits_all_three(self, db):
-        event = _make_event()
-        result = ingest_canonical_event(event, db, tenant_id="tenant-A")
+        """Successful processing commits idempotency + projection + lifecycle."""
+        event = _make_submitted_event()
+        result = ingest_canonical_event(event, db)
         assert result["action"] == "APPLIED"
-        db.commit()
 
-        # All three should be committed
-        idem = db.execute(
-            select(BrokerSyncIdempotency).where(
-                BrokerSyncIdempotency.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert idem is not None
+        idem_count = db.execute(text("SELECT COUNT(*) FROM broker_sync_idempotency")).scalar()
+        proj_count = db.execute(text("SELECT COUNT(*) FROM broker_order_projection")).scalar()
+        lifecycle_count = db.execute(
+            text("SELECT COUNT(*) FROM trade_lifecycle_events")
+        ).scalar()
+        assert idem_count == 1
+        assert proj_count == 1
+        assert lifecycle_count == 1
 
-        proj = db.execute(
-            select(BrokerOrderProjection).where(
-                BrokerOrderProjection.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert proj is not None
+    def test_retry_after_rollback_can_process(self, db):
+        """After a rollback, the event can be successfully re-processed."""
+        from app.broker_sync import ingestion as ing_mod
 
-        lifecycle = db.execute(
-            select(TradeLifecycleEvent).where(
-                TradeLifecycleEvent.tenant_id == "tenant-A",
-                TradeLifecycleEvent.aggregate_type == "broker_order",
-            )
-        ).scalars().all()
-        assert len(lifecycle) >= 1
+        call_count = [0]
+        original = ing_mod.append_lifecycle_event
 
-    def test_rollback_removes_all_three(self, db):
-        event = _make_event()
-        result = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert result["action"] == "APPLIED"
-        # Roll back instead of commit
-        db.rollback()
+        def flaky_append(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("transient lifecycle failure")
+            return original(*args, **kwargs)
 
-        # None should be committed
-        idem = db.execute(
-            select(BrokerSyncIdempotency).where(
-                BrokerSyncIdempotency.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert idem is None
+        ing_mod.append_lifecycle_event = flaky_append
+        try:
+            event = _make_submitted_event()
+            # First attempt fails
+            with pytest.raises(RuntimeError):
+                ingest_canonical_event(event, db)
+            db.rollback()
 
-        proj = db.execute(
-            select(BrokerOrderProjection).where(
-                BrokerOrderProjection.canonical_id == event.canonical_id
-            )
-        ).scalar_one_or_none()
-        assert proj is None
+            # Second attempt succeeds
+            result = ingest_canonical_event(event, db)
+            assert result["action"] == "APPLIED"
+        finally:
+            ing_mod.append_lifecycle_event = original
 
 
 # ---------------------------------------------------------------------------
-# 10. Duplicate fill does not double-count
+# 5. Day38 integration tests
 # ---------------------------------------------------------------------------
 
-class TestDuplicateFillProtection:
-    def test_duplicate_fill_does_not_double_count(self, db):
-        accepted = _make_event(
-            event_type=BrokerEventType.ORDER_ACCEPTED,
-            order_facts=OrderFacts(total_quantity=100),
+class TestDay38Integration:
+
+    def test_canonical_broker_event_produces_expected_day38_lifecycle_event(self, db):
+        """BrokerSyncEvent → Task2 ingestion → Day38 lifecycle event."""
+        event = _make_submitted_event()
+        result = ingest_canonical_event(event, db)
+        assert result["action"] == "APPLIED"
+
+        row = db.execute(
+            text("SELECT aggregate_type, aggregate_id, event_type, sequence, tenant_id "
+                 "FROM trade_lifecycle_events")
+        ).fetchone()
+
+        assert row is not None
+        assert row.aggregate_type == "execution"
+        assert row.aggregate_id == "ORD-1"
+        # ORDER_SUBMITTED → OrderSubmitted (explicit Day38 mapping)
+        assert row.event_type == "OrderSubmitted"
+        assert row.sequence == 1
+        assert row.tenant_id == "tenant-1"
+
+    def test_day38_sequence_independent_of_canonical_sequence(self, db):
+        """Day38 sequence is allocated independently of canonical_sequence.
+
+        Uses canonical_sequence=None for both events (no broker sequence
+        validation), and verifies Day38 sequences are 1 and 2.
+        """
+        submit = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED.value, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=None,
+            provider_event_id="evt-001",
+            order_facts=OrderFacts(broker_order_id="ORD-1", status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+            received_at=_NOW + timedelta(seconds=1),
         )
-        ingest_canonical_event(accepted, db, tenant_id="tenant-A")
+        ingest_canonical_event(submit, db)
 
-        fill = _make_event(
-            event_type=BrokerEventType.PARTIAL_FILL,
-            canonical_sequence=2,
-            fill_facts=FillFacts(
-                fill_id="FILL-001",
-                fill_quantity=10,
-                fill_price=100.0,
-                cumulative_filled_after=10,
-                remaining_after=90,
+        fill = _make_full_fill_event(canonical_sequence=None)
+        ingest_canonical_event(fill, db)
+
+        rows = db.execute(
+            text("SELECT event_type, sequence FROM trade_lifecycle_events ORDER BY created_at")
+        ).fetchall()
+        # Two lifecycle events, with Day38 sequences 1 and 2
+        assert len(rows) == 2
+        assert rows[0].event_type == "OrderSubmitted"
+        assert rows[0].sequence == 1
+        assert rows[1].event_type == "OrderFilled"
+        assert rows[1].sequence == 2
+
+    def test_lifecycle_persistence_compatible_with_day38_duplicate_semantics(self, db):
+        """Duplicate canonical event → Day38 is also idempotent (not re-inserted)."""
+        event = _make_submitted_event()
+        ingest_canonical_event(event, db)
+
+        # Replay identical event
+        result = ingest_canonical_event(event, db)
+        assert result["action"] == "DUPLICATE_NOOP"
+
+        # Only 1 lifecycle event (Day38 idempotency)
+        count = db.execute(text("SELECT COUNT(*) FROM trade_lifecycle_events")).scalar()
+        assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Broker sequence ordering tests
+# ---------------------------------------------------------------------------
+
+class TestBrokerSequence:
+
+    def test_sequential_sequences_accepted(self, db):
+        """1 → 2 → 3 all accepted."""
+        events = []
+        for seq in [1, 2, 3]:
+            et = BrokerEventType.ORDER_ACCEPTED if seq > 1 else BrokerEventType.ORDER_SUBMITTED
+            events.append(make_broker_sync_event(
+                tenant_id="tenant-1", broker="broker-test",
+                event_type=et, event_version="1.0",
+                broker_order_id="ORD-1", canonical_sequence=seq,
+                order_facts=OrderFacts(
+                    broker_order_id="ORD-1",
+                    status=CanonicalOrderState.OPEN,
+                    total_quantity=100,
+                ),
+                received_at=_NOW + timedelta(seconds=seq),
+            ))
+        for ev in events:
+            result = ingest_canonical_event(ev, db)
+            assert result["action"] == "APPLIED", f"seq={ev.canonical_sequence} rejected: {result}"
+
+    def test_duplicate_sequence_identical_content_noop(self, db):
+        """Sequence 2 → 2 (identical) → no-op."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        acc = _make_submitted_event(canonical_sequence=2)
+        ingest_canonical_event(acc, db)
+
+        # Duplicate sequence 2 with identical content
+        result = ingest_canonical_event(acc, db)
+        assert result["action"] == "DUPLICATE_NOOP"
+
+    def test_duplicate_sequence_different_content_applied(self, db):
+        """Same sequence with different fill_facts → different canonical_id → both applied.
+
+        The idempotency layer identifies events by canonical_id (which is
+        derived from canonical_sequence AND fill_facts). Two fill events for
+        the same order with the same canonical_sequence but different fill
+        facts produce different canonical_ids and are treated as distinct
+        events.
+        """
+        # Submit at seq=1
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        # First partial fill at seq=2
+        fill1 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL.value, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
             ),
+            fill_facts=FillFacts(fill_id="fill-001", fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
         )
-        r1 = ingest_canonical_event(fill, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
-        assert r1["normalized_state"]["cumulative_filled"] == 10
+        ingest_canonical_event(fill1, db)
 
-        # Duplicate fill
-        r2 = ingest_canonical_event(fill, db, tenant_id="tenant-A")
-        assert r2["action"] == "DUPLICATE_NOOP"
+        # Same canonical_sequence but different fill_facts → different canonical_id
+        fill2 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL.value, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=75,
+            ),
+            fill_facts=FillFacts(fill_id="fill-002", fill_quantity=25, fill_price=101.0,
+                                 cumulative_filled_after=75, remaining_after=25),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        result = ingest_canonical_event(fill2, db)
+        # Different fill_id → different canonical_id → both applied
+        assert result["action"] == "APPLIED"
+        # Two separate projection rows for seq=2
+        count = db.execute(
+            text("SELECT COUNT(*) FROM broker_order_projection WHERE canonical_sequence = 2"),
+        ).scalar()
+        assert count == 2
 
-        # Verify cumulative_filled is still 10, not 20
-        proj = db.execute(
-            select(BrokerOrderProjection).where(
-                BrokerOrderProjection.canonical_id == fill.canonical_id
+    def test_sequence_gap_rejected(self, db):
+        """1 → 3 (gap at 2) → rejected/quarantined."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        gap_event = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=3,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(gap_event, db)
+        assert result["action"] == "REJECTED"
+        assert "gap" in result["reason"].lower() or "expected" in result["reason"].lower()
+
+    def test_stale_sequence_rejected(self, db):
+        """3 → 2 (stale, different content) → rejected."""
+        # Sequence 1, 2, 3 applied
+        for seq in [1, 2, 3]:
+            ev = make_broker_sync_event(
+                tenant_id="tenant-1", broker="broker-test",
+                event_type=BrokerEventType.ORDER_SUBMITTED if seq == 1 else BrokerEventType.ORDER_ACCEPTED,
+                event_version="1.0",
+                broker_order_id="ORD-1", canonical_sequence=seq,
+                order_facts=OrderFacts(
+                    broker_order_id="ORD-1",
+                    status=CanonicalOrderState.SUBMITTED,
+                    total_quantity=100,
+                ),
+                received_at=_NOW + timedelta(seconds=seq),
             )
-        ).scalar_one_or_none()
-        assert proj.cumulative_filled == 10
+            ingest_canonical_event(ev, db)
+
+        # Stale seq=2 with DIFFERENT content (different total)
+        stale = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                total_quantity=200,  # different from original 100
+            ),
+            received_at=_NOW + timedelta(seconds=4),
+        )
+        result = ingest_canonical_event(stale, db)
+        assert result["action"] == "REJECTED"
+        assert "stale" in result["reason"].lower() or "out-of-order" in result["reason"].lower()
+
+    def test_missing_canonical_sequence_no_fabrication(self, db):
+        """canonical_sequence=None → no sequence fabrication.
+
+        Events without canonical_sequence are processed without
+        sequence validation; Day38 sequence is independently allocated.
+        """
+        # Event without canonical_sequence but with fill_facts for identity
+        ev1 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=None,
+            provider_event_id="evt-001",  # provides identity
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        result1 = ingest_canonical_event(ev1, db)
+        assert result1["action"] == "APPLIED"
+
+        # Second event (no canonical_sequence) with a different provider_event_id
+        ev2 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=None,
+            provider_event_id="evt-002",
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result2 = ingest_canonical_event(ev2, db)
+        assert result2["action"] == "APPLIED"
+
+        # Day38 sequences should be 1 and 2, not both 1
+        rows = db.execute(
+            text("SELECT sequence FROM trade_lifecycle_events ORDER BY created_at")
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == 1
+        assert rows[1][0] == 2
 
 
 # ---------------------------------------------------------------------------
-# 11. Tenant isolation
+# 7. Quantity invariant tests
 # ---------------------------------------------------------------------------
 
-class TestTenantIsolation:
-    def test_same_order_different_tenants_independent(self, db):
-        event_a = _make_event(tenant_id="tenant-A")
-        event_b = _make_event(tenant_id="tenant-B")
+class TestQuantityInvariants:
 
-        r_a = ingest_canonical_event(event_a, db, tenant_id="tenant-A")
-        r_b = ingest_canonical_event(event_b, db, tenant_id="tenant-B")
+    def test_total_100_cumulative_50_pass(self, db):
+        """total=100, cumulative=50 → PASS."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
 
-        assert r_a["action"] == "APPLIED"
-        assert r_b["action"] == "APPLIED"
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "APPLIED"
 
-        # Different canonical IDs
-        assert event_a.canonical_id != event_b.canonical_id
+    def test_total_100_cumulative_100_pass(self, db):
+        """total=100, cumulative=100 → PASS."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill = _make_full_fill_event(canonical_sequence=2)
+        result = ingest_canonical_event(fill, db)
+        assert result["action"] == "APPLIED"
+        assert result["normalized_state"]["cumulative_filled"] == 100
+
+    def test_total_100_cumulative_101_rejected(self, db):
+        """total=100, cumulative=101 → REJECT."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        overfill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.FULL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.FILLED,
+                total_quantity=100, cumulative_filled=101, is_terminal=True,
+            ),
+            fill_facts=FillFacts(fill_quantity=101, fill_price=100.0,
+                                 cumulative_filled_after=101, remaining_after=-1),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(overfill, db)
+        assert result["action"] == "REJECTED"
+        assert "overfill" in result["reason"].lower() or "exceeds" in result["reason"].lower()
+
+    def test_previous_50_incoming_40_rejected(self, db):
+        """previous cumulative=50, incoming cumulative=40 → REJECT."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        half_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        ingest_canonical_event(half_fill, db)
+
+        regression = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.FULL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=3,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.FILLED,
+                total_quantity=100, cumulative_filled=40, is_terminal=True,
+            ),
+            fill_facts=FillFacts(fill_quantity=40, fill_price=100.0,
+                                 cumulative_filled_after=40, remaining_after=60),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        result = ingest_canonical_event(regression, db)
+        assert result["action"] == "REJECTED"
+        assert "regress" in result["reason"].lower()
+
+    def test_negative_fill_quantity_rejected(self, db):
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        neg_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=0,
+            ),
+            fill_facts=FillFacts(fill_quantity=-5, fill_price=100.0,
+                                 cumulative_filled_after=-5, remaining_after=105),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(neg_fill, db)
+        assert result["action"] == "REJECTED"
+        assert "negative" in result["reason"].lower()
+
+    def test_remaining_inconsistent_rejected(self, db):
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        inconsistent = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50,
+            ),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=60),  # should be 50
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(inconsistent, db)
+        assert result["action"] == "REJECTED"
+        assert "inconsistent" in result["reason"].lower()
 
 
 # ---------------------------------------------------------------------------
-# 12. Provider event ID path
+# 8. Communication failure ≠ order rejection
 # ---------------------------------------------------------------------------
 
-class TestProviderEventIdPath:
-    def test_provider_event_id_path_idempotent(self, db):
-        event = _make_event(provider_event_id="PROV-123")
-        r1 = ingest_canonical_event(event, db, tenant_id="tenant-A")
-        assert r1["action"] == "APPLIED"
+class TestCommunicationFailure:
 
-        # Duplicate with different received_at
-        event_dup = _make_event(provider_event_id="PROV-123")
-        r2 = ingest_canonical_event(event_dup, db, tenant_id="tenant-A")
-        assert r2["action"] == "DUPLICATE_NOOP"
+    def test_unknown_event_type_rejected_not_mapped_to_rejected_state(self, db):
+        """A non-broker-rejection event (e.g. NETWORK_DISCONNECT) is rejected
+        by the mapping layer, NOT persisted as REJECTED normalized state.
+
+        Communication failures are NOT mapped to ORDER_REJECTED.
+        """
+        network_event = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type="NETWORK_DISCONNECT",  # not a broker event type
+            event_version="1.0",
+            broker_order_id="ORD-1",
+            canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1",
+                status=CanonicalOrderState.UNKNOWN,
+                total_quantity=100,
+            ),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        result = ingest_canonical_event(network_event, db)
+        # NETWORK_DISCONNECT has no Day38 mapping → rejected
+        assert result["action"] == "REJECTED"
+        assert "NETWORK_DISCONNECT" in result["reason"]

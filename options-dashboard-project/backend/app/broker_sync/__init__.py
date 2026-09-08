@@ -142,6 +142,10 @@ class BrokerSyncEvent:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
 
+        # Coerce enum values to plain strings so canonical_id is deterministic
+        if isinstance(self.event_type, Enum):
+            object.__setattr__(self, "event_type", self.event_type.value)
+
         if self.received_at.tzinfo is None:
             raise ValueError("received_at must be timezone-aware")
         if self.event_timestamp is not None and self.event_timestamp.tzinfo is None:
