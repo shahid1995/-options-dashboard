@@ -190,13 +190,15 @@ def _validate_broker_sequence_position(
 
     The returned dict contains:
     - ``incoming``: the event's canonical_sequence
-    - ``last_sequence``: the current anchor's last_sequence
+    - ``last_sequence``: the current anchor's last_sequence (0 if anchor doesn't exist yet)
     - ``is_duplicate``: True if incoming == last_sequence (duplicate seq)
     - ``broker_order_id``: the normalized broker order ID
+    - ``anchor_exists``: True if the anchor row already exists
 
     Raises IngestionError for gap/stale sequences.
 
     Does NOT fabricate missing sequences.  Does NOT advance the anchor.
+    Does NOT create the anchor — that happens inside the SAVEPOINT.
     """
     if event.canonical_sequence is None:
         return None
@@ -204,27 +206,7 @@ def _validate_broker_sequence_position(
     incoming = event.canonical_sequence
     broker_order_id = event.broker_order_id or ""
 
-    # --- Ensure anchor exists ---
-    db.execute(
-        text(
-            """
-            INSERT INTO broker_sync_sequence_anchor
-                (tenant_id, broker, broker_order_id, last_sequence, created_at, updated_at)
-            VALUES
-                (:tenant_id, :broker, :broker_order_id, 0, :now, :now)
-            ON CONFLICT (tenant_id, broker, broker_order_id) DO NOTHING
-            """
-        ),
-        {
-            "tenant_id": event.tenant_id,
-            "broker": event.broker,
-            "broker_order_id": broker_order_id,
-            "now": datetime.now(timezone.utc),
-        },
-    )
-    db.flush()
-
-    # --- Read current anchor state ---
+    # --- Read current anchor state (does NOT create it) ---
     anchor = db.execute(
         select(BrokerSyncSequenceAnchor).where(
             BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
@@ -233,13 +215,8 @@ def _validate_broker_sequence_position(
         )
     ).scalar_one_or_none()
 
-    if anchor is None:
-        raise IngestionError(
-            f"failed to ensure sequence anchor for order {broker_order_id}",
-            action="REJECTED",
-        )
-
-    last_sequence = anchor.last_sequence
+    last_sequence = anchor.last_sequence if anchor is not None else 0
+    anchor_exists = anchor is not None
 
     # --- Validate position ---
 
@@ -264,7 +241,48 @@ def _validate_broker_sequence_position(
         "last_sequence": last_sequence,
         "is_duplicate": incoming == last_sequence,
         "broker_order_id": broker_order_id,
+        "anchor_exists": anchor_exists,
     }
+
+
+def _ensure_broker_sequence_anchor(
+    db: Session,
+    event: BrokerSyncEvent,
+    position_info: dict | None,
+) -> None:
+    """Create the broker sequence anchor row if it doesn't exist.
+
+    Must be called INSIDE the SAVEPOINT so that anchor creation
+    rolls back with projection, idempotency, and lifecycle.
+
+    Uses INSERT ... ON CONFLICT DO NOTHING for concurrency safety.
+    """
+    if position_info is None:
+        return
+
+    if position_info["anchor_exists"]:
+        return
+
+    broker_order_id = position_info["broker_order_id"]
+
+    db.execute(
+        text(
+            """
+            INSERT INTO broker_sync_sequence_anchor
+                (tenant_id, broker, broker_order_id, last_sequence, created_at, updated_at)
+            VALUES
+                (:tenant_id, :broker, :broker_order_id, 0, :now, :now)
+            ON CONFLICT (tenant_id, broker, broker_order_id) DO NOTHING
+            """
+        ),
+        {
+            "tenant_id": event.tenant_id,
+            "broker": event.broker,
+            "broker_order_id": broker_order_id,
+            "now": datetime.now(timezone.utc),
+        },
+    )
+    db.flush()
 
 
 def _advance_broker_sequence(
@@ -610,8 +628,8 @@ def _append_lifecycle_from_event(
 
     append_lifecycle_event(
         db=db,
-        aggregate_type="execution",
-        aggregate_id=order_id,
+        aggregate_type="TradeLifecycle",
+        aggregate_id=aggregate_id,
         event_type=lifecycle_event_type,
         event_version=event.event_version,
         tenant_id=event.tenant_id,
@@ -632,7 +650,7 @@ def _allocate_day38_sequence(db: Session, event: BrokerSyncEvent) -> int:
     The Day38 sequence is allocated independently of ``canonical_sequence``.
     """
     aggregate_id = event.broker_order_id or event.canonical_id
-    return next_event_sequence(db, event.tenant_id, "execution", aggregate_id)
+    return next_event_sequence(db, event.tenant_id, "TradeLifecycle", aggregate_id)
 
 
 # ---------------------------------------------------------------------------
@@ -822,8 +840,15 @@ def _do_ingest(
     # the SAVEPOINT, AFTER projection + idempotency + lifecycle have all been
     # persisted.  If any step fails, the SAVEPOINT rolls back all four effects
     # together, so the sequence anchor never represents an unapplied event.
+    #
+    # FIX 2 (first-use anchor atomicity): the anchor row is created INSIDE
+    # the SAVEPOINT (via _ensure_broker_sequence_anchor), so a failed first-use
+    # application rolls back the anchor along with all other durable effects.
     try:
         with db.begin_nested():
+            # Ensure broker sequence anchor exists (first-use case)
+            _ensure_broker_sequence_anchor(db, event, sequence_position)
+
             # Persist projection
             db.add(projection)
             db.flush()
