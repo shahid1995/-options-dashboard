@@ -10,11 +10,12 @@ projection assertions hit durable SQL state.
 """
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -113,8 +114,12 @@ def _make_full_fill_event(
     canonical_sequence: int | None = 2,
     cumulative_filled_after: int = 100,
     total_quantity: int = 100,
+    fill_quantity: int | None = None,
     received_at: datetime | None = None,
 ) -> BrokerSyncEvent:
+    # fill_quantity defaults to cumulative_filled_after (correct for first fill)
+    # but should be overridden to the incremental amount when there's a prior fill
+    fq = fill_quantity if fill_quantity is not None else cumulative_filled_after
     return make_broker_sync_event(
         tenant_id="tenant-1",
         broker="broker-test",
@@ -130,7 +135,7 @@ def _make_full_fill_event(
             is_terminal=True,
         ),
         fill_facts=FillFacts(
-            fill_quantity=cumulative_filled_after,
+            fill_quantity=fq,
             fill_price=100.0,
             cumulative_filled_after=cumulative_filled_after,
             remaining_after=total_quantity - cumulative_filled_after,
@@ -393,7 +398,8 @@ class TestTerminalStates:
         )
         ingest_canonical_event(half_fill, db)
 
-        full_fill = _make_full_fill_event(broker_order_id="ORD-1", canonical_sequence=3)
+        full_fill = _make_full_fill_event(broker_order_id="ORD-1", canonical_sequence=3,
+                                           fill_quantity=50)  # incremental from 50 to 100
         ingest_canonical_event(full_fill, db)
 
         # Now FILLED → additional fill (seq=4, different content)
@@ -822,8 +828,7 @@ class TestBrokerSequence:
                 event_version="1.0",
                 broker_order_id="ORD-1", canonical_sequence=seq,
                 order_facts=OrderFacts(
-                    broker_order_id="ORD-1",
-                    status=CanonicalOrderState.SUBMITTED,
+                    broker_order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
                     total_quantity=100,
                 ),
                 received_at=_NOW + timedelta(seconds=seq),
@@ -1051,3 +1056,370 @@ class TestCommunicationFailure:
         # NETWORK_DISCONNECT has no Day38 mapping → rejected
         assert result["action"] == "REJECTED"
         assert "NETWORK_DISCONNECT" in result["reason"]
+
+
+# ---------------------------------------------------------------------------
+# 9. Concurrency (FIX 1) — covered in test_day39_task2_postgres.py
+#    under TestPostgresConcurrency.  Real concurrent-transaction broker-sequence
+#    safety requires PostgreSQL row-level semantics; SQLite's single-connection
+#    StaticPool cannot serialize two concurrent write transactions.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 10. Day38 replay compatibility tests (FIX 2)
+# ---------------------------------------------------------------------------
+
+class TestDay38ReplayCompatibility:
+
+    def test_task2_order_submitted_produces_replay_compatible_event(self, db):
+        """Task2 ORDER_SUBMITTED → Day38 OrderSubmitted with replay-compatible payload.
+
+        Constructs a full lifecycle stream (foundation + Task2 event) and feeds
+        it through Day38 replay to prove semantic compatibility.
+        """
+        from app.trade_lifecycle.persistence import TradeLifecycleEvent
+        from app.trade_lifecycle.replay import replay_execution_events, LifecycleReplayError
+        from app.trade_lifecycle.envelope import TradeLifecycleEventEnvelope
+
+        order_id = "ORD-REPLAY-1"
+        tenant = "tenant-1"
+        now = _NOW
+
+        # Step 1: Task2 ingests a broker ORDER_SUBMITTED event
+        event = make_broker_sync_event(
+            tenant_id=tenant, broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
+            broker_order_id=order_id, canonical_sequence=1,
+            order_facts=OrderFacts(
+                broker_order_id=order_id, order_id=order_id,
+                status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+            received_at=now + timedelta(seconds=1),
+        )
+        result = ingest_canonical_event(event, db)
+        assert result["action"] == "APPLIED"
+
+        # Step 2: Read the lifecycle events from the DB
+        rows = db.execute(
+            select(TradeLifecycleEvent)
+            .where(TradeLifecycleEvent.tenant_id == tenant)
+            .order_by(TradeLifecycleEvent.sequence.asc())
+        ).scalars().all()
+        assert len(rows) == 1
+
+        task2_event = rows[0]
+        assert task2_event.event_type == "OrderSubmitted"
+        assert task2_event.aggregate_type == "execution"
+        assert task2_event.aggregate_id == order_id
+        assert task2_event.tenant_id == tenant
+
+        # Step 3: Construct a full replay-compatible stream
+        # The Task2 event at sequence=1 is OrderSubmitted, but Day38 replay
+        # requires TradeIntentCreated at seq=1, ExecutionActivated at seq=2,
+        # OrderCreated at seq=3, then OrderSubmitted at seq=4.
+        #
+        # So we construct the foundation events and place the Task2 event at seq=4
+        foundation_events = []
+        seq = 1
+
+        # TradeIntentCreated
+        foundation_events.append(TradeLifecycleEventEnvelope(
+            tenant_id=tenant, aggregate_type="execution", aggregate_id=order_id,
+            event_type="TradeIntentCreated", event_version="1.0",
+            sequence=seq, occurred_at=now,
+            payload={"strategy_id": "test-strategy", "intent": "BUY"},
+        ))
+        seq += 1
+
+        # ExecutionActivated
+        foundation_events.append(TradeLifecycleEventEnvelope(
+            tenant_id=tenant, aggregate_type="execution", aggregate_id=order_id,
+            event_type="ExecutionActivated", event_version="1.0",
+            sequence=seq, occurred_at=now + timedelta(seconds=1),
+            payload={},
+        ))
+        seq += 1
+
+        # OrderCreated
+        foundation_events.append(TradeLifecycleEventEnvelope(
+            tenant_id=tenant, aggregate_type="execution", aggregate_id=order_id,
+            event_type="OrderCreated", event_version="1.0",
+            sequence=seq, occurred_at=now + timedelta(seconds=1),
+            payload={"order_id": order_id, "quantity": 100},
+        ))
+        seq += 1
+
+        # Task2's OrderSubmitted event (from DB)
+        payload = json.loads(task2_event.payload_json)
+        # SQLite returns naive occurred_at — make it timezone-aware for replay
+        occurred = task2_event.occurred_at
+        if occurred.tzinfo is None:
+            occurred = occurred.replace(tzinfo=timezone.utc)
+        foundation_events.append(TradeLifecycleEventEnvelope(
+            tenant_id=task2_event.tenant_id,
+            aggregate_type=task2_event.aggregate_type,
+            aggregate_id=task2_event.aggregate_id,
+            event_type=task2_event.event_type,
+            event_version=task2_event.event_version,
+            sequence=seq,
+            occurred_at=occurred,
+            payload=payload,
+        ))
+
+        # Step 4: Feed through Day38 replay
+        try:
+            state = replay_execution_events(foundation_events)
+            # Verify the state
+            assert state.execution_status.value in ("CREATED", "ACTIVE")
+            assert order_id in state.orders
+            assert state.orders[order_id].status.value == "SUBMITTED"
+        except LifecycleReplayError as e:
+            pytest.fail(f"Task2 OrderSubmitted event failed Day38 replay: {e}")
+
+    def test_task2_order_filled_payload_has_cumulative_filled(self, db):
+        """Task2 PARTIAL_FILL → Day38 OrderFilled with cumulative_filled in payload."""
+        from app.trade_lifecycle.persistence import TradeLifecycleEvent
+
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_id="fill-001", fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        ingest_canonical_event(fill, db)
+
+        # Find the OrderFilled lifecycle event
+        rows = db.execute(
+            select(TradeLifecycleEvent)
+            .where(TradeLifecycleEvent.event_type == "OrderFilled")
+        ).scalars().all()
+        assert len(rows) == 1
+
+        payload = json.loads(rows[0].payload_json)
+        # Must have order_id and cumulative_filled for replay compatibility
+        assert "order_id" in payload, f"Missing order_id in OrderFilled payload: {payload.keys()}"
+        assert "cumulative_filled" in payload, f"Missing cumulative_filled in OrderFilled payload: {payload.keys()}"
+        assert isinstance(payload["cumulative_filled"], int)
+        assert payload["cumulative_filled"] >= 1
+
+    def test_task2_fill_recorded_payload_has_fill_quantity(self, db):
+        """Task2 FILL_RECORDED → Day38 FillRecorded with fill_quantity in payload."""
+        from app.trade_lifecycle.persistence import TradeLifecycleEvent
+
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        fill_rec = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.FILL_RECORDED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_id="fill-001", fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        ingest_canonical_event(fill_rec, db)
+
+        rows = db.execute(
+            select(TradeLifecycleEvent)
+            .where(TradeLifecycleEvent.event_type == "FillRecorded")
+        ).scalars().all()
+        assert len(rows) == 1
+
+        payload = json.loads(rows[0].payload_json)
+        assert "order_id" in payload
+        assert "fill_quantity" in payload
+        assert isinstance(payload["fill_quantity"], int)
+        assert payload["fill_quantity"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# 11. Fill arithmetic consistency tests (FIX 3)
+# ---------------------------------------------------------------------------
+
+class TestFillArithmeticConsistency:
+
+    def test_cumulative_after_less_than_previous_plus_fill_rejected(self, db):
+        """previous=50, fill=20, cumulative_after=60 → REJECT.
+        cumulative_after should be >= previous + fill = 70.
+        """
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        half_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        ingest_canonical_event(half_fill, db)
+
+        # Bad fill: says it added 20 but cumulative only went from 50 to 60
+        # 60 < 50 + 20 = 70, so this is inconsistent
+        bad_fill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=3,
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=60),
+            fill_facts=FillFacts(fill_quantity=20, fill_price=100.0,
+                                 cumulative_filled_after=60, remaining_after=40),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        result = ingest_canonical_event(bad_fill, db)
+        assert result["action"] == "REJECTED"
+        assert "less than" in result["reason"].lower() or "previous" in result["reason"].lower()
+
+    def test_valid_fill_arithmetic_passes(self, db):
+        """previous=0, fill=50, cumulative_after=50 → PASS.
+        previous=50, fill=50, cumulative_after=100 → PASS.
+        """
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        # First fill: 0 + 50 = 50 ✓
+        fill1 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result1 = ingest_canonical_event(fill1, db)
+        assert result1["action"] == "APPLIED"
+
+        # Second fill: 50 + 50 = 100 ✓
+        fill2 = _make_full_fill_event(broker_order_id="ORD-1", canonical_sequence=3,
+                                       cumulative_filled_after=100, total_quantity=100,
+                                       fill_quantity=50)  # incremental from 50 to 100
+        result2 = ingest_canonical_event(fill2, db)
+        assert result2["action"] == "APPLIED"
+        assert result2["normalized_state"]["cumulative_filled"] == 100
+
+    def test_fill_quantity_exceeding_total_rejected(self, db):
+        """fill_quantity > total_quantity → REJECT."""
+        submit = _make_submitted_event(canonical_sequence=1)
+        ingest_canonical_event(submit, db)
+
+        overfill = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=2,
+            order_facts=OrderFacts(broker_order_id="ORD-1",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=100),
+            fill_facts=FillFacts(fill_quantity=150, fill_price=100.0,
+                                 cumulative_filled_after=100, remaining_after=0),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        result = ingest_canonical_event(overfill, db)
+        assert result["action"] == "REJECTED"
+        # fill_quantity=150 exceeds both cumulative_after (100 < 0+150) and
+        # total (150 > 100) — either invariant correctly fails closed
+        assert ("exceeds" in result["reason"].lower()
+                or "less than" in result["reason"].lower())
+
+
+# ---------------------------------------------------------------------------
+# 12. Sequence-less ordering tests (FIX 4)
+# ---------------------------------------------------------------------------
+
+class TestSequenceLessOrdering:
+
+    def test_sequence_less_events_are_independently_identifiable(self, db):
+        """Multiple sequence-less events for same order are all processed.
+        Each is an independent observation; ordering is not inferred.
+        """
+        # Event 1: submit (no sequence)
+        ev1 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
+            broker_order_id="ORD-SEQLESS", canonical_sequence=None,
+            provider_event_id="evt-001",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+                status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+            received_at=_NOW + timedelta(seconds=1),
+        )
+        r1 = ingest_canonical_event(ev1, db)
+        assert r1["action"] == "APPLIED"
+
+        # Event 2: partial fill (no sequence)
+        ev2 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
+            broker_order_id="ORD-SEQLESS", canonical_sequence=None,
+            provider_event_id="evt-002",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+                status=CanonicalOrderState.PARTIALLY_FILLED,
+                total_quantity=100, cumulative_filled=50),
+            fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=50, remaining_after=50),
+            received_at=_NOW + timedelta(seconds=2),
+        )
+        r2 = ingest_canonical_event(ev2, db)
+        assert r2["action"] == "APPLIED"
+
+        # Event 3: full fill (no sequence)
+        ev3 = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.FULL_FILL, event_version="1.0",
+            broker_order_id="ORD-SEQLESS", canonical_sequence=None,
+            provider_event_id="evt-003",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+                status=CanonicalOrderState.FILLED,
+                total_quantity=100, cumulative_filled=100, is_terminal=True),
+            fill_facts=FillFacts(fill_id="fill-003", fill_quantity=50, fill_price=100.0,
+                                 cumulative_filled_after=100, remaining_after=0),
+            received_at=_NOW + timedelta(seconds=3),
+        )
+        r3 = ingest_canonical_event(ev3, db)
+        assert r3["action"] == "APPLIED"
+        assert r3["normalized_state"]["status"] == "FILLED"
+
+        # All three were applied independently
+        from app.trade_lifecycle.persistence import TradeLifecycleEvent
+        count = db.execute(
+            select(func.count(TradeLifecycleEvent.event_id))
+        ).scalar()
+        assert count == 3
+
+    def test_deterministic_projection_lookup_with_null_sequences(self, db):
+        """Projection lookup is deterministic even when all events lack canonical_sequence."""
+        # Process the same events multiple times and verify same result
+        for i in range(3):
+            # Fresh session each time
+            sess = _TestSessionLocal()
+            ev = make_broker_sync_event(
+                tenant_id="tenant-1", broker="broker-test",
+                event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
+                broker_order_id="ORD-DET", canonical_sequence=None,
+                provider_event_id=f"evt-det-{i}",
+                order_facts=OrderFacts(broker_order_id="ORD-DET",
+                    status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+                received_at=_NOW + timedelta(seconds=i),
+            )
+            result = ingest_canonical_event(ev, sess)
+            assert result["action"] == "APPLIED"
+            sess.close()

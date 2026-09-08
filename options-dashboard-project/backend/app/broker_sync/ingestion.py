@@ -177,7 +177,7 @@ def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
 
 
 # ---------------------------------------------------------------------------
-# Broker ordering validation
+# Broker ordering validation — PostgreSQL-safe atomic pattern
 # ---------------------------------------------------------------------------
 
 def _validate_broker_sequence(
@@ -186,13 +186,18 @@ def _validate_broker_sequence(
 ) -> int | None:
     """Validate canonical_sequence ordering and allocate the next anchor value.
 
+    Uses atomic conditional UPDATE to ensure concurrency safety across
+    multiple workers processing events for the same order concurrently.
+
     Returns the validated ``canonical_sequence`` for this event.
 
     - If ``canonical_sequence`` is None: no broker ordering validation
       (sequence is unknown).  Returns None.
-    - If ``canonical_sequence`` equals the last applied: duplicate (allowed
-      to proceed — idempotency layer will catch identical vs conflicting).
-    - If ``canonical_sequence`` is the next expected: accepted.
+    - If ``canonical_sequence`` equals the last applied and UPDATE fails:
+      concurrent worker applied same seq — checks idempotency for
+      DUPLICATE_NOOP vs CONFLICT (fail closed).
+    - If ``canonical_sequence`` is the next expected: accepted and atomically
+      advanced.
     - If there is a gap (incoming > expected): rejected (quarantine).
     - If the event is stale (incoming < last applied): rejected.
 
@@ -202,38 +207,47 @@ def _validate_broker_sequence(
         return None
 
     incoming = event.canonical_sequence
+    broker_order_id = event.broker_order_id or ""
 
-    # Atomically fetch-or-create anchor and read last_sequence under
-    # a SELECT FOR UPDATE-equivalent (we use a unique upsert below).
-    anchor: BrokerSyncSequenceAnchor | None = db.execute(
+    # --- Step 1: INSERT ... ON CONFLICT DO NOTHING to ensure anchor exists ---
+    db.execute(
+        text(
+            """
+            INSERT INTO broker_sync_sequence_anchor
+                (tenant_id, broker, broker_order_id, last_sequence, created_at, updated_at)
+            VALUES
+                (:tenant_id, :broker, :broker_order_id, 0, :now, :now)
+            ON CONFLICT (tenant_id, broker, broker_order_id) DO NOTHING
+            """
+        ),
+        {
+            "tenant_id": event.tenant_id,
+            "broker": event.broker,
+            "broker_order_id": broker_order_id,
+            "now": datetime.now(timezone.utc),
+        },
+    )
+    db.flush()
+
+    # --- Step 2: Read current anchor state ---
+    anchor = db.execute(
         select(BrokerSyncSequenceAnchor).where(
             BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
             BrokerSyncSequenceAnchor.broker == event.broker,
-            BrokerSyncSequenceAnchor.broker_order_id == (event.broker_order_id or ""),
+            BrokerSyncSequenceAnchor.broker_order_id == broker_order_id,
         )
     ).scalar_one_or_none()
 
+    # Anchor should always exist after the INSERT above
     if anchor is None:
-        if incoming != 1:
-            raise IngestionError(
-                f"first event for order {event.broker_order_id} "
-                f"has canonical_sequence={incoming}, expected 1",
-                action="REJECTED",
-            )
-        anchor = BrokerSyncSequenceAnchor(
-            tenant_id=event.tenant_id,
-            broker=event.broker,
-            broker_order_id=event.broker_order_id or "",
-            last_sequence=0,
+        raise IngestionError(
+            f"failed to ensure sequence anchor for order {broker_order_id}",
+            action="REJECTED",
         )
-        db.add(anchor)
-        db.flush()
 
     last_sequence = anchor.last_sequence
 
-    if incoming == last_sequence:
-        # Same sequence — idempotency layer will determine duplicate vs conflict
-        return incoming
+    # --- Step 3: Determine action based on incoming vs last_sequence ---
 
     if incoming < last_sequence:
         raise IngestionError(
@@ -243,7 +257,7 @@ def _validate_broker_sequence(
             action="REJECTED",
         )
 
-    if incoming != last_sequence + 1:
+    if incoming > last_sequence + 1:
         raise IngestionError(
             f"sequence gap: received canonical_sequence={incoming}, "
             f"expected {last_sequence + 1} (last applied={last_sequence}) — "
@@ -251,10 +265,74 @@ def _validate_broker_sequence(
             action="REJECTED",
         )
 
-    # Valid next sequence — advance anchor
-    anchor.last_sequence = incoming
+    # --- Step 4: Handle duplicate sequence (incoming == last_sequence) ---
+    # When the incoming sequence matches the last applied, this is a duplicate
+    # sequence.  Let the durable idempotency layer decide: identical content →
+    # DUPLICATE_NOOP, different content → CONFLICT.  The idempotency layer
+    # compares canonical content fingerprints, not just canonical_id.
+    if incoming == last_sequence:
+        return incoming
+
+    # --- Step 5: Atomically advance the anchor (incoming == last_sequence + 1) ---
+    # Use conditional UPDATE: only succeeds if last_sequence still matches.
+    # Fails if a concurrent worker already advanced — this is the serialization
+    # point for concurrent consumers of the same next sequence.
+
+    result = db.execute(
+        text(
+            """
+            UPDATE broker_sync_sequence_anchor
+            SET last_sequence = :advance_to,
+                updated_at = :now
+            WHERE tenant_id = :tenant_id
+              AND broker = :broker
+              AND broker_order_id = :broker_order_id
+              AND last_sequence = :expected
+            """
+        ),
+        {
+            "advance_to": incoming,
+            "expected": last_sequence,
+            "tenant_id": event.tenant_id,
+            "broker": event.broker,
+            "broker_order_id": broker_order_id,
+            "now": datetime.now(timezone.utc),
+        },
+    )
     db.flush()
-    return incoming
+
+    if result.rowcount == 1:
+        return incoming
+
+    # --- Step 6: UPDATE failed — concurrent worker advanced ---
+    anchor = db.execute(
+        select(BrokerSyncSequenceAnchor).where(
+            BrokerSyncSequenceAnchor.tenant_id == event.tenant_id,
+            BrokerSyncSequenceAnchor.broker == event.broker,
+            BrokerSyncSequenceAnchor.broker_order_id == broker_order_id,
+        )
+    ).scalar_one_or_none()
+
+    if anchor is None:
+        raise IngestionError(
+            f"sequence anchor disappeared for order {broker_order_id}",
+            action="REJECTED",
+        )
+
+    current_last = anchor.last_sequence
+
+    if incoming <= current_last:
+        raise IngestionError(
+            f"concurrent worker already advanced past canonical_sequence={incoming} "
+            f"(current last={current_last})",
+            action="REJECTED",
+        )
+    else:
+        raise IngestionError(
+            f"sequence conflict: expected canonical_sequence={incoming} "
+            f"but anchor advanced to {current_last}",
+            action="REJECTED",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +350,7 @@ def _validate_quantity_invariants(
     - cumulative_filled_after > total_quantity (overfill)
     - fill_quantity < 0 (negative fill)
     - remaining inconsistent with total/cumulative
+    - cumulative_filled_after < previous cumulative + fill_quantity (fill arithmetic)
 
     Does not silently repair — fails closed.
     """
@@ -300,6 +379,23 @@ def _validate_quantity_invariants(
             f"regresses previous cumulative={prev_cumulative}",
             action="REJECTED",
         )
+
+    # FIX 3: Fill arithmetic consistency — cumulative_filled_after must account
+    # for the full incremental fill.  Catches cases where cumulative_after
+    # doesn't include the current fill's contribution.
+    if (
+        previous is not None
+        and ff.fill_quantity is not None
+        and ff.cumulative_filled_after is not None
+    ):
+        expected_minimum = prev_cumulative + ff.fill_quantity
+        if ff.cumulative_filled_after < expected_minimum:
+            raise IngestionError(
+                f"cumulative_filled_after={ff.cumulative_filled_after} is less than "
+                f"previous_cumulative={prev_cumulative} + fill_quantity={ff.fill_quantity} "
+                f"(expected >= {expected_minimum})",
+                action="REJECTED",
+            )
 
     # Cumulative must not exceed total
     if ff.cumulative_filled_after is not None and total_quantity is not None:
@@ -448,7 +544,7 @@ def _append_lifecycle_from_event(
 
     aggregate_id = event.broker_order_id or event.canonical_id
 
-    payload = {
+    payload: dict[str, Any] = {
         "canonical_id": event.canonical_id,
         "broker": event.broker,
         "broker_event_type": event.event_type,
@@ -474,6 +570,51 @@ def _append_lifecycle_from_event(
             "cumulative_filled_after": event.fill_facts.cumulative_filled_after,
             "remaining_after": event.fill_facts.remaining_after,
         }
+
+    # FIX 2: Day38 lifecycle replay-compatible payload fields.
+    # The replay state machine (app/trade_lifecycle/replay.py) requires specific
+    # top-level payload keys for each event type:
+    #   - order_id (str): required by OrderSubmitted, OrderFilled, OrderCancelled,
+    #     OrderRejected, FillRecorded
+    #   - cumulative_filled (int >= 1): required by OrderFilled
+    #   - fill_quantity (int >= 1): required by FillRecorded
+    # Only include when they have positive integer values because the replay
+    # handler uses _require_payload_positive_int which rejects values < 1.
+
+    # order_id: from event.order_facts.order_id if present, else event.broker_order_id
+    order_id_value = None
+    if event.order_facts is not None and event.order_facts.order_id:
+        order_id_value = event.order_facts.order_id
+    elif event.broker_order_id:
+        order_id_value = event.broker_order_id
+    if order_id_value:
+        payload["order_id"] = order_id_value
+
+    # cumulative_filled (int >= 1): from order_facts.cumulative_filled, else
+    # fill_facts.cumulative_filled_after — only if positive
+    cumulative_value = 0
+    if (
+        event.order_facts is not None
+        and event.order_facts.cumulative_filled is not None
+        and event.order_facts.cumulative_filled > 0
+    ):
+        cumulative_value = event.order_facts.cumulative_filled
+    elif (
+        event.fill_facts is not None
+        and event.fill_facts.cumulative_filled_after is not None
+        and event.fill_facts.cumulative_filled_after > 0
+    ):
+        cumulative_value = event.fill_facts.cumulative_filled_after
+    if cumulative_value > 0:
+        payload["cumulative_filled"] = cumulative_value
+
+    # fill_quantity (int >= 1): from event.fill_facts.fill_quantity — only if positive
+    if (
+        event.fill_facts is not None
+        and event.fill_facts.fill_quantity is not None
+        and event.fill_facts.fill_quantity > 0
+    ):
+        payload["fill_quantity"] = event.fill_facts.fill_quantity
 
     # Map broker order to Day38 order identity
     order_id = event.broker_order_id or event.canonical_id
@@ -611,6 +752,10 @@ def _do_ingest(
     _lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
 
     # --- Find previous projection (deterministic: ordered by canonical_sequence) ---
+    # FIX 4: canonical_sequence is the primary ordering key; id is a deterministic
+    # tiebreaker only (not a causal ordering mechanism) for events where
+    # canonical_sequence is NULL.  The id column is stable within a database
+    # session and provides a consistent, repeatable order for projection lookup.
     previous: BrokerOrderProjection | None = None
     if event.broker_order_id:
         previous = db.execute(
@@ -620,7 +765,10 @@ def _do_ingest(
                 BrokerOrderProjection.broker == event.broker,
                 BrokerOrderProjection.broker_order_id == event.broker_order_id,
             )
-            .order_by(BrokerOrderProjection.canonical_sequence.desc().nullslast())
+            .order_by(
+                BrokerOrderProjection.canonical_sequence.desc().nullslast(),
+                BrokerOrderProjection.id.desc(),
+            )
             .limit(1)
         ).scalar_one_or_none()
 
@@ -645,30 +793,77 @@ def _do_ingest(
     # --- Allocate Day38 sequence (independent of canonical_sequence) ---
     day38_sequence = _allocate_day38_sequence(db, event)
 
-    # --- Persist projection ---
-    db.add(projection)
-    db.flush()
+    # --- Durable mutation, wrapped in a nested SAVEPOINT ---
+    # Concurrency safety (FIX 1): two concurrent workers may pass the same
+    # canonical_sequence (both read the same anchor, both advance it in their
+    # own transaction).  Only one may win.  The loser's insert of the
+    # idempotency record (PK canonical_id) will hit the DB-level unique
+    # constraint.  We catch SAIntegrityError at the SAVEPOINT so the caller's
+    # outer transaction stays intact and we can re-classify as a graceful
+    # DUPLICATE_NOOP / CONFLICT instead of leaking an exception.
+    try:
+        with db.begin_nested():
+            # Persist projection
+            db.add(projection)
+            db.flush()
 
-    # --- Persist idempotency record ---
-    idem = BrokerSyncIdempotency(
-        canonical_id=canonical_id,
-        tenant_id=event.tenant_id,
-        broker=event.broker,
-        broker_order_id=event.broker_order_id,
-        canonical_sequence=validated_sequence,
-        event_type=event.event_type,
-        event_version=event.event_version,
-        content_fingerprint=fingerprint,
-        source_mode=event.source_mode.value,
-        provider_event_id=event.provider_event_id,
-        received_at=event.received_at,
-        status="APPLIED",
-    )
-    db.add(idem)
-    db.flush()
+            # Persist idempotency record
+            idem = BrokerSyncIdempotency(
+                canonical_id=canonical_id,
+                tenant_id=event.tenant_id,
+                broker=event.broker,
+                broker_order_id=event.broker_order_id,
+                canonical_sequence=validated_sequence,
+                event_type=event.event_type,
+                event_version=event.event_version,
+                content_fingerprint=fingerprint,
+                source_mode=event.source_mode.value,
+                provider_event_id=event.provider_event_id,
+                received_at=event.received_at,
+                status="APPLIED",
+            )
+            db.add(idem)
+            db.flush()
 
-    # --- Day38 lifecycle integration ---
-    _append_lifecycle_from_event(db, event, day38_sequence)
+            # Day38 lifecycle integration
+            _append_lifecycle_from_event(db, event, day38_sequence)
+    except SAIntegrityError:
+        # The SAVEPOINT was rolled back; the caller's outer transaction is
+        # intact.  A concurrent worker committed the same canonical_id first.
+        # Re-read the idempotency record to classify.
+        concurrent_idem = db.execute(
+            select(BrokerSyncIdempotency).where(
+                BrokerSyncIdempotency.canonical_id == canonical_id
+            )
+        ).scalar_one_or_none()
+        if concurrent_idem is not None:
+            if concurrent_idem.content_fingerprint == fingerprint:
+                return {
+                    "canonical_id": canonical_id,
+                    "action": "DUPLICATE_NOOP",
+                    "normalized_state": None,
+                    "reason": "concurrent worker applied identical event (durable)",
+                }
+            return {
+                "canonical_id": canonical_id,
+                "action": "CONFLICT",
+                "normalized_state": None,
+                "reason": (
+                    f"concurrent worker applied canonical_id {canonical_id} "
+                    f"with different content"
+                ),
+            }
+        # No visible duplicate — a concurrent worker is mid-transaction.
+        # Fail closed.
+        return {
+            "canonical_id": canonical_id,
+            "action": "CONFLICT",
+            "normalized_state": None,
+            "reason": (
+                f"concurrent write conflict on canonical_id {canonical_id} "
+                f"(no committed idempotency record visible)"
+            ),
+        }
 
     # --- Build result ---
     normalized_state = {
