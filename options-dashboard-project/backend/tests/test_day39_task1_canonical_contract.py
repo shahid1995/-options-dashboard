@@ -309,8 +309,156 @@ def test_factory_requires_received_at_or_defaults_to_now() -> None:
 
 
 # ===========================================================================
-# Day39 Remediation — Deterministic Identity Tests
+# Day39 Final Hardening — Identity Requirement Tests
 # ===========================================================================
+
+def test_same_order_same_type_different_sequence_distinct_ids() -> None:
+    """Same order, same event type, different sequence must produce different IDs."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.ORDER_ACCEPTED.value,
+        canonical_sequence=1,
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.ORDER_ACCEPTED.value,
+        canonical_sequence=2,
+    )
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_different_orders_same_sequence_distinct_ids() -> None:
+    """Different orders with same sequence must produce different IDs.
+    This protects against using canonical_sequence alone as identity."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        canonical_sequence=1,
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-2",
+        canonical_sequence=1,
+    )
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_same_order_same_type_no_sequence_fails_closed() -> None:
+    """Same order, same event type, no sequence, no fill — must fail closed.
+    broker_order_id alone is insufficient for non-fill events."""
+    with pytest.raises(ValueError, match="insufficient"):
+        _make_event(
+            provider_event_id=None,
+            broker_order_id="ORD-1",
+            canonical_sequence=None,
+            fill_facts=None,
+        )
+
+
+def test_fill_ids_distinguish_fills() -> None:
+    """Two fills for the same order with different fill_ids must produce different IDs."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-002", fill_quantity=5),
+    )
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_same_fill_reconstructed_independently_same_id() -> None:
+    """Two separately constructed equivalent fill events must produce the same ID."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10, fill_price=100.50),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10, fill_price=100.50),
+    )
+    assert ev1.canonical_id == ev2.canonical_id
+
+
+def test_different_fill_facts_without_fill_id_distinct_ids() -> None:
+    """Two fills without fill_id but with different stable fill facts must produce different IDs."""
+    ev1 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id=None, fill_quantity=10, fill_price=100.50),
+    )
+    ev2 = _make_event(
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id=None, fill_quantity=5, fill_price=101.00),
+    )
+    assert ev1.canonical_id != ev2.canonical_id
+
+
+def test_tenant_isolation_for_fill_events() -> None:
+    """Same broker/order/fill identity under different tenants must produce different IDs."""
+    ev_a = _make_event(
+        tenant_id="tenant-A",
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10),
+    )
+    ev_b = _make_event(
+        tenant_id="tenant-B",
+        provider_event_id=None,
+        broker_order_id="ORD-1",
+        event_type=BrokerEventType.PARTIAL_FILL.value,
+        fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10),
+    )
+    assert ev_a.canonical_id != ev_b.canonical_id
+
+
+def test_broker_order_id_alone_fails_closed() -> None:
+    """broker_order_id alone (no sequence, no fill_facts) must fail closed for non-fill events."""
+    with pytest.raises(ValueError, match="insufficient"):
+        _make_event(
+            provider_event_id=None,
+            broker_order_id="ORD-1",
+            canonical_sequence=None,
+            fill_facts=None,
+            event_type=BrokerEventType.ORDER_ACCEPTED.value,
+        )
+
+
+def test_canonical_sequence_alone_fails_closed() -> None:
+    """canonical_sequence alone (no broker_order_id) must fail closed."""
+    with pytest.raises(ValueError, match="insufficient"):
+        _make_event(
+            provider_event_id=None,
+            broker_order_id=None,
+            canonical_sequence=1,
+            fill_facts=None,
+        )
+
+
+def test_fill_facts_alone_fails_closed() -> None:
+    """fill_facts alone (no broker_order_id) must fail closed."""
+    with pytest.raises(ValueError, match="insufficient"):
+        _make_event(
+            provider_event_id=None,
+            broker_order_id=None,
+            canonical_sequence=None,
+            fill_facts=FillFacts(fill_id="fill-001", fill_quantity=10),
+        )
 
 def test_independent_identical_events_have_identical_ids() -> None:
     """Two separately constructed, semantically identical events must produce the same canonical_id."""

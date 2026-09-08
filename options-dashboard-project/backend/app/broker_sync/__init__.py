@@ -10,12 +10,17 @@ Semantics:
 - Identity is tenant-scoped SHA-256 over ``\\x1f``-joined
   ``(tenant_id, broker, provider_event_id, event_type)`` when a durable
   provider event ID exists, otherwise
-  ``(tenant_id, broker, broker_order_id, event_type, canonical_sequence)``.
+  ``(tenant_id, broker, event_type, broker_order_id, canonical_sequence?, fill_id | fill_facts_digest)``.
+  ``broker_order_id`` is mandatory in the fallback path, plus at least
+  one additional discriminator (``canonical_sequence`` or ``fill_facts``).
 - Provider-specific normalization (Upstox status strings, instrument keys,
   raw payloads) belongs in the adapter boundary.  The canonical contract
   carries only provenance, not the raw upstream shape.
 - ``BrokerSyncEvent`` is immutable (frozen dataclass) following Day 37/38
   conventions.  ``order_facts`` / ``fill_facts`` are frozen too.
+- Events lacking sufficient deterministic identity are rejected at construction
+  time — identity is never invented from object memory addresses, random
+  UUIDs, or wall-clock timestamps.
 """
 
 from __future__ import annotations
@@ -218,11 +223,23 @@ class BrokerSyncEvent:
         # Identity must never depend on object memory address, random UUIDs,
         # or wall-clock timestamps.  If insufficient stable identity is available,
         # reject the event at construction time.
+        #
+        # The fallback path requires broker_order_id as a mandatory anchor,
+        # PLUS at least one additional discriminator (canonical_sequence or fill_facts).
+        # broker_order_id alone is insufficient — multiple distinct events can share the same order.
+        # canonical_sequence alone is insufficient — different orders can share the same sequence.
+        # fill_facts alone is insufficient — broker_order_id is needed to scope the fill.
         if not self.provider_event_id:
-            if not self.broker_order_id and self.canonical_sequence is None and self.fill_facts is None:
+            if not self.broker_order_id:
                 raise ValueError(
                     "insufficient deterministic identity: "
-                    "provider_event_id missing and no broker_order_id, canonical_sequence, or fill_facts available"
+                    "provider_event_id missing and broker_order_id required for fallback identity"
+                )
+            if self.canonical_sequence is None and self.fill_facts is None:
+                raise ValueError(
+                    "insufficient deterministic identity: "
+                    "provider_event_id missing and broker_order_id alone is insufficient; "
+                    "canonical_sequence or fill_facts required as additional discriminator"
                 )
 
     # ------------------------------------------------------------------
@@ -239,9 +256,10 @@ class BrokerSyncEvent:
         ``(tenant_id, broker, provider_event_id, event_type)``
 
         **Case B — Provider event ID unavailable:**
-        ``(tenant_id, broker, broker_order_id, event_type, canonical_sequence, fill_id, fill_facts_digest)``
+        ``(tenant_id, broker, event_type, broker_order_id, canonical_sequence?, fill_id | fill_facts_digest)``
 
         Where:
+        - ``broker_order_id`` is mandatory in the fallback path.
         - ``canonical_sequence`` is included when available (must be positive).
         - ``fill_id`` participates when ``fill_facts`` carries a stable fill ID.
         - ``fill_facts_digest`` is a SHA-256 digest of the canonical fill facts when no fill_id exists
@@ -264,13 +282,10 @@ class BrokerSyncEvent:
         if self.provider_event_id:
             parts = (self.tenant_id, self.broker, self.provider_event_id, self.event_type)
         else:
-            # Fallback requires at minimum tenant_id, broker, event_type,
-            # and one of: broker_order_id, canonical_sequence, or fill_facts.
+            # Fallback requires broker_order_id as mandatory anchor,
+            # plus at least one of canonical_sequence or fill_facts.
             # This is guaranteed by __post_init__ validation.
-            parts = [self.tenant_id, self.broker, self.event_type]
-
-            if self.broker_order_id:
-                parts.append(self.broker_order_id)
+            parts = [self.tenant_id, self.broker, self.event_type, self.broker_order_id]
 
             if self.canonical_sequence is not None:
                 parts.append(str(self.canonical_sequence))
