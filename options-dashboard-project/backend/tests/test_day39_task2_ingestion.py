@@ -148,6 +148,7 @@ def _make_submitted_event(
         event_timestamp=event_timestamp,
         order_facts=OrderFacts(
             broker_order_id=broker_order_id,
+            order_id=broker_order_id,
             status=CanonicalOrderState.SUBMITTED,
             total_quantity=total_quantity,
             cumulative_filled=0,
@@ -170,6 +171,7 @@ def _make_accepted_event(
         received_at=received_at or (_NOW + timedelta(seconds=2)),
         order_facts=OrderFacts(
             broker_order_id=broker_order_id,
+            order_id=broker_order_id,
             status=CanonicalOrderState.OPEN,
             total_quantity=100,
         ),
@@ -196,6 +198,7 @@ def _make_full_fill_event(
         canonical_sequence=canonical_sequence,
         order_facts=OrderFacts(
             broker_order_id=broker_order_id,
+            order_id=broker_order_id,
             status=CanonicalOrderState.FILLED,
             total_quantity=total_quantity,
             cumulative_filled=cumulative_filled_after,
@@ -269,7 +272,7 @@ class TestIdempotency:
             broker_order_id="ORD-1",
             canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1",
+                broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.SUBMITTED,
                 total_quantity=999,  # different!
             ),
@@ -332,7 +335,7 @@ class TestProjection:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(
@@ -372,7 +375,7 @@ class TestProjection:
             event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -389,7 +392,7 @@ class TestProjection:
             event_type=BrokerEventType.ORDER_REJECTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.REJECTED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.REJECTED,
                 total_quantity=100, rejection_reason="insufficient_margin",
             ),
             received_at=_NOW + timedelta(seconds=1),
@@ -411,7 +414,7 @@ class TestProjection:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(
@@ -456,7 +459,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -475,7 +478,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=4,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=80,
             ),
             fill_facts=FillFacts(fill_quantity=80, fill_price=100.0,
@@ -498,7 +501,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=3),
@@ -516,7 +519,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.ORDER_CANCELLED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.CANCELLED,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -528,7 +531,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -545,7 +548,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.ORDER_REJECTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.REJECTED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.REJECTED,
                 total_quantity=100, rejection_reason="test_reject",
             ),
             received_at=_NOW + timedelta(seconds=1),
@@ -557,7 +560,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -575,7 +578,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.ORDER_EXPIRED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.EXPIRED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.EXPIRED,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=1),
@@ -587,7 +590,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -605,7 +608,7 @@ class TestTerminalStates:
             event_type=BrokerEventType.ORDER_RECOVERED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.UNKNOWN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.UNKNOWN,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=1),
@@ -747,7 +750,7 @@ class TestDay38Integration:
             event_type=BrokerEventType.ORDER_SUBMITTED.value, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=None,
             provider_event_id="evt-001",
-            order_facts=OrderFacts(broker_order_id="ORD-1", status=CanonicalOrderState.SUBMITTED, total_quantity=100),
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.SUBMITTED, total_quantity=100),
             received_at=_NOW + timedelta(seconds=1),
         )
         ingest_canonical_event(submit, db)
@@ -795,7 +798,7 @@ class TestBrokerSequence:
                 event_type=et, event_version="1.0",
                 broker_order_id="ORD-1", canonical_sequence=seq,
                 order_facts=OrderFacts(
-                    broker_order_id="ORD-1",
+                    broker_order_id="ORD-1", order_id="ORD-1",
                     status=CanonicalOrderState.OPEN,
                     total_quantity=100,
                 ),
@@ -833,7 +836,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.PARTIAL_FILL.value, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_id="fill-001", fill_quantity=50, fill_price=100.0,
@@ -848,7 +851,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.PARTIAL_FILL.value, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=75,
             ),
             fill_facts=FillFacts(fill_id="fill-002", fill_quantity=25, fill_price=101.0,
@@ -874,7 +877,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=100,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -893,7 +896,7 @@ class TestBrokerSequence:
                 event_version="1.0",
                 broker_order_id="ORD-1", canonical_sequence=seq,
                 order_facts=OrderFacts(
-                    broker_order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
+                    broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
                     total_quantity=100,
                 ),
                 received_at=_NOW + timedelta(seconds=seq),
@@ -906,7 +909,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=200,  # different from original 100
             ),
             received_at=_NOW + timedelta(seconds=4),
@@ -927,7 +930,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=None,
             provider_event_id="evt-001",  # provides identity
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.SUBMITTED, total_quantity=100),
             received_at=_NOW + timedelta(seconds=1),
         )
@@ -940,7 +943,7 @@ class TestBrokerSequence:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=None,
             provider_event_id="evt-002",
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -975,7 +978,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1005,7 +1008,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.FULL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.FILLED,
                 total_quantity=100, cumulative_filled=101, is_terminal=True,
             ),
             fill_facts=FillFacts(fill_quantity=101, fill_price=100.0,
@@ -1026,7 +1029,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1040,7 +1043,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.FULL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.FILLED,
                 total_quantity=100, cumulative_filled=40, is_terminal=True,
             ),
             fill_facts=FillFacts(fill_quantity=40, fill_price=100.0,
@@ -1060,7 +1063,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=0,
             ),
             fill_facts=FillFacts(fill_quantity=-5, fill_price=100.0,
@@ -1080,7 +1083,7 @@ class TestQuantityInvariants:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1111,7 +1114,7 @@ class TestCommunicationFailure:
             broker_order_id="ORD-1",
             canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1",
+                broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.UNKNOWN,
                 total_quantity=100,
             ),
@@ -1552,7 +1555,7 @@ class TestFillArithmeticConsistency:
             tenant_id="tenant-1", broker="broker-test",
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1567,7 +1570,7 @@ class TestFillArithmeticConsistency:
             tenant_id="tenant-1", broker="broker-test",
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=60),
             fill_facts=FillFacts(fill_quantity=20, fill_price=100.0,
@@ -1590,7 +1593,7 @@ class TestFillArithmeticConsistency:
             tenant_id="tenant-1", broker="broker-test",
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1617,7 +1620,7 @@ class TestFillArithmeticConsistency:
             tenant_id="tenant-1", broker="broker-test",
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
-            order_facts=OrderFacts(broker_order_id="ORD-1",
+            order_facts=OrderFacts(broker_order_id="ORD-1", order_id="ORD-1",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=100),
             fill_facts=FillFacts(fill_quantity=150, fill_price=100.0,
@@ -1648,7 +1651,7 @@ class TestSequenceLessOrdering:
             event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
             broker_order_id="ORD-SEQLESS", canonical_sequence=None,
             provider_event_id="evt-001",
-            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS", order_id="ORD-SEQLESS",
                 status=CanonicalOrderState.SUBMITTED, total_quantity=100),
             received_at=_NOW + timedelta(seconds=1),
         )
@@ -1661,7 +1664,7 @@ class TestSequenceLessOrdering:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-SEQLESS", canonical_sequence=None,
             provider_event_id="evt-002",
-            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS", order_id="ORD-SEQLESS",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50),
             fill_facts=FillFacts(fill_quantity=50, fill_price=100.0,
@@ -1677,7 +1680,7 @@ class TestSequenceLessOrdering:
             event_type=BrokerEventType.FULL_FILL, event_version="1.0",
             broker_order_id="ORD-SEQLESS", canonical_sequence=None,
             provider_event_id="evt-003",
-            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS",
+            order_facts=OrderFacts(broker_order_id="ORD-SEQLESS", order_id="ORD-SEQLESS",
                 status=CanonicalOrderState.FILLED,
                 total_quantity=100, cumulative_filled=100, is_terminal=True),
             fill_facts=FillFacts(fill_id="fill-003", fill_quantity=50, fill_price=100.0,
@@ -1706,7 +1709,7 @@ class TestSequenceLessOrdering:
                 event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
                 broker_order_id="ORD-DET", canonical_sequence=None,
                 provider_event_id=f"evt-det-{i}",
-                order_facts=OrderFacts(broker_order_id="ORD-DET",
+                order_facts=OrderFacts(broker_order_id="ORD-DET", order_id="ORD-DET",
                     status=CanonicalOrderState.SUBMITTED, total_quantity=100),
                 received_at=_NOW + timedelta(seconds=i),
             )
@@ -1785,7 +1788,7 @@ class TestSequenceAdvancementRollback:
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=100, cumulative_filled=0,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -1827,7 +1830,7 @@ class TestSequenceAdvancementRollback:
             event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
                 total_quantity=200, cumulative_filled=0,  # Different quantity
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -1854,7 +1857,7 @@ class TestSequenceAdvancementRollback:
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=3,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=100, cumulative_filled=0,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -1880,7 +1883,7 @@ class TestSequenceAdvancementRollback:
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.OPEN,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=100, cumulative_filled=0,
             ),
             received_at=_NOW + timedelta(seconds=2),
@@ -1925,7 +1928,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_id="fill-A", fill_quantity=50, fill_price=100.0,
@@ -1937,7 +1940,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_id="fill-A", fill_quantity=50, fill_price=100.0,
@@ -1977,7 +1980,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=50,
             ),
             fill_facts=FillFacts(fill_id="fill-A", fill_quantity=50, fill_price=100.0,
@@ -1989,7 +1992,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.PARTIAL_FILL, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
             order_facts=OrderFacts(
-                broker_order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100, cumulative_filled=75,
             ),
             fill_facts=FillFacts(fill_id="fill-B", fill_quantity=25, fill_price=101.0,
@@ -2019,7 +2022,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
             broker_order_id="ORD-A", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-A", status=CanonicalOrderState.SUBMITTED,
+                broker_order_id="ORD-A", order_id="ORD-A", status=CanonicalOrderState.SUBMITTED,
                 total_quantity=100, cumulative_filled=0,
             ),
             received_at=_NOW + timedelta(seconds=1),
@@ -2029,7 +2032,7 @@ class TestConcurrentSequenceRace:
             event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
             broker_order_id="ORD-B", canonical_sequence=1,
             order_facts=OrderFacts(
-                broker_order_id="ORD-B", status=CanonicalOrderState.SUBMITTED,
+                broker_order_id="ORD-B", order_id="ORD-B", status=CanonicalOrderState.SUBMITTED,
                 total_quantity=200, cumulative_filled=0,
             ),
             received_at=_NOW + timedelta(seconds=2),

@@ -592,12 +592,12 @@ def _append_lifecycle_from_event(
     # Only include when they have positive integer values because the replay
     # handler uses _require_payload_positive_int which rejects values < 1.
 
-    # order_id: from event.order_facts.order_id if present, else event.broker_order_id
+    # order_id: STRICTLY from the canonical application-order reference.
+    # broker_order_id is a provider identity and is never used as the
+    # Day38 order identity (Control Center Issue #1, §11).
     order_id_value = None
     if event.order_facts is not None and event.order_facts.order_id:
         order_id_value = event.order_facts.order_id
-    elif event.broker_order_id:
-        order_id_value = event.broker_order_id
     if order_id_value:
         payload["order_id"] = order_id_value
 
@@ -627,9 +627,6 @@ def _append_lifecycle_from_event(
     ):
         payload["fill_quantity"] = event.fill_facts.fill_quantity
 
-    # Map broker order to Day38 order identity
-    order_id = event.broker_order_id or event.canonical_id
-
     append_lifecycle_event(
         db=db,
         aggregate_type="TradeLifecycle",
@@ -657,7 +654,7 @@ def _resolve_execution_identity(
     execution (design §4/§5/§8), NOT the broker order.  A broker order ID
     is not automatically a StrikeNova execution ID.
 
-    Resolution path:
+    Resolution path (STRICT — no fallback):
         canonical application order reference (order_facts.order_id)
             → PaperOrder.client_order_id
             → StrategyExecution.execution_id
@@ -669,22 +666,21 @@ def _resolve_execution_identity(
     per-order idempotency key (unique per user) — then to the execution
     that owns that order via ``PaperOrder.execution_id``.
 
+    ``broker_order_id`` is a PROVIDER identity and is NEVER reinterpreted
+    as an application order identity — there is NO fallback.
+
     Returns the resolved execution_id, or None if the broker event cannot
     be deterministically resolved to an existing execution (FAIL CLOSED).
     """
-    # Canonical application order reference must be present.
-    # Prefer OrderFacts.order_id (the canonical app order ref carried by the
-    # broker-neutral event, design §5).  When absent, fall back to
-    # broker_order_id — in the current integration the broker order id IS the
-    # application order reference (there is no separate broker_order_id →
-    # PaperOrder mapping; broker execution is Day 40).  Either way we resolve
-    # to the owning execution, never using broker_order_id AS the aggregate.
+    # Canonical application order reference is REQUIRED.
+    # broker_order_id is never silently reinterpreted as an application
+    # order identity (Control Center Issue #1, §11).
     order_ref: str | None = None
     if event.order_facts is not None and event.order_facts.order_id:
         order_ref = event.order_facts.order_id
     if not order_ref:
-        order_ref = event.broker_order_id
-    if not order_ref:
+        # FAIL CLOSED: without the canonical application-order reference the
+        # broker_order_id must NOT be reinterpreted as an application order id.
         return None
 
     from app.models import PaperOrder
@@ -700,13 +696,51 @@ def _resolve_execution_identity(
     return order.execution_id
 
 
+def _lock_execution_for_sequencing(
+    db: Session, tenant_id: str, execution_id: str,
+) -> None:
+    """Serialize concurrent writers to the same execution aggregate.
+
+    Takes a PostgreSQL row-level lock (SELECT ... FOR UPDATE) on the
+    actual StrategyExecution row so that MAX+1 sequence allocation
+    (next_event_sequence) is serialized per (tenant, execution).
+
+    SQLite treats FOR UPDATE as a no-op (single-writer engine).
+    Raises IngestionError (fail closed) if the row no longer exists.
+    """
+    from app.models import StrategyExecution
+
+    locked = db.execute(
+        select(StrategyExecution)
+        .where(
+            StrategyExecution.user_id == tenant_id,
+            StrategyExecution.execution_id == execution_id,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if locked is None:
+        raise IngestionError(
+            f"execution '{execution_id}' not found for tenant '{tenant_id}' "
+            f"during sequence lock acquisition",
+            action="REJECTED",
+        )
+
+
 def _allocate_day38_sequence(db: Session, event: BrokerSyncEvent, execution_id: str) -> int:
-    """Allocate the next Day38 aggregate sequence.
+    """Allocate the next Day38 aggregate sequence, execution-serialized.
 
     Uses the existing Day38 ``next_event_sequence`` mechanism against the
     ACTUAL resolved execution aggregate.  The Day38 sequence is allocated
     independently of ``canonical_sequence``.
+
+    Before allocation the actual ``StrategyExecution`` row is locked with
+    ``SELECT ... FOR UPDATE`` (tenant-scoped) so that concurrent broker
+    events for the same execution can never allocate the same Day38
+    lifecycle sequence.  Two concurrent transactions block at the lock;
+    the second sees the first's committed MAX(sequence) and allocates
+    MAX+1.
     """
+    _lock_execution_for_sequencing(db, event.tenant_id, execution_id)
     return next_event_sequence(db, event.tenant_id, "TradeLifecycle", execution_id)
 
 
@@ -842,24 +876,39 @@ def _do_ingest(
     # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED)
     _lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
 
-    # --- Resolve actual StrikeNova execution identity (v5) ---
+    # --- Resolve actual StrikeNova execution identity (v6) ---
     # The Day38 lifecycle aggregate must be the ACTUAL execution, not the
-    # broker order.  Unknown broker orders FAIL CLOSED (REJECTED) with no
-    # synthetic aggregate, no projection, no idempotency, no lifecycle event.
+    # broker order.  broker_order_id is NEVER reinterpreted as an
+    # application order id.  Missing or unknown references FAIL CLOSED
+    # (REJECTED) with no synthetic aggregate, no projection, no idempotency,
+    # no lifecycle event, no anchor advancement.
     execution_id = _resolve_execution_identity(db, event)
     if execution_id is None:
+        app_ref = (event.order_facts.order_id
+                    if event.order_facts else None)
+        if app_ref:
+            reason_text = (
+                f"unresolved broker order: canonical application order "
+                f"reference '{app_ref}' does not match any PaperOrder for "
+                f"tenant '{event.tenant_id}'. broker_order_id "
+                f"'{event.broker_order_id}' is not used as an application "
+                f"order identity. Failing closed; unknown broker state "
+                f"remains observable for recovery."
+            )
+        else:
+            reason_text = (
+                f"unresolved broker order: missing canonical application "
+                f"order reference (order_facts.order_id); broker_order_id "
+                f"'{event.broker_order_id}' is a provider identity and "
+                f"will not be reinterpreted as an application order id. "
+                f"Failing closed; unknown broker state remains observable "
+                f"for recovery."
+            )
         return {
             "canonical_id": canonical_id,
             "action": "REJECTED",
             "normalized_state": None,
-            "reason": (
-                f"unresolved broker order: cannot map broker_order_id "
-                f"'{event.broker_order_id}' to an existing StrikeNova "
-                f"execution (canonical application order reference "
-                f"'{event.order_facts.order_id if event.order_facts else None}' "
-                f"not found). Failing closed; unknown broker state remains "
-                f"observable for recovery."
-            ),
+            "reason": reason_text,
         }
 
     # --- Find previous projection (deterministic: ordered by canonical_sequence) ---

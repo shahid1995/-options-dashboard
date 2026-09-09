@@ -31,6 +31,7 @@ from app.broker_sync.models import (
     BrokerSyncSequenceAnchor,
 )
 from app.db import Base
+import app.models  # noqa: F401
 from app.trade_lifecycle.persistence import TradeLifecycleEvent
 
 PG_DB_URL = os.getenv("TEST_DATABASE_URL", "")
@@ -61,11 +62,59 @@ def pg_engine():
     engine.dispose()
 
 
+def _seed_app_order(db, *, tenant, client_order_id, execution_id):
+    from app.models import PaperOrder, StrategyExecution
+    exists = db.execute(select(StrategyExecution).where(
+        StrategyExecution.user_id == tenant,
+        StrategyExecution.execution_id == execution_id,
+    )).scalar_one_or_none()
+    if exists is None:
+        db.add(StrategyExecution(
+            user_id=tenant, execution_id=execution_id,
+            client_order_id=f"exec-{execution_id}",
+            strategy_id="strat-pg", strategy_tag="Test",
+            symbol="NIFTY", status="PENDING", entry_net=0.0, entry_at=_NOW,
+        ))
+    db.flush()
+    exists = db.execute(select(PaperOrder).where(
+        PaperOrder.user_id == tenant,
+        PaperOrder.client_order_id == client_order_id,
+    )).scalar_one_or_none()
+    if exists is None:
+        db.add(PaperOrder(
+            user_id=tenant, client_order_id=client_order_id,
+            execution_id=execution_id, kind="entry", symbol="NIFTY",
+            expiry="2026-10-29", strike=24500.0, option_type="CE",
+            action="buy", quantity=100, lot_size=1, status="PENDING",
+            filled_quantity=0,
+        ))
+    db.flush()
+
+PG_ORDER_IDS = [
+    "ORD-PG-1", "ORD-PG-CONC1", "ORD-PG-CONC2", "ORD-PG-DUP",
+    "ORD-PG-FI-1", "ORD-PG-FI-2", "ORD-PG-FI-3", "ORD-PG-FI-4",
+    "ORD-PG-GAP", "ORD-PG-LC", "ORD-PG-NOSEQ", "ORD-PG-PROJ-C",
+    "ORD-PG-PROJ-FF", "ORD-PG-PROJ-PF", "ORD-PG-PROJ-S", "ORD-PG-PROJ-TB",
+    "ORD-PG-SEQ", "ORD-PG-SEQ-IND", "ORD-PG-STALE", "ORD-PG-TXN",
+    "ORD-PG-TXN-R", "ORD-PG-TXN-RB", "ORD-PG-UC", "ORD-PG-REPLAY",
+    "ORD-PG-IND1", "ORD-PG-IND2",
+]
+
 @pytest.fixture()
 def pg_db(pg_engine):
-    """Fresh PostgreSQL session for each test, rolled back after."""
     Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
     session = Session()
+    for t in (BrokerSyncIdempotency.__table__, BrokerOrderProjection.__table__,
+              BrokerSyncSequenceAnchor.__table__):
+        session.execute(t.delete())
+    session.execute(text("DELETE FROM trade_lifecycle_events WHERE tenant_id = 'tenant-pg-1'"))
+    session.execute(text("DELETE FROM paper_orders WHERE user_id = 'tenant-pg-1'"))
+    session.execute(text("DELETE FROM strategy_executions WHERE user_id = 'tenant-pg-1'"))
+    session.flush()
+    for oid in PG_ORDER_IDS:
+        _seed_app_order(session, tenant="tenant-pg-1",
+                        client_order_id=oid, execution_id=f"EXEC-{oid}")
+    session.commit()
     yield session
     session.rollback()
     session.close()
@@ -92,7 +141,7 @@ def _make_submitted_event(
         broker_order_id=broker_order_id,
         canonical_sequence=canonical_sequence,
         received_at=received_at or (_NOW + timedelta(seconds=1)),
-        order_facts=OrderFacts(
+        order_facts=OrderFacts(order_id=broker_order_id, 
             broker_order_id=broker_order_id,
             status=CanonicalOrderState.SUBMITTED,
             total_quantity=total_quantity,
@@ -120,7 +169,7 @@ def _make_fill_event(
         broker_order_id=broker_order_id,
         canonical_sequence=canonical_sequence,
         received_at=received_at or (_NOW + timedelta(seconds=2)),
-        order_facts=OrderFacts(
+        order_facts=OrderFacts(order_id=broker_order_id, 
             broker_order_id=broker_order_id,
             status=CanonicalOrderState.PARTIALLY_FILLED,
             total_quantity=total_quantity,
@@ -181,7 +230,7 @@ class TestPostgresIdempotency:
             broker_order_id="ORD-PG-1",
             canonical_sequence=1,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-1", 
                 broker_order_id="ORD-PG-1",
                 status=CanonicalOrderState.SUBMITTED,
                 total_quantity=999,
@@ -226,7 +275,7 @@ class TestPostgresOrdering:
                 broker_order_id="ORD-PG-SEQ",
                 canonical_sequence=seq,
                 received_at=_NOW + timedelta(seconds=seq),
-                order_facts=OrderFacts(
+                order_facts=OrderFacts(order_id="ORD-PG-SEQ", 
                     broker_order_id="ORD-PG-SEQ",
                     status=CanonicalOrderState.OPEN,
                     total_quantity=100,
@@ -250,7 +299,7 @@ class TestPostgresOrdering:
             broker_order_id="ORD-PG-DUP",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-DUP", 
                 broker_order_id="ORD-PG-DUP",
                 status=CanonicalOrderState.OPEN,
                 total_quantity=100,
@@ -272,7 +321,7 @@ class TestPostgresOrdering:
             broker_order_id="ORD-PG-GAP",
             canonical_sequence=3,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-GAP", 
                 broker_order_id="ORD-PG-GAP",
                 status=CanonicalOrderState.OPEN,
                 total_quantity=100,
@@ -297,7 +346,7 @@ class TestPostgresOrdering:
                 broker_order_id="ORD-PG-STALE",
                 canonical_sequence=seq,
                 received_at=_NOW + timedelta(seconds=seq),
-                order_facts=OrderFacts(
+                order_facts=OrderFacts(order_id="ORD-PG-STALE", 
                     broker_order_id="ORD-PG-STALE",
                     status=CanonicalOrderState.SUBMITTED,
                     total_quantity=100,
@@ -313,7 +362,7 @@ class TestPostgresOrdering:
             broker_order_id="ORD-PG-STALE",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=4),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-STALE", 
                 broker_order_id="ORD-PG-STALE",
                 status=CanonicalOrderState.OPEN,
                 total_quantity=200,
@@ -333,7 +382,7 @@ class TestPostgresOrdering:
             canonical_sequence=None,
             provider_event_id="pg-evt-001",
             received_at=_NOW + timedelta(seconds=1),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-NOSEQ", 
                 broker_order_id="ORD-PG-NOSEQ",
                 status=CanonicalOrderState.SUBMITTED,
                 total_quantity=100,
@@ -351,7 +400,7 @@ class TestPostgresOrdering:
             canonical_sequence=None,
             provider_event_id="pg-evt-002",
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-NOSEQ", 
                 broker_order_id="ORD-PG-NOSEQ",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100,
@@ -482,7 +531,7 @@ class TestPostgresConcurrency:
                     broker_order_id=order_id,
                     canonical_sequence=seq,
                     received_at=_NOW + timedelta(seconds=1),
-                    order_facts=OrderFacts(
+                    order_facts=OrderFacts(order_id=order_id, 
                         broker_order_id=order_id,
                         status=CanonicalOrderState.SUBMITTED,
                         total_quantity=100,
@@ -633,7 +682,7 @@ class TestPostgresProjection:
             broker_order_id="ORD-PG-PROJ-FF",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-PROJ-FF", 
                 broker_order_id="ORD-PG-PROJ-FF",
                 status=CanonicalOrderState.FILLED,
                 total_quantity=100,
@@ -664,7 +713,7 @@ class TestPostgresProjection:
             broker_order_id="ORD-PG-PROJ-C",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-PROJ-C", 
                 broker_order_id="ORD-PG-PROJ-C",
                 status=CanonicalOrderState.CANCELLED,
                 total_quantity=100,
@@ -687,7 +736,7 @@ class TestPostgresProjection:
             broker_order_id="ORD-PG-PROJ-TB",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-PROJ-TB", 
                 broker_order_id="ORD-PG-PROJ-TB",
                 status=CanonicalOrderState.CANCELLED,
                 total_quantity=100,
@@ -720,10 +769,13 @@ class TestPostgresDay38:
         pg_db.flush()
 
         row = pg_db.execute(
-            select(TradeLifecycleEvent).limit(1)
+            select(TradeLifecycleEvent)
+            .where(TradeLifecycleEvent.tenant_id == "tenant-pg-1")
+            .order_by(TradeLifecycleEvent.sequence.desc())
+            .limit(1)
         ).scalar_one()
-        assert row.aggregate_type == "execution"
-        assert row.aggregate_id == "ORD-PG-LC"
+        assert row.aggregate_type == "TradeLifecycle"
+        assert row.aggregate_id == "EXEC-ORD-PG-LC"
         assert row.event_type == "OrderSubmitted"
         assert row.tenant_id == "tenant-pg-1"
         assert row.event_version == "1.0"
@@ -739,7 +791,7 @@ class TestPostgresDay38:
             canonical_sequence=None,
             provider_event_id="pg-seq-ind-001",
             received_at=_NOW + timedelta(seconds=1),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-SEQ-IND", 
                 broker_order_id="ORD-PG-SEQ-IND",
                 status=CanonicalOrderState.SUBMITTED,
                 total_quantity=100,
@@ -756,7 +808,7 @@ class TestPostgresDay38:
             canonical_sequence=None,
             provider_event_id="pg-seq-ind-002",
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-SEQ-IND", 
                 broker_order_id="ORD-PG-SEQ-IND",
                 status=CanonicalOrderState.FILLED,
                 total_quantity=100,
@@ -774,7 +826,7 @@ class TestPostgresDay38:
 
         rows = pg_db.execute(
             select(TradeLifecycleEvent)
-            .where(TradeLifecycleEvent.aggregate_id == "ORD-PG-SEQ-IND")
+            .where(TradeLifecycleEvent.aggregate_id == "EXEC-ORD-PG-SEQ-IND")
             .order_by(TradeLifecycleEvent.sequence.asc())
         ).scalars().all()
         assert len(rows) == 2
@@ -798,6 +850,7 @@ class TestPostgresDay38:
         )
 
         order_id = "ORD-PG-REPLAY"
+        exec_id = "EXEC-ORD-PG-REPLAY"
         tenant = "tenant-pg-1"
 
         # Build foundation events directly
@@ -806,8 +859,8 @@ class TestPostgresDay38:
         foundation.append(
             TradeLifecycleEventEnvelope(
                 tenant_id=tenant,
-                aggregate_type="execution",
-                aggregate_id=order_id,
+                aggregate_type="TradeLifecycle",
+                aggregate_id=exec_id,
                 event_type="TradeIntentCreated",
                 event_version="1.0",
                 sequence=1,
@@ -818,8 +871,8 @@ class TestPostgresDay38:
         foundation.append(
             TradeLifecycleEventEnvelope(
                 tenant_id=tenant,
-                aggregate_type="execution",
-                aggregate_id=order_id,
+                aggregate_type="TradeLifecycle",
+                aggregate_id=exec_id,
                 event_type="ExecutionActivated",
                 event_version="1.0",
                 sequence=2,
@@ -830,8 +883,8 @@ class TestPostgresDay38:
         foundation.append(
             TradeLifecycleEventEnvelope(
                 tenant_id=tenant,
-                aggregate_type="execution",
-                aggregate_id=order_id,
+                aggregate_type="TradeLifecycle",
+                aggregate_id=exec_id,
                 event_type="OrderCreated",
                 event_version="1.0",
                 sequence=3,
@@ -881,7 +934,7 @@ class TestPostgresDay38:
         rows = pg_db.execute(
             select(TradeLifecycleEvent)
             .where(TradeLifecycleEvent.tenant_id == tenant)
-            .where(TradeLifecycleEvent.aggregate_id == order_id)
+            .where(TradeLifecycleEvent.aggregate_id == exec_id)
             .order_by(TradeLifecycleEvent.sequence.asc())
         ).scalars().all()
         assert len(rows) == 4
@@ -997,7 +1050,7 @@ class TestPostgresFillIntegrity:
             broker_order_id="ORD-PG-FI-2",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-FI-2", 
                 broker_order_id="ORD-PG-FI-2",
                 status=CanonicalOrderState.FILLED,
                 total_quantity=100,
@@ -1027,7 +1080,7 @@ class TestPostgresFillIntegrity:
             broker_order_id="ORD-PG-FI-3",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-FI-3", 
                 broker_order_id="ORD-PG-FI-3",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100,
@@ -1056,7 +1109,7 @@ class TestPostgresFillIntegrity:
             broker_order_id="ORD-PG-FI-4",
             canonical_sequence=2,
             received_at=_NOW + timedelta(seconds=2),
-            order_facts=OrderFacts(
+            order_facts=OrderFacts(order_id="ORD-PG-FI-4", 
                 broker_order_id="ORD-PG-FI-4",
                 status=CanonicalOrderState.PARTIALLY_FILLED,
                 total_quantity=100,
