@@ -20,8 +20,11 @@ Durable pipeline:
     durable normalized projection
         ↓
     explicit Day38 lifecycle mapping
+        (broker events WITH a Day38 state transition; projection-only
+        events such as ORDER_ACCEPTED are persisted without a lifecycle
+        event — approved Day38 design §13/§14)
         ↓
-    single transaction (all three commit or all roll back)
+    single transaction (all commit or all roll back)
 
 All operations share the caller's transaction.  On any failure the caller
 rolls back the entire transaction — no partial durable state.
@@ -134,9 +137,28 @@ def _is_terminal(state: CanonicalOrderState) -> bool:
 # Broker-to-Day38 lifecycle event mapping
 # ---------------------------------------------------------------------------
 
-_BROKER_TO_LIFECYCLE: dict[str, str] = {
+# Maps broker event type → Day38 lifecycle event type.  A value of None
+# marks a PROJECTION-ONLY broker event: fully ingestable (normalized
+# projection + durable idempotency + broker ordering) but carrying NO
+# Day38 state transition, so it must not be persisted as a lifecycle event.
+_BROKER_TO_LIFECYCLE: dict[str, str | None] = {
     BrokerEventType.ORDER_SUBMITTED.value: "OrderSubmitted",
-    BrokerEventType.ORDER_ACCEPTED.value: "OrderSubmitted",
+    # ORDER_ACCEPTED → None (projection-only):
+    # The approved Day38 design defines ``OrderSubmitted`` as an audit
+    # record of the submission attempt that explicitly "does not mean
+    # broker accepted" (design §13.7), mandates "No lifecycle event implies
+    # broker state" (§4 rule 4), and deliberately removed standalone
+    # broker-acceptance events from the Day38 vocabulary (§14); a dedicated
+    # ``BrokerOrderAccepted`` event is a planned ADDITIVE extension for
+    # Days 39–42 (§13.5) and must not be invented inside Task2.  Broker
+    # acceptance therefore changes no Day38 state — the order is already
+    # SUBMITTED (working) and acceptance is broker-observed state, durably
+    # recorded in the Task2 normalized projection (status=OPEN).  Mapping
+    # it to a second ``OrderSubmitted`` produced the lifecycle stream
+    # PENDING→SUBMITTED→SUBMITTED, which the approved replay engine
+    # correctly rejects (ReplayInvalidTransition): the system must never
+    # persist a durable stream its own replay engine cannot rebuild.
+    BrokerEventType.ORDER_ACCEPTED.value: None,
     BrokerEventType.PARTIAL_FILL.value: "OrderFilled",
     BrokerEventType.FILL_RECORDED.value: "FillRecorded",
     BrokerEventType.FULL_FILL.value: "OrderFilled",
@@ -146,17 +168,22 @@ _BROKER_TO_LIFECYCLE: dict[str, str] = {
 }
 
 
-def _map_to_lifecycle_event_type(event_type: str) -> str:
-    """Map a canonical broker event type to the existing Day38 lifecycle event type.
+def _map_to_lifecycle_event_type(event_type: str) -> str | None:
+    """Map a canonical broker event type to the Day38 lifecycle event type.
 
     Uses the approved Day38 vocabulary (OrderSubmitted, OrderFilled,
     FillRecorded, OrderCancelled, OrderRejected).
     Does NOT invent new Day38 event names.
-    Raises IngestionError for events that cannot be mapped.
+
+    Returns None for PROJECTION-ONLY broker events: they carry no Day38
+    state transition (currently ORDER_ACCEPTED — see _BROKER_TO_LIFECYCLE
+    and the approved Day38 design §13/§14) yet remain fully ingestable
+    (normalized projection + durable idempotency + broker ordering).
+
+    Raises IngestionError for events that cannot be mapped at all.
     """
-    mapped = _BROKER_TO_LIFECYCLE.get(event_type)
-    if mapped is not None:
-        return mapped
+    if event_type in _BROKER_TO_LIFECYCLE:
+        return _BROKER_TO_LIFECYCLE[event_type]
     raise IngestionError(
         f"cannot map broker event type '{event_type}' to a Day38 lifecycle event type",
         action="REJECTED",
@@ -554,8 +581,16 @@ def _append_lifecycle_from_event(
     the ACTUAL StrikeNova execution (``execution_id``) resolved from the
     canonical application order reference — never a synthetic broker-order
     aggregate.
+
+    Projection-only broker events (mapper returns None — ORDER_ACCEPTED,
+    per approved Day38 design §13/§14) persist NO lifecycle event: they
+    carry no Day38 state transition, and persisting one would create a
+    durable stream the replay engine cannot rebuild.
     """
     lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
+    if lifecycle_event_type is None:
+        # Projection-only broker event (design §13/§14): no lifecycle event.
+        return
 
     aggregate_id = execution_id
 
@@ -894,8 +929,13 @@ def _do_ingest(
             )
 
     # --- Map to Day38 lifecycle event type (explicit mapping) ---
-    # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED)
-    _lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
+    # This will raise IngestionError for unmappable types (e.g. ORDER_RECOVERED).
+    # A None result marks a projection-only broker event (ORDER_ACCEPTED —
+    # approved Day38 design §13/§14): ingestable, but with no Day38 state
+    # transition, so it consumes NO Day38 sequence and appends NO lifecycle
+    # event.  A duplicated transition would be non-replayable.
+    lifecycle_event_type = _map_to_lifecycle_event_type(event.event_type)
+    projection_only = lifecycle_event_type is None
 
     # --- Resolve actual StrikeNova execution identity (v6) ---
     # The Day38 lifecycle aggregate must be the ACTUAL execution, not the
@@ -972,8 +1012,14 @@ def _do_ingest(
     projection = _build_projection(event, previous, validated_sequence)
 
     # --- Allocate Day38 sequence (independent of canonical_sequence) ---
-    # Allocated against the ACTUAL resolved execution aggregate
-    day38_sequence = _allocate_day38_sequence(db, event, execution_id)
+    # Allocated against the ACTUAL resolved execution aggregate.
+    # Projection-only broker events consume NO Day38 sequence: allocating
+    # one would leave a sequence gap in the aggregate stream.
+    day38_sequence = (
+        None
+        if projection_only
+        else _allocate_day38_sequence(db, event, execution_id)
+    )
 
     # --- Durable mutation, wrapped in a nested SAVEPOINT ---
     # Concurrency safety (FIX 1): two concurrent workers may pass the same
@@ -1019,8 +1065,13 @@ def _do_ingest(
             db.add(idem)
             db.flush()
 
-            # Day38 lifecycle integration (against the ACTUAL execution)
-            _append_lifecycle_from_event(db, event, day38_sequence, execution_id)
+            # Day38 lifecycle integration (against the ACTUAL execution).
+            # Skipped for projection-only broker events (design §13/§14):
+            # they carry no Day38 state transition.
+            if not projection_only:
+                _append_lifecycle_from_event(
+                    db, event, day38_sequence, execution_id
+                )
 
             # Advance broker sequence anchor AFTER all durable effects succeed.
             # This is the serialization point: if a concurrent worker already

@@ -210,7 +210,11 @@ class TestExactReplayAfterLaterSequence:
         # 6. No additional lifecycle event
         lc = db.execute(text("SELECT COUNT(*) FROM trade_lifecycle_events")
                         ).scalar()
-        assert lc == 2  # exactly the two applied events
+        # v8 mapping correction: ORDER_ACCEPTED is projection-only (Day38
+        # design §13/§14 — no broker-acceptance state transition exists in
+        # the Day38 vocabulary), so only the seq-1 SUBMITTED event produces
+        # a lifecycle event.
+        assert lc == 1  # exactly the one state-transitioning applied event
 
         # 7. Broker sequence anchor does not regress / change
         assert _anchor_last_sequence(db, "ORD-7A") == 2
@@ -254,7 +258,9 @@ class TestExactReplayAfterLaterSequence:
 
         lc = db.execute(text("SELECT COUNT(*) FROM trade_lifecycle_events")
                         ).scalar()
-        assert lc == 3
+        # v8: ACCEPTED (seq2) is projection-only; SUBMITTED + PARTIAL_FILL
+        # produce the two lifecycle events.
+        assert lc == 2
 
     def test_multi_event_ordering_then_replay_first(self, db):
         """seq1/seq2/seq3 applied, replay seq1 -> NOOP; new seq1 -> STALE (task §7)."""
@@ -358,7 +364,9 @@ class TestConflictAfterLaterSequence:
         assert _anchor_last_sequence(db, "ORD-7X") == 2
         lc = db.execute(text("SELECT COUNT(*) FROM trade_lifecycle_events")
                         ).scalar()
-        assert lc == 2
+        # v8: ACCEPTED (seq2) is projection-only — only seq-1 SUBMITTED
+        # produced a lifecycle event; the conflict added none.
+        assert lc == 1
 
     def test_conflict_after_seq3_rejected_classification(self, db):
         """Same identity + different content after seq3 -> CONFLICT (task §11)."""
