@@ -903,11 +903,13 @@ class TestBrokerSequence:
             )
             ingest_canonical_event(ev, db)
 
-        # Stale seq=2 with DIFFERENT content (different total)
+        # Stale seq=2 with DIFFERENT content and a NEW canonical identity
+        # (distinct provider_event_id — genuinely new event, old sequence)
         stale = make_broker_sync_event(
             tenant_id="tenant-1", broker="broker-test",
             event_type=BrokerEventType.ORDER_ACCEPTED, event_version="1.0",
             broker_order_id="ORD-1", canonical_sequence=2,
+            provider_event_id="provider-stale-new-2",
             order_facts=OrderFacts(
                 broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.OPEN,
                 total_quantity=200,  # different from original 100
@@ -1890,8 +1892,21 @@ class TestSequenceAdvancementRollback:
         )
         ingest_canonical_event(accepted, db)
 
-        # Now try a stale event (seq=1 again)
-        stale = _make_submitted_event(canonical_sequence=1)
+        # Now try a stale event (seq=1 again) with a NEW canonical identity
+        # (distinct provider_event_id).  Genuinely stale NEW events stay
+        # REJECTED; only exact replays of already-applied events are
+        # DUPLICATE_NOOP (durable identity beats broker ordering, v7).
+        stale = make_broker_sync_event(
+            tenant_id="tenant-1", broker="broker-test",
+            event_type=BrokerEventType.ORDER_SUBMITTED, event_version="1.0",
+            broker_order_id="ORD-1", canonical_sequence=1,
+            provider_event_id="provider-stale-new-1",
+            order_facts=OrderFacts(
+                broker_order_id="ORD-1", order_id="ORD-1", status=CanonicalOrderState.SUBMITTED,
+                total_quantity=100, cumulative_filled=0,
+            ),
+            received_at=_NOW + timedelta(seconds=1),
+        )
         result = ingest_canonical_event(stale, db)
         assert result["action"] == "REJECTED"
 

@@ -361,6 +361,7 @@ class TestPostgresOrdering:
             event_version="1.0",
             broker_order_id="ORD-PG-STALE",
             canonical_sequence=2,
+            provider_event_id="pg-provider-stale-1",  # NEW canonical identity
             received_at=_NOW + timedelta(seconds=4),
             order_facts=OrderFacts(order_id="ORD-PG-STALE", 
                 broker_order_id="ORD-PG-STALE",

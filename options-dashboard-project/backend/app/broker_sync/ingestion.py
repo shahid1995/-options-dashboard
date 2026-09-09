@@ -7,9 +7,13 @@ Durable pipeline:
         ↓
     tenant / order identity
         ↓
-    broker ordering validation (sequence gap / stale / out-of-order)
+    durable idempotency (durable identity beats broker ordering:
+        same canonical_id + same fingerprint -> DUPLICATE_NOOP,
+        same canonical_id + different fingerprint -> CONFLICT,
+        regardless of canonical_sequence vs the broker anchor)
         ↓
-    durable idempotency
+    broker ordering validation (sequence gap / stale / out-of-order,
+        for genuinely new canonical_ids only)
         ↓
     terminal-state enforcement (against durable projection)
         ↓
@@ -813,14 +817,24 @@ def _do_ingest(
     # --- Compute content fingerprint ---
     fingerprint = _content_fingerprint(event)
 
-    # --- Broker sequence position validation (BEFORE idempotency check) ---
-    # Validates ordering without advancing the anchor.  Advancement happens
-    # inside the SAVEPOINT after all durable effects succeed, so a failed
-    # application rolls back the sequence anchor too.
-    sequence_position = _validate_broker_sequence_position(db, event)
-    validated_sequence = sequence_position["incoming"] if sequence_position else None
-
-    # --- Durable idempotency check ---
+    # --- Durable idempotency check (BEFORE broker sequence validation) ---
+    # Durable canonical identity takes precedence over broker ordering:
+    #   canonical_id exists + same fingerprint  -> DUPLICATE_NOOP
+    #   canonical_id exists + different content -> CONFLICT
+    # both REGARDLESS of the incoming canonical_sequence relative to the
+    # broker sequence anchor.  A previously persisted event must not become
+    # STALE merely because later events have already advanced the anchor.
+    #
+    # Genuinely NEW events (unknown canonical_id) still undergo full
+    # sequence validation below (duplicate / gap / stale / out-of-order),
+    # so stale detection for new events is NOT weakened.
+    #
+    # Concurrency: this read-only pre-check is advisory.  Concurrent
+    # duplicate/conflicting ingestion is still arbitrated durably inside
+    # the SAVEPOINT — the BrokerSyncIdempotency primary-key (canonical_id)
+    # insert conflict re-classifies losers through the committed record
+    # (DUPLICATE_NOOP / CONFLICT), and the anchor CAS (UPDATE ... WHERE
+    # last_sequence = expected) serializes sequence advancement.
     existing_idem = db.execute(
         select(BrokerSyncIdempotency).where(
             BrokerSyncIdempotency.canonical_id == canonical_id
@@ -847,6 +861,13 @@ def _do_ingest(
                 f"incoming={fingerprint[:16]}...)"
             ),
         }
+
+    # --- Broker sequence position validation (new events only) ---
+    # Validates ordering without advancing the anchor.  Advancement happens
+    # inside the SAVEPOINT after all durable effects succeed, so a failed
+    # application rolls back the sequence anchor too.
+    sequence_position = _validate_broker_sequence_position(db, event)
+    validated_sequence = sequence_position["incoming"] if sequence_position else None
 
     # --- FIX 2: Reclassify same-sequence race through idempotency ---
     # When the broker sequence position indicates a duplicate sequence
