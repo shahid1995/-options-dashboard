@@ -1,8 +1,8 @@
 # StrikeNova — Current Project Status Snapshot
 
-_Last updated: 2026-09-10_
+_Last updated: 2026-09-11_
 
-> This file is the current status snapshot for Project Control Center work. `docs/PROJECT_STATUS.md` remains the historical engineering ledger and contains the older phase-by-phase record. This snapshot deliberately avoids rewriting that long historical ledger.
+> This file is the current Project Control Center status snapshot. `docs/PROJECT_STATUS.md` remains the historical engineering ledger. This snapshot records the active workstreams and the next controlled actions.
 
 ## Product identity
 
@@ -10,50 +10,39 @@ _Last updated: 2026-09-10_
 
 **Public visual direction:** StrikeNova Signal Field
 
-**Core idea:** Build a credible, futuristic, options-native market-intelligence experience in which market structure itself becomes the visual language.
+**Core product positioning:** Options intelligence for structured decisions.
 
 ## Current workstreams
 
 | Workstream | Status | Current position | Next controlled action |
 |---|---|---|---|
-| Core platform / base architecture | 🔄 Ongoing | Existing architecture and trading foundations continue independently. The latest known documented handoff is Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`; the historical `PROJECT_STATUS.md` is older than that handoff and should not be treated as a complete representation of branch state. | Continue the approved core architecture/review track independently. |
-| Public Website V1.1 | ✅ Complete | Seven public marketing routes exist with shared public components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as the visual baseline while V1.2 is built. |
-| Public Website V1.2 — Signal Field | 🟡 Approved / Planning complete | Detailed design specification and implementation plan are committed to GitHub. No V1.2 production code has been changed yet. | Start P0 baseline/inventory, then P1 design-system work after gate approval. |
-| Public design-system refactor | ⏳ Planned | Current public styling is heavily inline and card-oriented. V1.2 will introduce reusable public visual primitives and semantic tokens. | Begins in P1. |
-| Signal Field visualization | ⏳ Planned | Signature visualization defined in the V1.2 specification; must remain broker-independent and demo-data-safe. | P2 after P1 is approved. |
-| Public page redesign | ⏳ Planned | Homepage, product pages, and story pages are all mapped into phase gates. | P3–P5, one gate at a time. |
-| Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata, route and browser verification defined. | P6–P8. |
+| Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
+| Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
+| Public Website V1.2 — Signal Field | 🟢 P0 PASS / P1 READY | Design specification, implementation plan, and P0 baseline audit are committed. No V1.2 production redesign code has started. | Begin P1 — StrikeNova Public Design System. |
+| Public design system | 🟡 Next | Current public surface has ~345 inline style objects and repeated card/typography/spacing patterns. | Build semantic tokens and reusable visual primitives in P1. |
+| Signal Field visualization | ⏳ Planned | Signature market-native visualization defined in the V1.2 design specification. | P2 after P1 gate. |
+| Public page redesign | ⏳ Planned | Homepage, product pages and story pages mapped into controlled phases. | P3–P5, one gate at a time. |
+| Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser verification criteria defined. | P6–P8. |
 
-## New V1.2 control documents
+## V1.2 control documents
 
 ### Design specification
 
 `docs/superpowers/specs/2026-09-10-strikenova-public-website-v1-2-design.md`
 
-Status: ✅ committed to `main` in commit `db2b7c4582c749a9864e638127c0a93fdc7f1284`
+Status: ✅ committed to `main`
 
-Defines:
+Commit: `db2b7c4582c749a9864e638127c0a93fdc7f1284`
 
-- StrikeNova public brand direction
-- Signal Field visual concept
-- semantic color system
-- typography roles
-- shape/surface language
-- motion rules
-- signature visualization contract
-- all seven public page redesign targets
-- shared component responsibilities
-- styling architecture
-- content/demo/research truth rules
-- accessibility/responsive/performance requirements
-- strict core-platform boundaries
-- phase gates and definition of done
+Defines the approved Signal Field visual language, StrikeNova branding, semantic colors, typography, motion, visualization contract, seven-page redesign targets, component responsibilities, content/data truth rules, accessibility, responsive requirements, performance constraints and core-platform boundaries.
 
 ### Implementation plan
 
 `docs/superpowers/plans/2026-09-10-strikenova-public-website-v1-2.md`
 
-Status: ✅ committed to `main` in commit `33d8488be096e8d3c019c0c43b09fec0dd6d0b98`
+Status: ✅ committed to `main`
+
+Commit: `33d8488be096e8d3c019c0c43b09fec0dd6d0b98`
 
 Execution order:
 
@@ -77,23 +66,56 @@ P7 Accessibility + Responsive + Performance
 P8 Final Acceptance
 ```
 
+### P0 baseline audit
+
+`docs/superpowers/audits/2026-09-10-strikenova-public-website-v1-2-p0-baseline.md`
+
+Status: ✅ PASS — audit-only; no production code changes
+
+Commit: `dd271e109d1e72f3e2aaa5b860fe02e74424dc73`
+
+Fresh baseline evidence recorded by the implementation agent:
+
+- 7 public routes exist, return HTTP 200 and are statically prerendered.
+- Shared public components and styling were inventoried.
+- Approximately 345 inline style objects were identified across the public surface.
+- Existing public visualizations were classified for Signal Field evolution.
+- Legacy branding occurrences and demo/research data were inventoried.
+- Narrow-viewport testing exposed horizontal overflow and table overflow that must be fixed before final acceptance.
+- Accessibility findings include weak heading hierarchy, color-only P&L encoding, and visualization labeling gaps.
+- Public/core architecture boundary was audited as safe for presentation-only work.
+- The agent reported 1,453 passing tests across 61 frontend test files and a successful build with 21 static routes.
+
+## P0 review outcome
+
+### Independent Project Control Center review
+
+P0 is accepted as the baseline gate for proceeding to P1 because the committed change is documentation-only and the audit captures the required architecture, styling, branding, responsive and accessibility risks.
+
+Two caveats remain recorded for later hardening:
+
+1. The audit's CDP viewport measurement had a known narrow-device metrics discrepancy. Final responsive verification must use confirmed effective viewport dimensions at 390×844 and 360×800.
+2. A mobile-menu link-count observation of zero must not be treated as proof that navigation is missing; the menu must be explicitly opened and its links interactively verified during P7.
+
+The P0 audit also contains an outdated note that the V1.2 authority document was "NOT FOUND". This is a documentation inconsistency only: the approved V1.2 design specification is present in the repository at the path above and was committed before P0.
+
 ## Public V1.2 phase status
 
 | Phase | Status |
 |---|---|
-| P0 — Baseline, inventory and safety fence | ⏳ Not started |
-| P1 — StrikeNova public design system | ⏳ Not started |
-| P2 — Signal Field foundation | ⏳ Not started |
-| P3 — Homepage flagship redesign | ⏳ Not started |
-| P4 — Product pages | ⏳ Not started |
-| P5 — Story pages | ⏳ Not started |
-| P6 — Navigation, footer, metadata and cohesion | ⏳ Not started |
-| P7 — Accessibility, responsive and performance hardening | ⏳ Not started |
-| P8 — Final public acceptance | ⏳ Not started |
+| P0 — Baseline, inventory and safety fence | ✅ Complete / PASS |
+| P1 — StrikeNova public design system | 🟡 Ready to start |
+| P2 — Signal Field foundation | ⏳ Planned |
+| P3 — Homepage flagship redesign | ⏳ Planned |
+| P4 — Product pages | ⏳ Planned |
+| P5 — Story pages | ⏳ Planned |
+| P6 — Navigation, footer, metadata and cohesion | ⏳ Planned |
+| P7 — Accessibility, responsive and performance hardening | ⏳ Planned |
+| P8 — Final public acceptance | ⏳ Planned |
 
 ## Public pages in scope
 
-The existing public URLs remain unchanged:
+Existing URLs remain unchanged:
 
 - `/`
 - `/features`
@@ -112,7 +134,7 @@ The `(public)` / `(app)` route-group architecture remains unchanged.
 ```text
 Options Dashboard
     ↓
-dark + gold SaaS/trading website
+dark + gold SaaS/trading presentation
     ↓
 repeated cards + tables + restrained animation
 ```
@@ -147,32 +169,26 @@ Unless separately approved, V1.2 must not modify:
 - authenticated `(app)` routes
 - financial calculation engines
 
-## Current public-site risks identified
+## P1 objective
 
-1. Public brand is still presented as `OPTIONS DASHBOARD` rather than StrikeNova in the current header.
-2. Current visual system is heavily based on repeated rounded cards and thin borders.
-3. Gold is doing too much of the semantic/color work.
-4. Existing animations are mostly decorative rather than explaining product concepts.
-5. Homepage hero does not yet create a strong product-category impression.
-6. Market Intelligence has the opportunity to become the signature product visual but currently reads as four demo cards.
-7. Strategy Lab has strong underlying content but can be presented much more like a strategy workspace.
-8. About repeats philosophy concepts and needs a more authentic company narrative.
-9. Current public styling uses substantial inline style definitions; repeated V1.2 visual behavior should move into reusable public primitives.
-10. Some existing demo UI uses live-style language around illustrative data; V1.2 must remove ambiguity.
+Build the reusable StrikeNova public design system without redesigning the seven pages yet.
 
-## Next action
+P1 should establish:
 
-**Start Public Website V1.2 — P0 Baseline:**
+- StrikeNova brand/mark presentation for the public layer
+- semantic public color tokens including live-information, intelligence, strategy, positive and risk states
+- display/body/data typography roles
+- spacing and sizing scale
+- surface/edge/technical-line primitives
+- button/link/focus primitives
+- reusable metric, panel and grid primitives
+- visualization framing primitives
+- public motion tokens and reduced-motion behavior
+- shared CSS/style architecture that reduces repeated inline visual definitions
+- compatibility with the existing public route group and auth modal
 
-- inventory current public routes/components;
-- retain current V1.1 screenshots as the visual baseline;
-- verify the public/core boundary;
-- establish the exact files that V1.2 is permitted to touch;
-- produce the P0 verification record;
-- do not redesign or modify production code during P0.
-
-After P0 passes, Project Control Center can authorize P1.
+P1 must not implement the final Signal Field composition or page redesigns; those belong to P2–P5.
 
 ## Working rule
 
-Public V1.2 may progress in parallel with core architecture work, but each public phase is independently gated. A visual task may not introduce backend shortcuts, fake live data, duplicated financial logic, or authenticated-app coupling merely to achieve a visual effect.
+Public V1.2 progresses in parallel with core architecture work, but every public phase is independently gated. A public visual task may not introduce backend shortcuts, fake live data, duplicated financial logic, broker coupling, or authenticated-app coupling merely to achieve a visual effect.
