@@ -2,6 +2,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PUBLIC_CSS } from "./styles";
+import { PUBLIC_DS_CSS } from "./motion";
 import PublicHeader from "./PublicHeader";
 import PublicFooter from "./PublicFooter";
 import AuthModalProvider from "./AuthModalContext";
@@ -44,6 +45,7 @@ export default function PublicLayout({ children }) {
       <GoogleRedirectHandler />
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
         <style>{PUBLIC_CSS}</style>
+        <style>{PUBLIC_DS_CSS}</style>
         <PublicHeader />
         <main style={{ flex: 1 }}>{children}</main>
         <PublicFooter />

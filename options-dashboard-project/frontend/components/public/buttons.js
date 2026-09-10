@@ -90,9 +90,9 @@ const VARIANTS = {
 // Button sizes
 const SIZES = {
   sm: {
-    padding: "0.5rem 1rem",
+    padding: "0.625rem 1rem",
     fontSize: "0.875rem",
-    minHeight: "36px",
+    minHeight: "44px",
   },
   md: {
     padding: "0.625rem 1.25rem",

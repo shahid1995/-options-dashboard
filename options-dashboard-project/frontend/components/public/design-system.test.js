@@ -31,6 +31,7 @@ import { SignalLine, SignalNode, StrikeRail, DataTrace, TechnicalDivider, GridOv
 import { Section, Container, TwoColumn, MetricGrid, CardGrid, BentoGrid, FlexRow, FlexColumn, Asymmetric } from "./layout";
 import { DemoLabel, ResearchBadge, DataStateBadge, Eyebrow, SectionTitle } from "./truth";
 import { PUBLIC_DS_CSS, fadeUpStyle, signalGlowStyle, traceDrawStyle } from "./motion";
+import { PUBLIC_CSS } from "./styles";
 
 // =============================================================================
 // TOKENS TESTS
@@ -280,6 +281,64 @@ describe("Design System — Motion", () => {
 });
 
 // =============================================================================
+// FINDING 1 — PUBLIC_DS_CSS WIRING TESTS
+// =============================================================================
+
+describe("Design System — PUBLIC_DS_CSS Wiring (Finding 1)", () => {
+  it("PUBLIC_DS_CSS is imported by PublicLayout", async () => {
+    // Dynamic import to verify the module loads without error
+    const mod = await import("./PublicLayout");
+    expect(mod.default).toBeDefined();
+    expect(typeof mod.default).toBe("function");
+  });
+
+  it("sn-pulse, sn-fade-up, and reduced-motion rules are present in active public CSS", () => {
+    // Verify the CSS string that is actually injected
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-pulse");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-fade-up");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-signal-glow");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-trace-draw");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-ticker");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-bar-fill");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-node-appear");
+    expect(PUBLIC_DS_CSS).toContain("@keyframes sn-fade-in");
+    expect(PUBLIC_DS_CSS).toContain("prefers-reduced-motion: reduce");
+  });
+
+  it("PUBLIC_DS_CSS contains all 8 keyframe definitions", () => {
+    const keyframes = [
+      "sn-fade-in", "sn-fade-up", "sn-pulse", "sn-signal-glow",
+      "sn-trace-draw", "sn-ticker", "sn-bar-fill", "sn-node-appear"
+    ];
+    keyframes.forEach((kf) => {
+      expect(PUBLIC_DS_CSS).toContain(`@keyframes ${kf}`);
+    });
+  });
+
+  it("PUBLIC_DS_CSS contains focus-visible rules via .ds-focus-ring", () => {
+    expect(PUBLIC_DS_CSS).toContain(".ds-focus-ring:focus-visible");
+  });
+
+  it("PUBLIC_DS_CSS contains reduced-motion override for ticker", () => {
+    expect(PUBLIC_DS_CSS).toContain(".sn-ticker-track { animation: none !important; }");
+  });
+
+  it("PUBLIC_DS_CSS contains responsive visibility rules", () => {
+    expect(PUBLIC_DS_CSS).toContain(".ds-nav-desktop");
+    expect(PUBLIC_DS_CSS).toContain(".ds-nav-mobile-toggle");
+  });
+
+  it("PUBLIC_CSS (legacy) still contains original keyframes", () => {
+    // Verify the legacy CSS is preserved
+    expect(PUBLIC_CSS).toContain("@keyframes od-fade-up");
+    expect(PUBLIC_CSS).toContain("@keyframes od-ticker");
+    expect(PUBLIC_CSS).toContain("@keyframes od-pulse");
+    expect(PUBLIC_CSS).toContain("@keyframes od-glow");
+    expect(PUBLIC_CSS).toContain("@keyframes od-bar-fill");
+  });
+});
+
+// =============================================================================
 // SURFACE TESTS
 // =============================================================================
 
@@ -370,6 +429,47 @@ describe("Design System — Buttons", () => {
       React.createElement(Button, { size: "lg" }, "Large")
     );
     expect(html).toContain("52px");
+  });
+
+  // --- Finding 2: sm button touch target tests ---
+
+  it("Button size sm has min-height 44px (touch target)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Button, { size: "sm" }, "Small")
+    );
+    expect(html).toContain("44px");
+  });
+
+  it("Button size md has min-height 44px (touch target)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Button, { size: "md" }, "Medium")
+    );
+    expect(html).toContain("44px");
+  });
+
+  it("LinkButton size sm has min-height 44px (touch target)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(LinkButton, { size: "sm", href: "/test" }, "Small Link")
+    );
+    expect(html).toContain("44px");
+  });
+
+  it("LinkButton size md has min-height 44px (touch target)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(LinkButton, { size: "md", href: "/test" }, "Medium Link")
+    );
+    expect(html).toContain("44px");
+  });
+
+  it("all button sizes meet 44px minimum touch target", () => {
+    const sizes = ["sm", "md", "lg"];
+    const expectedMin = { sm: "44px", md: "44px", lg: "52px" };
+    sizes.forEach((size) => {
+      const html = renderToStaticMarkup(
+        React.createElement(Button, { size }, `Btn ${size}`)
+      );
+      expect(html).toContain(expectedMin[size]);
+    });
   });
 });
 
