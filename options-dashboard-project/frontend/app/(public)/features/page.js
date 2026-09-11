@@ -1,9 +1,9 @@
 import FeaturesClientPage from "./ClientPage";
 
 export const metadata = {
-  title: "Options Trading Platform Features",
+  title: "Features — StrikeNova",
   description:
-    "Explore the full feature set of Options Dashboard: live option chain, market analytics, strategy builder, paper trading, and analytical tools for Indian index options.",
+    "Explore the full feature set of StrikeNova: market intelligence, strategy lab, risk analysis, paper trading, and analytical tools for Indian index options.",
 };
 
 export default function FeaturesPage() {

@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { C, useIsMobile } from "@/lib/ui";
 import { PAGE_MAX } from "./styles";
 import { useAuthModal } from "./AuthModalContext";
@@ -17,11 +18,18 @@ const NAV_LINKS = [
   ]},
 ];
 
+function isActive(currentPath, href) {
+  if (href === "/") return currentPath === "/";
+  return currentPath.startsWith(href);
+}
+
 export default function PublicHeader() {
   const isMobile = useIsMobile();
+  const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedGroup, setExpandedGroup] = useState(null);
   const navRef = useRef(null);
+  const mobileMenuRef = useRef(null);
   const { open: openAuth } = useAuthModal();
 
   // Close dropdown on outside click
@@ -46,6 +54,18 @@ export default function PublicHeader() {
     return () => document.removeEventListener("keydown", handleKey);
   }, [mobileOpen]);
 
+  // Close mobile menu on outside click
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const handleClick = (e) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(e.target)) {
+        setMobileOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [mobileOpen]);
+
   const toggleGroup = (label) => {
     setExpandedGroup((prev) => (prev === label ? null : label));
   };
@@ -54,6 +74,7 @@ export default function PublicHeader() {
     <>
       <nav
         ref={navRef}
+        aria-label="Main navigation"
         style={{
           position: "sticky",
           top: 0,
@@ -77,7 +98,7 @@ export default function PublicHeader() {
           }}
         >
           {/* Logo */}
-          <a href="/" aria-label="Options Dashboard — Home" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+          <a href="/" aria-label="StrikeNova — Home" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
             <span
               style={{
                 width: 32,
@@ -88,19 +109,19 @@ export default function PublicHeader() {
                 display: "grid",
                 placeItems: "center",
                 fontWeight: 900,
-                fontSize: 13,
+                fontSize: 11,
                 letterSpacing: -0.5,
                 flexShrink: 0,
               }}
             >
-              OD
+              SN
             </span>
             <span>
               <span style={{ display: "block", fontSize: 13.5, fontWeight: 800, letterSpacing: 1.2, color: C.text, lineHeight: 1.2 }}>
-                OPTIONS DASHBOARD
+                STRIKENOVA
               </span>
               <span style={{ display: "block", fontSize: 11, color: C.faint, letterSpacing: 1, lineHeight: 1.2 }}>
-                NSE &middot; BSE INDEX OPTIONS
+                OPTIONS INTELLIGENCE
               </span>
             </span>
           </a>
@@ -108,66 +129,77 @@ export default function PublicHeader() {
           {/* Desktop nav links */}
           {!isMobile && (
             <div className="pub-nav-links" style={{ display: "flex", alignItems: "center", gap: 28 }}>
-              {NAV_LINKS.map((group) => (
-                <div key={group.label} style={{ position: "relative" }}>
-                  <button
-                    onClick={() => toggleGroup(group.label)}
-                    aria-expanded={expandedGroup === group.label}
-                    aria-haspopup="true"
-                    style={{
-                      background: "none",
-                      border: "none",
-                      color: C.muted,
-                      fontSize: 14,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                      padding: 0,
-                      fontFamily: "inherit",
-                    }}
-                  >
-                    {group.label}
-                    <span style={{ fontSize: 10, opacity: 0.6 }}>&#9662;</span>
-                  </button>
-                  {expandedGroup === group.label && (
-                    <div
+              {NAV_LINKS.map((group) => {
+                const groupActive = group.children.some((child) => isActive(pathname, child.href));
+                return (
+                  <div key={group.label} style={{ position: "relative" }}>
+                    <button
+                      onClick={() => toggleGroup(group.label)}
+                      aria-expanded={expandedGroup === group.label}
+                      aria-haspopup="true"
                       style={{
-                        position: "absolute",
-                        top: "100%",
-                        left: 0,
-                        marginTop: 8,
-                        background: "rgba(18, 22, 31, 0.98)",
-                        border: `1px solid ${C.border}`,
-                        borderRadius: 8,
-                        padding: "6px 0",
-                        minWidth: 200,
-                        boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+                        background: "none",
+                        border: "none",
+                        color: groupActive ? C.gold : C.muted,
+                        fontSize: 14,
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: 0,
+                        fontFamily: "inherit",
+                        fontWeight: groupActive ? 600 : 400,
                       }}
                     >
-                      {group.children.map((child) => (
-                        <a
-                          key={child.href}
-                          href={child.href}
-                          onClick={() => setExpandedGroup(null)}
-                          style={{
-                            display: "block",
-                            padding: "8px 18px",
-                            fontSize: 14,
-                            color: C.muted,
-                            textDecoration: "none",
-                            transition: "color 0.15s, background 0.15s",
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.color = C.gold; e.currentTarget.style.background = "rgba(201,161,90,0.06)"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = C.muted; e.currentTarget.style.background = "transparent"; }}
-                        >
-                          {child.label}
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+                      {group.label}
+                      <span style={{ fontSize: 10, opacity: 0.6 }}>&#9662;</span>
+                    </button>
+                    {groupActive && (
+                      <div style={{ position: "absolute", bottom: -8, left: 0, right: 0, height: 2, background: C.gold, borderRadius: 1 }} />
+                    )}
+                    {expandedGroup === group.label && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "100%",
+                          left: 0,
+                          marginTop: 8,
+                          background: "rgba(18, 22, 31, 0.98)",
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 8,
+                          padding: "6px 0",
+                          minWidth: 200,
+                          boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+                        }}
+                      >
+                        {group.children.map((child) => {
+                          const childActive = isActive(pathname, child.href);
+                          return (
+                            <a
+                              key={child.href}
+                              href={child.href}
+                              onClick={() => setExpandedGroup(null)}
+                              style={{
+                                display: "block",
+                                padding: "8px 18px",
+                                fontSize: 14,
+                                color: childActive ? C.gold : C.muted,
+                                textDecoration: "none",
+                                transition: "color 0.15s, background 0.15s",
+                                fontWeight: childActive ? 600 : 400,
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.color = C.gold; e.currentTarget.style.background = "rgba(201,161,90,0.06)"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.color = childActive ? C.gold : C.muted; e.currentTarget.style.background = "transparent"; }}
+                            >
+                              {child.label}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
@@ -217,9 +249,11 @@ export default function PublicHeader() {
                 color: C.muted,
                 fontSize: 18,
                 cursor: "pointer",
-                padding: "4px 8px",
+                padding: "8px 12px",
                 alignItems: "center",
                 justifyContent: "center",
+                minWidth: 44,
+                minHeight: 44,
               }}
             >
               {mobileOpen ? "\u2715" : "\u2630"}
@@ -231,6 +265,7 @@ export default function PublicHeader() {
       {/* Mobile menu overlay */}
       {mobileOpen && (
         <div
+          ref={mobileMenuRef}
           id="mobile-nav-menu"
           className="pub-mobile-menu"
           role="dialog"
@@ -250,47 +285,61 @@ export default function PublicHeader() {
           }}
         >
           <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: "24px 20px", display: "flex", flexDirection: "column", gap: 6 }}>
-            {NAV_LINKS.map((group) => (
-              <div key={group.label}>
-                <button
-                  onClick={() => toggleGroup(group.label)}
-                  aria-expanded={expandedGroup === group.label}
-                  style={{
-                    width: "100%",
-                    background: "none",
-                    border: "none",
-                    color: C.text,
-                    fontSize: 16,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "12px 0",
-                    borderBottom: `1px solid ${C.border}`,
-                    fontFamily: "inherit",
-                  }}
-                >
-                  {group.label}
-                  <span style={{ fontSize: 12, color: C.muted, transition: "transform 0.2s", transform: expandedGroup === group.label ? "rotate(180deg)" : "none" }}>
-                    &#9662;
-                  </span>
-                </button>
-                {expandedGroup === group.label && (
-                  <div style={{ paddingLeft: 16, paddingBottom: 8 }}>
-                    {group.children.map((child) => (
-                      <a
-                        key={child.href}
-                        href={child.href}
-                        onClick={() => setMobileOpen(false)}
-                        style={{ display: "block", fontSize: 14, color: C.muted, textDecoration: "none", padding: "10px 0" }}
-                      >
-                        {child.label}
-                      </a>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+            {NAV_LINKS.map((group) => {
+              const groupActive = group.children.some((child) => isActive(pathname, child.href));
+              return (
+                <div key={group.label}>
+                  <button
+                    onClick={() => toggleGroup(group.label)}
+                    aria-expanded={expandedGroup === group.label}
+                    style={{
+                      width: "100%",
+                      background: "none",
+                      border: "none",
+                      color: groupActive ? C.gold : C.text,
+                      fontSize: 16,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "12px 0",
+                      borderBottom: `1px solid ${C.border}`,
+                      fontFamily: "inherit",
+                      fontWeight: groupActive ? 600 : 400,
+                    }}
+                  >
+                    {group.label}
+                    <span style={{ fontSize: 12, color: C.muted, transition: "transform 0.2s", transform: expandedGroup === group.label ? "rotate(180deg)" : "none" }}>
+                      &#9662;
+                    </span>
+                  </button>
+                  {expandedGroup === group.label && (
+                    <div style={{ paddingLeft: 16, paddingBottom: 8 }}>
+                      {group.children.map((child) => {
+                        const childActive = isActive(pathname, child.href);
+                        return (
+                          <a
+                            key={child.href}
+                            href={child.href}
+                            onClick={() => setMobileOpen(false)}
+                            style={{
+                              display: "block",
+                              fontSize: 14,
+                              color: childActive ? C.gold : C.muted,
+                              textDecoration: "none",
+                              padding: "10px 0",
+                              fontWeight: childActive ? 600 : 400,
+                            }}
+                          >
+                            {child.label}
+                          </a>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             <div style={{ display: "flex", gap: 12, marginTop: 20, flexWrap: "wrap" }}>
               <button
                 onClick={() => { setMobileOpen(false); openAuth(); }}

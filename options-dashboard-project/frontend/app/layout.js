@@ -1,10 +1,10 @@
 export const metadata = {
   title: {
-    default: "Options Dashboard — Options Trading & Analysis Platform",
-    template: "%s | Options Dashboard",
+    default: "StrikeNova — Options Intelligence for Structured Decisions",
+    template: "%s | StrikeNova",
   },
   description:
-    "A professional options analysis and paper-trading platform for Indian index options — live chains, strategy builder, paper & live execution modes, portfolio analytics, and risk controls.",
+    "StrikeNova is an options intelligence platform. Analyze market data, build strategies, paper trade, and review decisions in one structured workflow.",
 };
 
 export default function RootLayout({ children }) {

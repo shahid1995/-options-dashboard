@@ -5,16 +5,16 @@ import { useAuthModal } from "./AuthModalContext";
 
 const FOOTER_COLS = [
   {
-    heading: "Platform",
+    heading: "Product",
     links: [
       { label: "Features", href: "/features" },
-      { label: "Strategy Lab", href: "/strategy-lab" },
       { label: "Market Intelligence", href: "/market-intelligence" },
+      { label: "Strategy Lab", href: "/strategy-lab" },
       { label: "Paper Trading", href: "/paper-trading" },
     ],
   },
   {
-    heading: "Resources",
+    heading: "Learn",
     links: [
       { label: "How It Works", href: "/how-it-works" },
       { label: "About", href: "/about" },
@@ -52,18 +52,17 @@ export default function PublicFooter() {
                 display: "grid",
                 placeItems: "center",
                 fontWeight: 900,
-                fontSize: 11,
+                fontSize: 10,
               }}
             >
-              OD
+              SN
             </span>
             <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.2, color: C.text }}>
-              OPTIONS DASHBOARD
+              STRIKENOVA
             </span>
           </div>
           <p style={{ fontSize: 13, color: C.faint, lineHeight: 1.65, margin: 0 }}>
-            A professional options analysis and paper-trading platform for traders
-            who want to turn market data into structured decisions.
+            Options intelligence for structured decisions.
           </p>
         </div>
 
@@ -122,7 +121,7 @@ export default function PublicFooter() {
           color: C.faint,
         }}
       >
-        <span>&copy; {new Date().getFullYear()} Options Dashboard</span>
+        <span>&copy; {new Date().getFullYear()} StrikeNova</span>
         <span>NSE &amp; BSE index derivatives &middot; For education and research only</span>
       </div>
     </footer>
