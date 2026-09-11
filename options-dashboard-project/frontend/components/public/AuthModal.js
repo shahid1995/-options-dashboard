@@ -199,8 +199,15 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setLoading(false);
     setTimeout(() => {
       onClose();
-      if (onAuth) onAuth();
-      else router.push("/dashboard");
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+      if (data?.session_id && appUrl) {
+        // Cross-origin handoff: navigate to authenticated app with session in fragment
+        window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);
+      } else {
+        // Fallback: same-origin navigation
+        if (onAuth) onAuth();
+        else router.push("/dashboard");
+      }
     }, 400);
   };
 

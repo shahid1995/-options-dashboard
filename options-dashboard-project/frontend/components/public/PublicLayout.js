@@ -13,7 +13,7 @@ import { setSessionId } from "@/lib/session";
 /**
  * Handles Google OAuth redirect callback on public pages.
  * When Google redirects back with #id_token=..., this component
- * sends it to the backend and redirects to the dashboard.
+ * sends it to the backend and redirects to the authenticated app.
  */
 function GoogleRedirectHandler() {
   const router = useRouter();
@@ -27,7 +27,14 @@ function GoogleRedirectHandler() {
           if (data?.session_id) {
             setSessionId(data.session_id);
           }
-          router.push(redirectPath || "/dashboard");
+          const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+          if (data?.session_id && appUrl) {
+            // Cross-origin handoff: navigate to authenticated app with session in fragment
+            window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);
+          } else {
+            // Fallback: same-origin navigation
+            router.push(redirectPath || "/dashboard");
+          }
         })
         .catch((err) => {
           console.error("Google login failed:", err);
