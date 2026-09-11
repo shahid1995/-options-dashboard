@@ -1,215 +1,19 @@
 "use client";
-import { useEffect, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { C, SYMBOLS, LOT_SIZES, fmtIN, useIsMobile } from "@/lib/ui";
-import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
+import { useIsMobile } from "@/lib/ui";
 import { useAuthModal } from "@/components/public/AuthModalContext";
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Mock data (clearly decorative — not live)
-// ──────────────────────────────────────────────────────────────────────────────
-
-const MOCK_BASE = {
-  NIFTY: 25512, BANKNIFTY: 54680, FINNIFTY: 26175, MIDCPNIFTY: 13340,
-  NIFTYNXT50: 79240, SENSEX: 82960, BANKEX: 61850, SENSEX50: 17820,
-};
-const MOCK_STEP = {
-  NIFTY: 100, BANKNIFTY: 250, FINNIFTY: 100, MIDCPNIFTY: 100,
-  NIFTYNXT50: 250, SENSEX: 100, BANKEX: 250, SENSEX50: 50,
-};
-const INDEX_NAMES = {
-  NIFTY: "Nifty 50", BANKNIFTY: "Bank Nifty", FINNIFTY: "Financial Services Nifty",
-  MIDCPNIFTY: "Nifty Midcap Select", NIFTYNXT50: "Nifty Next 50",
-  SENSEX: "BSE Sensex", BANKEX: "BSE Bankex", SENSEX50: "BSE Sensex 50",
-};
-const EXCHANGES = {
-  NIFTY: "NSE", BANKNIFTY: "NSE", FINNIFTY: "NSE", MIDCPNIFTY: "NSE",
-  NIFTYNXT50: "NSE", SENSEX: "BSE", BANKEX: "BSE", SENSEX50: "BSE",
-};
-
-const PLATFORM_PILLARS = [
-  { num: "01", icon: "\u25C8", title: "Market Intelligence", desc: "Understand positioning, volatility, Greeks and market structure instead of looking at isolated numbers.", href: "/market-intelligence" },
-  { num: "02", icon: "\u221A", title: "Strategy Lab", desc: "Build multi-leg option strategies and understand their payoff, Greeks and risk before committing capital.", href: "/strategy-lab" },
-  { num: "03", icon: "\u25B3", title: "Paper Trading", desc: "Practice the complete trading workflow without risking real capital.", href: "/paper-trading" },
-  { num: "04", icon: "\u223F", title: "Analytics", desc: "Review trades, outcomes and performance to identify what is working and what needs improvement.", href: "/features#analytics" },
-];
-
-const WORKFLOW_STEPS = [
-  { num: "01", title: "Observe", desc: "Price, option chain, OI, volume, IV and Greeks." },
-  { num: "02", title: "Analyze", desc: "Positioning, volatility and market structure." },
-  { num: "03", title: "Build", desc: "Construct a strategy around the market view." },
-  { num: "04", title: "Test", desc: "Payoff, risk, Greeks and scenarios." },
-  { num: "05", title: "Review", desc: "Study the result, execution and risk." },
-];
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Sub-components
-// ──────────────────────────────────────────────────────────────────────────────
-
-function MockChain() {
-  const [state, setState] = useState({ idx: 0, spot: MOCK_BASE.NIFTY, prevSpot: MOCK_BASE.NIFTY });
-
-  useEffect(() => {
-    const t = setInterval(() => {
-      setState((prev) => {
-        const idx = (prev.idx + 1) % SYMBOLS.length;
-        const sym = SYMBOLS[idx];
-        const drift = (Math.random() - 0.5) * MOCK_STEP[sym] * 1.3;
-        return { idx, spot: MOCK_BASE[sym] + drift, prevSpot: prev.spot };
-      });
-    }, 2600);
-    return () => clearInterval(t);
-  }, []);
-
-  const sym = SYMBOLS[state.idx];
-  const atm = Math.round(state.spot / MOCK_STEP[sym]) * MOCK_STEP[sym];
-  const chgPct = state.prevSpot ? ((state.spot - state.prevSpot) / state.prevSpot) * 100 : 0;
-  const up = chgPct >= 0;
-
-  const rows = [];
-  for (let i = -3; i <= 3; i++) {
-    const strike = atm + i * MOCK_STEP[sym];
-    const callLtp = Math.max(0, state.spot - strike) + 38 + ((strike / MOCK_STEP[sym]) % 5) * 7;
-    const putLtp = Math.max(0, strike - state.spot) + 34 + ((strike / MOCK_STEP[sym] + 2) % 5) * 6;
-    const callOi = ((strike / MOCK_STEP[sym]) % 7) / 6;
-    const putOi = ((strike / MOCK_STEP[sym] + 3) % 7) / 6;
-    rows.push({ strike, callLtp, putLtp, callOi, putOi, atm: strike === atm });
-  }
-
-  return (
-    <div
-      className="od-card"
-      style={{
-        width: "100%", maxWidth: 430,
-        background: "linear-gradient(180deg, rgba(23, 28, 39, 0.9), rgba(18, 22, 31, 0.95))",
-        border: `1px solid ${C.border}`,
-        borderRadius: 14,
-        boxShadow: "0 24px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(201, 161, 90, 0.06)",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 4, background: C.green, boxShadow: "0 0 8px rgba(76,175,125,0.9)", animation: "od-glow 2s ease-in-out infinite" }} />
-          <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.5 }}>{sym}</span>
-          <span style={{ fontSize: 11, color: C.faint, letterSpacing: 1 }}>{EXCHANGES[sym]} INDEX</span>
-        </div>
-        <div style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 6 }}>
-          <span className="od-pulse" style={{ color: C.green, fontSize: 10 }}>&#9679;</span> LIVE
-        </div>
-      </div>
-
-      {/* Spot */}
-      <div style={{ padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "baseline", borderBottom: `1px solid ${C.border}` }}>
-        <div>
-          <div style={{ fontSize: 11, color: C.faint, letterSpacing: 1 }}>SPOT</div>
-          <div style={{ fontSize: 21, fontWeight: 800, color: C.gold }}>{fmtIN(state.spot, 2)}</div>
-        </div>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 11.5, fontWeight: 700, color: up ? C.green : C.red }}>
-            {up ? "\u25B2" : "\u25BC"} {up ? "+" : ""}{chgPct.toFixed(2)}%
-          </div>
-          <div style={{ fontSize: 11, color: C.faint }}>vs previous tick</div>
-        </div>
-      </div>
-
-      {/* Chain table */}
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-        <thead>
-          <tr style={{ color: C.faint, fontSize: 10.5, letterSpacing: 0.5 }}>
-            <th scope="col" style={{ padding: "7px 16px", textAlign: "left" }}>CALLS</th>
-            <th scope="col" style={{ padding: 7, textAlign: "center", color: C.gold }}>STRIKE</th>
-            <th scope="col" style={{ padding: "7px 16px", textAlign: "right" }}>PUTS</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.strike} style={{ borderTop: `1px solid ${C.border}`, background: r.atm ? "rgba(201,161,90,0.07)" : "transparent" }}>
-              <td style={{ padding: "5px 16px", position: "relative" }}>
-                <div style={{ position: "absolute", top: 1, bottom: 1, right: 0, width: `${r.callOi * 100}%`, background: "rgba(225,82,82,0.16)", borderRadius: 2 }} />
-                <span style={{ position: "relative", color: r.strike < state.spot ? C.green : C.muted, fontWeight: r.strike < state.spot ? 600 : 400 }}>{fmtIN(r.callLtp, 2)}</span>
-              </td>
-              <td style={{ padding: "5px 7px", textAlign: "center", fontWeight: 700, color: r.atm ? C.gold : C.text }}>{fmtIN(r.strike)}</td>
-              <td style={{ padding: "5px 16px", textAlign: "right", position: "relative" }}>
-                <div style={{ position: "absolute", top: 1, bottom: 1, left: 0, width: `${r.putOi * 100}%`, background: "rgba(76,175,125,0.16)", borderRadius: 2 }} />
-                <span style={{ position: "relative", color: r.strike > state.spot ? C.red : C.muted, fontWeight: r.strike > state.spot ? 600 : 400 }}>{fmtIN(r.putLtp, 2)}</span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {/* Footer */}
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "10px 16px", borderTop: `1px solid ${C.border}`, fontSize: 11, color: C.muted }}>
-        <span>MAX PAIN <span style={{ color: C.gold, fontWeight: 700 }}>{fmtIN(atm)}</span></span>
-        <span>PCR (OI) <span style={{ color: C.text, fontWeight: 700 }}>1.08</span></span>
-        <span>SESSION <span style={{ color: C.green, fontWeight: 700 }}>OPEN</span></span>
-      </div>
-    </div>
-  );
-}
-
-function TickerTape() {
-  const items = [...SYMBOLS, ...SYMBOLS].map((sym, i) => ({
-    sym,
-    lot: LOT_SIZES[sym],
-    val: MOCK_BASE[sym] + (i % 2 === 0 ? 14 : -9),
-    key: `${sym}-${i}`,
-  }));
-  return (
-    <div style={{ borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`, background: "rgba(18,22,31,0.6)", overflow: "hidden" }}>
-      <div className="od-ticker-track">
-        {items.map((it) => (
-          <span key={it.key} style={{ display: "inline-flex", alignItems: "baseline", gap: 8, padding: "9px 22px", fontSize: 12, whiteSpace: "nowrap" }}>
-            <span style={{ color: C.text, fontWeight: 700, letterSpacing: 0.5 }}>{it.sym}</span>
-            <span style={{ color: C.gold, fontVariantNumeric: "tabular-nums" }}>{fmtIN(it.val, 2)}</span>
-            <span style={{ color: C.faint, fontSize: 11 }}>LOT {it.lot}</span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Login error banner (reads ?login_error from URL)
-// ──────────────────────────────────────────────────────────────────────────────
-
-function LoginErrorBannerInner() {
-  const params = useSearchParams();
-  const error = params.get("login_error");
-  if (!error) return null;
-  return (
-    <div
-      className="od-fade"
-      style={{
-        maxWidth: 540,
-        marginBottom: 18,
-        fontSize: 13,
-        color: C.red,
-        border: `1px solid ${C.red}`,
-        borderRadius: 8,
-        padding: "8px 14px",
-        background: "rgba(225,82,82,0.08)",
-      }}
-    >
-      Login failed: {error}. Please try again.
-    </div>
-  );
-}
-
-function LoginErrorBanner() {
-  return (
-    <Suspense fallback={null}>
-      <LoginErrorBannerInner />
-    </Suspense>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Page
-// ──────────────────────────────────────────────────────────────────────────────
+import {
+  SignalField,
+  DEMO_SIGNAL_STATE,
+} from "@/components/public/SignalField";
+import { VisualizationFrame } from "@/components/public/VisualizationFrame";
+import { Metric } from "@/components/public/Metric";
+import { Container, Section, FlexRow, FlexColumn, MetricGrid } from "@/components/public/layout";
+import { Panel, SignalPanel } from "@/components/public/surfaces";
+import { Button, LinkButton } from "@/components/public/buttons";
+import { DemoLabel, Eyebrow, SectionTitle } from "@/components/public/truth";
+import { SignalLine, StrikeRail } from "@/components/public/signals";
+import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "@/components/public/tokens";
+import { CTASection, PAGE_MAX } from "@/components/public";
 
 export default function HomePage() {
   const isMobile = useIsMobile();
@@ -217,262 +21,689 @@ export default function HomePage() {
 
   return (
     <>
-      {/* ── 1. HERO ─────────────────────────────────────────────────────── */}
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 01 — SIGNAL FIELD HERO
+          ════════════════════════════════════════════════════════════════════════ */}
       <header style={{ position: "relative", overflow: "hidden" }}>
+        {/* Background gradient */}
         <div
           style={{
-            position: "absolute", inset: 0,
-            background:
-              "radial-gradient(ellipse 60% 50% at 28% 12%, rgba(201,161,90,0.14), transparent 60%), radial-gradient(ellipse 40% 40% at 82% 70%, rgba(76,175,125,0.06), transparent 60%), repeating-linear-gradient(0deg, rgba(201,161,90,0.025) 0 1px, transparent 1px 46px), repeating-linear-gradient(90deg, rgba(201,161,90,0.025) 0 1px, transparent 1px 46px)",
+            position: "absolute",
+            inset: 0,
+            background: `radial-gradient(ellipse 50% 40% at 20% 10%, ${COLOR.strategyDim}, transparent 60%),
+                         radial-gradient(ellipse 40% 30% at 80% 80%, ${COLOR.intelligenceDim}, transparent 60%),
+                         linear-gradient(180deg, ${COLOR.base}, ${COLOR.baseElevated})`,
             pointerEvents: "none",
           }}
         />
-        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: isMobile ? "64px 20px" : "96px 20px 84px", display: "flex", alignItems: "center", gap: 56, flexWrap: "wrap", position: "relative" }}>
-          <div style={{ flex: "1 1 400px", minWidth: 0 }}>
-            <h1
-              className="od-fade"
-              style={{
-                margin: "0 0 18px",
-                fontSize: isMobile ? 36 : 54,
-                lineHeight: 1.08,
-                letterSpacing: -1.5,
-                fontWeight: 800,
-              }}
+
+        <div
+          style={{
+            position: "relative",
+            maxWidth: PAGE_MAX,
+            margin: "0 auto",
+            padding: isMobile ? `${SPACE.sectionLg} 1.25rem` : `${SPACE.hero} 1.25rem`,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: SPACE.section,
+          }}
+        >
+          {/* Brand mark */}
+          <span
+            style={{
+              fontSize: TYPE.labelSmall.size,
+              fontWeight: 700,
+              letterSpacing: "0.12em",
+              color: COLOR.textFaint,
+              textTransform: "uppercase",
+            }}
+          >
+            StrikeNova
+          </span>
+
+          {/* H1 */}
+          <h1
+            style={{
+              margin: 0,
+              fontSize: TYPE.displayH1.size,
+              lineHeight: TYPE.displayH1.lineHeight,
+              fontWeight: TYPE.displayH1.weight,
+              letterSpacing: TYPE.displayH1.letterSpacing,
+              color: COLOR.textPrimary,
+              textAlign: "center",
+              maxWidth: "20ch",
+            }}
+            className="sn-fade"
+          >
+            Options Intelligence
+            <br />
+            <span style={{ color: COLOR.strategy }}>for Structured Decisions.</span>
+          </h1>
+
+          {/* Supporting message */}
+          <p
+            style={{
+              color: COLOR.textSecondary,
+              fontSize: TYPE.bodyLarge.size,
+              lineHeight: TYPE.bodyLarge.lineHeight,
+              textAlign: "center",
+              maxWidth: "40ch",
+              margin: 0,
+            }}
+          >
+            See the forces behind the option chain.
+            <br />
+            Understand positioning, volatility and risk.
+            <br />
+            <span style={{ color: COLOR.strategy }}>Build. Test. Review.</span>
+          </p>
+
+          {/* CTAs */}
+          <FlexRow gap={SPACE.comp} style={{ marginTop: SPACE.comp }}>
+            <LinkButton variant="primary" size="lg" href="/features">
+              Explore StrikeNova <span aria-hidden>→</span>
+            </LinkButton>
+            <LinkButton variant="secondary" size="lg" href="/strategy-lab">
+              Strategy Lab
+            </LinkButton>
+          </FlexRow>
+
+          {/* Signal Field */}
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 720,
+              marginTop: SPACE.section,
+            }}
+            className="sn-fade"
+          >
+            <VisualizationFrame
+              eyebrow="SIGNAL FIELD"
+              title="Illustrative market state"
+              demoLabel
+              caption="This is an illustrative visualization of an options market. Data is not live."
             >
-              From Market Data to
-              <br />
-              Structured Decisions.
-            </h1>
-
-            <p
-              className="od-fade"
-              style={{
-                color: C.muted,
-                fontSize: 16,
-                lineHeight: 1.7,
-                maxWidth: 540,
-                margin: "0 0 28px",
-                animationDelay: "0.12s",
-              }}
-            >
-              Analyze the options market. Build strategies. Understand risk.
-              Test and practice — all in one workflow.
-            </p>
-
-            <LoginErrorBanner />
-
-            <div className="od-fade" style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 34, animationDelay: "0.2s" }}>
-              <a className="od-btn-gold" href="/features">
-                Explore the Platform <span aria-hidden>&rarr;</span>
-              </a>
-              <button onClick={openAuth} className="od-btn-ghost" data-testid="hero-get-started-btn">
-                Start Paper Trading
-              </button>
-            </div>
-          </div>
-
-          <div className="od-fade" style={{ animationDelay: "0.18s", flex: "0 1 460px", display: "flex", justifyContent: "center" }}>
-            <MockChain />
+              <SignalField />
+            </VisualizationFrame>
           </div>
         </div>
       </header>
 
-      <TickerTape />
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 02 — THE MARKET IS MORE THAN PRICE
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          borderTop: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="THE MARKET IS MORE THAN PRICE"
+            title="Eight analytical layers. One coherent system."
+            subtitle="StrikeNova turns raw option chain data into a structured analytical workflow."
+          />
 
-      {/* ── 2. THE PROBLEM ──────────────────────────────────────────────── */}
-      <section style={sectionPad(isMobile)}>
-        <SectionHeading
-          tag="THE PROBLEM"
-          title={<>The problem isn&rsquo;t lack of market data.<br />It&rsquo;s knowing what to do with it.</>}
-          sub="Traders have access to price, open interest, volume, IV, Greeks and volatility. The challenge is turning those data points into a coherent decision."
-        />
-        {/* Data inputs converging into a decision */}
-        <div style={{ maxWidth: 700, margin: "0 auto", position: "relative" }}>
-          {/* Left column — raw data inputs */}
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
-            {["Option Chain", "OI", "OI Change", "Volume", "IV", "Greeks"].map((item) => (
+          {/* Layer visualization */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: SPACE.small,
+              marginBottom: SPACE.section,
+            }}
+          >
+            {[
+              { label: "PRICE", color: COLOR.signalPrice, width: "100%" },
+              { label: "OPEN INTEREST", color: COLOR.signalOi, width: "92%" },
+              { label: "OI CHANGE", color: COLOR.info, width: "85%" },
+              { label: "VOLUME", color: COLOR.textMuted, width: "78%" },
+              { label: "IMPLIED VOLATILITY", color: COLOR.signalIv, width: "95%" },
+              { label: "GREEKS", color: COLOR.signalGreeks, width: "88%" },
+              { label: "MARKET STRUCTURE", color: COLOR.intelligence, width: "90%" },
+            ].map((layer, i) => (
               <div
-                key={item}
+                key={i}
                 style={{
-                  background: C.surface,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: C.muted,
-                  textAlign: "center",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: SPACE.comp,
                 }}
               >
-                {item}
+                <span
+                  style={{
+                    fontSize: TYPE.caption.size,
+                    fontWeight: 600,
+                    color: COLOR.textFaint,
+                    width: 140,
+                    flexShrink: 0,
+                    textAlign: "right",
+                  }}
+                >
+                  {layer.label}
+                </span>
+                <div
+                  style={{
+                    width: layer.width,
+                    height: 4,
+                    borderRadius: RADIUS.pill,
+                    background: `linear-gradient(90deg, ${layer.color}, ${layer.color}40)`,
+                    opacity: 0.8,
+                  }}
+                />
               </div>
             ))}
-          </div>
 
-          {/* Convergence arrows */}
-          <div style={{ textAlign: "center", color: C.faint, fontSize: 20, padding: "8px 0" }}>
-            &darr;
-          </div>
-
-          {/* Middle — analysis */}
-          <div style={{ display: "flex", justifyContent: "center", gap: isMobile ? 10 : 20, marginBottom: 20, flexWrap: "wrap" }}>
-            {['Price', 'Strategy'].map((item) => (
-              <div
-                key={item}
-                style={{
-                  background: C.surface,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 8,
-                  padding: "10px 24px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: C.text,
-                  textAlign: "center",
-                }}
-              >
-                {item}
-              </div>
-            ))}
-          </div>
-
-          {/* Convergence arrows */}
-          <div style={{ textAlign: "center", color: C.faint, fontSize: 20, padding: "8px 0" }}>
-            &darr;
-          </div>
-
-          {/* Bottom — the decision point */}
-          <div style={{ display: "flex", justifyContent: "center" }}>
+            {/* Convergence arrow */}
             <div
               style={{
-                background: "rgba(201,161,90,0.08)",
-                border: `1px solid rgba(201,161,90,0.3)`,
-                borderRadius: 12,
-                padding: "16px 40px",
-                fontSize: 16,
-                fontWeight: 700,
-                color: C.gold,
                 textAlign: "center",
-                letterSpacing: 1,
+                color: COLOR.textFaint,
+                fontSize: 20,
+                padding: `${SPACE.comp} 0`,
               }}
             >
-              RISK
+              ↓
+            </div>
+
+            {/* Market state output */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "center",
+              }}
+            >
+              <Panel
+                padding={SPACE.cardLg}
+                background={COLOR.surface}
+                style={{
+                  borderColor: COLOR.borderStrong,
+                  textAlign: "center",
+                }}
+              >
+                <Eyebrow color={COLOR.intelligence}>Market State</Eyebrow>
+                <p
+                  style={{
+                    color: COLOR.textSecondary,
+                    fontSize: TYPE.body.size,
+                    margin: `${SPACE.small} 0 0`,
+                    maxWidth: "30ch",
+                  }}
+                >
+                  Synthesized from all analytical layers into a coherent decision framework.
+                </p>
+              </Panel>
             </div>
           </div>
-        </div>
-      </section>
+        </Container>
+      </Section>
 
-      {/* ── 3. THE PLATFORM ─────────────────────────────────────────────── */}
-      <section style={{ borderTop: `1px solid ${C.border}`, background: "linear-gradient(180deg, rgba(18,22,31,0.5), rgba(11,14,20,0.2))" }}>
-        <div style={sectionPad(isMobile)}>
-          <SectionHeading
-            tag="THE PLATFORM"
-            title="Four pillars of structured trading"
-            sub="Each capability builds on the previous one. Together they form a complete workflow from observation to review."
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 03 — MARKET INTELLIGENCE
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          background: COLOR.baseElevated,
+          borderTop: `1px solid ${COLOR.border}`,
+          borderBottom: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="MARKET INTELLIGENCE"
+            title="Understand the forces behind the option chain."
+            subtitle="Positioning, volatility, Greeks and market structure in one coherent view."
           />
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)", gap: 16, maxWidth: 800, margin: "0 auto" }}>
-            {PLATFORM_PILLARS.map((pillar) => (
-              <a
-                key={pillar.num}
-                href={pillar.href}
-                className="od-card"
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(2, 1fr)",
+              gap: SPACE.cardLg,
+              marginBottom: SPACE.section,
+            }}
+          >
+            {/* Positioning */}
+            <Panel padding={SPACE.cardLg}>
+              <Eyebrow color={COLOR.signalOi}>Positioning</Eyebrow>
+              <p
                 style={{
-                  display: "block",
-                  background: C.surface,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 12,
-                  padding: "28px 24px",
-                  textDecoration: "none",
-                  transition: "border-color 0.2s",
+                  color: COLOR.textSecondary,
+                  fontSize: TYPE.body.size,
+                  lineHeight: 1.7,
+                  margin: `${SPACE.comp} 0 0`,
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.gold; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                  <span style={{ fontSize: 11, letterSpacing: 1.5, color: C.gold, fontWeight: 700 }}>{pillar.num}</span>
-                  <span style={{ fontSize: 16, color: C.gold }}>{pillar.icon}</span>
-                </div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: C.text, marginBottom: 8 }}>{pillar.title}</div>
-                <div style={{ fontSize: 14, color: C.muted, lineHeight: 1.6 }}>{pillar.desc}</div>
-              </a>
+                Track open interest distribution across strikes to identify where market participants are positioned.
+              </p>
+            </Panel>
+
+            {/* Volatility */}
+            <Panel padding={SPACE.cardLg}>
+              <Eyebrow color={COLOR.signalIv}>Volatility</Eyebrow>
+              <p
+                style={{
+                  color: COLOR.textSecondary,
+                  fontSize: TYPE.body.size,
+                  lineHeight: 1.7,
+                  margin: `${SPACE.comp} 0 0`,
+                }}
+              >
+                Analyze implied volatility across strikes and expiries to understand how the market prices risk.
+              </p>
+            </Panel>
+
+            {/* Greeks */}
+            <Panel padding={SPACE.cardLg}>
+              <Eyebrow color={COLOR.signalGreeks}>Greeks</Eyebrow>
+              <p
+                style={{
+                  color: COLOR.textSecondary,
+                  fontSize: TYPE.body.size,
+                  lineHeight: 1.7,
+                  margin: `${SPACE.comp} 0 0`,
+                }}
+              >
+                Delta, gamma, theta and vega computed for every option in the chain.
+              </p>
+            </Panel>
+
+            {/* Structure */}
+            <Panel padding={SPACE.cardLg}>
+              <Eyebrow color={COLOR.intelligence}>Structure</Eyebrow>
+              <p
+                style={{
+                  color: COLOR.textSecondary,
+                  fontSize: TYPE.body.size,
+                  lineHeight: 1.7,
+                  margin: `${SPACE.comp} 0 0`,
+                }}
+              >
+                Identify resistance, support and pivot levels derived from option chain data.
+              </p>
+            </Panel>
+          </div>
+
+          <div style={{ textAlign: "center" }}>
+            <LinkButton variant="primary" size="md" href="/market-intelligence">
+              Explore Market Intelligence <span aria-hidden>→</span>
+            </LinkButton>
+          </div>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 04 — STRATEGY LAB
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section>
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="STRATEGY LAB"
+            title="Build the strategy. See the risk. Test the outcome."
+            subtitle="From market view to payoff analysis in one structured workflow."
+          />
+
+          {/* Transformation flow */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: isMobile ? "column" : "row",
+              alignItems: "stretch",
+              justifyContent: "center",
+              gap: isMobile ? SPACE.comp : SPACE.cardLg,
+              marginBottom: SPACE.section,
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              { step: "01", title: "MARKET VIEW", desc: "Analyze positioning and volatility" },
+              { step: "02", title: "STRATEGY", desc: "Build multi-leg option strategies" },
+              { step: "03", title: "PAYOFF", desc: "Visualize profit/loss at expiry" },
+              { step: "04", title: "RISK", desc: "Max profit, max loss, breakevens, Greeks" },
+            ].map((item, i, arr) => (
+              <div
+                key={item.step}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  flex: "1 1 0",
+                  minWidth: 140,
+                }}
+              >
+                <Panel
+                  padding={SPACE.cardLg}
+                  style={{
+                    textAlign: "center",
+                    height: "100%",
+                    width: "100%",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: TYPE.caption.size,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      color: COLOR.strategy,
+                      display: "block",
+                      marginBottom: SPACE.small,
+                    }}
+                  >
+                    {item.step}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.label.size,
+                      fontWeight: 700,
+                      color: COLOR.textPrimary,
+                      display: "block",
+                      marginBottom: SPACE.xs,
+                    }}
+                  >
+                    {item.title}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.bodySmall.size,
+                      color: COLOR.textMuted,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {item.desc}
+                  </span>
+                </Panel>
+                {i < arr.length - 1 && !isMobile && (
+                  <span
+                    style={{
+                      color: COLOR.textFaint,
+                      fontSize: 18,
+                      alignSelf: "center",
+                    }}
+                  >
+                    →
+                  </span>
+                )}
+              </div>
             ))}
           </div>
-        </div>
-      </section>
 
-      {/* ── 4. THE WORKFLOW ─────────────────────────────────────────────── */}
-      <section style={sectionPad(isMobile)}>
-        <SectionHeading
-          tag="THE WORKFLOW"
-          title="Five steps from data to decision"
-          sub="A structured process that separates observation from analysis, analysis from strategy, and strategy from execution."
-        />
-        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center", justifyContent: "center", gap: isMobile ? 0 : 14, maxWidth: 900, margin: "0 auto" }}>
-          {WORKFLOW_STEPS.map((step, i) => (
-            <div key={step.num} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0 }}>
+          <div style={{ textAlign: "center" }}>
+            <LinkButton variant="primary" size="md" href="/strategy-lab">
+              Open Strategy Lab <span aria-hidden>→</span>
+            </LinkButton>
+          </div>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 05 — RISK BEFORE CAPITAL
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          background: COLOR.baseElevated,
+          borderTop: `1px solid ${COLOR.border}`,
+          borderBottom: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="RISK BEFORE CAPITAL"
+            title="Understand the risk before committing capital."
+            subtitle="Payoff curves, max profit, max loss, breakevens, Greeks and scenarios."
+          />
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(4, 1fr)",
+              gap: SPACE.comp,
+              marginBottom: SPACE.section,
+            }}
+          >
+            <Metric label="MAX PROFIT" value="₹3,250" status="DEMO" size="md" />
+            <Metric label="MAX LOSS" value="-₹9,750" status="DEMO" size="md" />
+            <Metric label="BREAKEVEN LOW" value="25,250" status="DEMO" size="md" />
+            <Metric label="BREAKEVEN HIGH" value="25,750" status="DEMO" size="md" />
+          </div>
+
+          <Panel padding={SPACE.cardLg} style={{ marginBottom: SPACE.section }}>
+            <Eyebrow>Position Greeks (ATM Iron Condor)</Eyebrow>
+            <MetricGrid minItemWidth={120} style={{ marginTop: SPACE.comp }}>
+              <Metric label="DELTA" value="-0.02" status="DEMO" size="sm" />
+              <Metric label="GAMMA" value="0.0003" status="DEMO" size="sm" />
+              <Metric label="THETA" value="+42.15" status="DEMO" size="sm" />
+              <Metric label="VEGA" value="-18.40" status="DEMO" size="sm" />
+            </MetricGrid>
+          </Panel>
+
+          <div style={{ textAlign: "center" }}>
+            <p
+              style={{
+                fontSize: TYPE.caption.size,
+                color: COLOR.textFaint,
+                margin: 0,
+              }}
+            >
+              All values are illustrative. Paper trading is simulated and does not represent actual execution.
+            </p>
+          </div>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 06 — PAPER TRADING
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section>
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="PAPER TRADING"
+            title="Practice the workflow. Not your capital."
+            subtitle="Decision, simulation, position management, P&L and review in one environment."
+          />
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: isMobile ? "column" : "row",
+              alignItems: "stretch",
+              justifyContent: "center",
+              gap: isMobile ? SPACE.comp : SPACE.cardLg,
+              marginBottom: SPACE.section,
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              { step: "01", title: "DECISION", desc: "Market view and strategy selection" },
+              { step: "02", title: "SIMULATION", desc: "Execute with simulated capital" },
+              { step: "03", title: "POSITION", desc: "Track open positions and P&L" },
+              { step: "04", title: "REVIEW", desc: "Study execution and performance" },
+            ].map((item, i, arr) => (
               <div
-                className="od-card"
+                key={item.step}
                 style={{
-                  background: C.surface,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 12,
-                  padding: isMobile ? "18px 20px" : "22px 18px",
-                  width: isMobile ? "100%" : 150,
-                  textAlign: "center",
-                  flexShrink: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  flex: "1 1 0",
+                  minWidth: 140,
                 }}
               >
-                <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.gold, marginBottom: 6 }}>{step.num}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>{step.title}</div>
-                <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{step.desc}</div>
+                <Panel
+                  padding={SPACE.cardLg}
+                  style={{
+                    textAlign: "center",
+                    height: "100%",
+                    width: "100%",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: TYPE.caption.size,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      color: COLOR.info,
+                      display: "block",
+                      marginBottom: SPACE.small,
+                    }}
+                  >
+                    {item.step}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.label.size,
+                      fontWeight: 700,
+                      color: COLOR.textPrimary,
+                      display: "block",
+                      marginBottom: SPACE.xs,
+                    }}
+                  >
+                    {item.title}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.bodySmall.size,
+                      color: COLOR.textMuted,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {item.desc}
+                  </span>
+                </Panel>
+                {i < arr.length - 1 && !isMobile && (
+                  <span
+                    style={{
+                      color: COLOR.textFaint,
+                      fontSize: 18,
+                      alignSelf: "center",
+                    }}
+                  >
+                    →
+                  </span>
+                )}
               </div>
-              {i < WORKFLOW_STEPS.length - 1 && (
-                <div style={{ color: C.faint, fontSize: 18, padding: isMobile ? "8px 0" : "0", textAlign: "center" }}>
-                  {isMobile ? "\u2193" : "\u2192"}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-        <div style={{ textAlign: "center", marginTop: 24 }}>
-          <a className="od-link" href="/how-it-works" style={{ fontSize: 14 }}>See the full six-step workflow &rarr;</a>
-        </div>
-      </section>
-
-      {/* ── 5. SUPPORTED MARKETS ────────────────────────────────────────── */}
-      <section style={{ borderTop: `1px solid ${C.border}`, background: "linear-gradient(180deg, rgba(18,22,31,0.5), rgba(11,14,20,0.2))" }}>
-        <div style={sectionPad(isMobile)}>
-          <SectionHeading
-            tag="SUPPORTED MARKETS"
-            title="Eight index option chains"
-            sub="NSE and BSE index derivatives under the current SEBI framework."
-          />
-          <div style={{ maxWidth: 680, margin: "0 auto", background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ color: C.muted, fontSize: 11, fontWeight: 700, letterSpacing: 0.5, textAlign: "left", borderBottom: `2px solid ${C.border}` }}>
-                  <th scope="col" style={{ padding: "12px 18px" }}>SYMBOL</th>
-                  <th scope="col" style={{ padding: "12px 18px" }}>UNDERLYING</th>
-                  <th scope="col" style={{ padding: "12px 18px" }}>EXCHANGE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {SYMBOLS.map((s) => (
-                  <tr key={s} style={{ borderTop: `1px solid ${C.border}` }}>
-                    <td style={{ padding: "11px 18px", fontWeight: 800, color: C.gold, letterSpacing: 0.5 }}>{s}</td>
-                    <td style={{ padding: "11px 18px", color: C.muted }}>{INDEX_NAMES[s]}</td>
-                    <td style={{ padding: "11px 18px", color: C.muted }}>{EXCHANGES[s]}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            ))}
           </div>
-        </div>
-      </section>
 
-      {/* ── 6. FINAL CTA ────────────────────────────────────────────────── */}
+          <div style={{ textAlign: "center" }}>
+            <p
+              style={{
+                fontSize: TYPE.caption.size,
+                color: COLOR.textFaint,
+                margin: `0 0 ${SPACE.comp}`,
+              }}
+            >
+              No real broker orders are placed. Paper trading is for educational purposes.
+            </p>
+            <LinkButton variant="secondary" size="md" href="/paper-trading">
+              Learn More <span aria-hidden>→</span>
+            </LinkButton>
+          </div>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 07 — WORKFLOW
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          background: COLOR.baseElevated,
+          borderTop: `1px solid ${COLOR.border}`,
+          borderBottom: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="THE WORKFLOW"
+            title="Six steps from market data to structured decision."
+            subtitle="A canonical process that separates observation from analysis, analysis from strategy, and strategy from execution."
+          />
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: isMobile ? "column" : "row",
+              alignItems: isMobile ? "stretch" : "center",
+              justifyContent: "center",
+              gap: isMobile ? SPACE.comp : SPACE.cardLg,
+              flexWrap: "wrap",
+            }}
+          >
+            {[
+              { num: "01", title: "OBSERVE", desc: "Price, chain, OI, volume, IV, Greeks" },
+              { num: "02", title: "ANALYZE", desc: "Positioning, volatility, structure" },
+              { num: "03", title: "BUILD", desc: "Construct strategy around market view" },
+              { num: "04", title: "TEST", desc: "Payoff, risk, Greeks, scenarios" },
+              { num: "05", title: "PAPER TRADE", desc: "Simulate without risking capital" },
+              { num: "06", title: "REVIEW", desc: "Study execution and performance" },
+            ].map((step, i, arr) => (
+              <div
+                key={step.num}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  flex: isMobile ? "1 1 auto" : "0 1 120",
+                }}
+              >
+                <Panel
+                  padding={SPACE.card}
+                  style={{
+                    textAlign: "center",
+                    width: isMobile ? "100%" : 120,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: TYPE.caption.size,
+                      fontWeight: 700,
+                      letterSpacing: "0.08em",
+                      color: COLOR.strategy,
+                      display: "block",
+                      marginBottom: SPACE.xs,
+                    }}
+                  >
+                    {step.num}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.bodySmall.size,
+                      fontWeight: 700,
+                      color: COLOR.textPrimary,
+                      display: "block",
+                    }}
+                  >
+                    {step.title}
+                  </span>
+                </Panel>
+                {i < arr.length - 1 && (
+                  <span
+                    style={{
+                      color: COLOR.textFaint,
+                      fontSize: 16,
+                      padding: isMobile ? "0" : "0",
+                      textAlign: "center",
+                    }}
+                  >
+                    {isMobile ? "↓" : "→"}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          SECTION 08 — FINAL CTA
+          ════════════════════════════════════════════════════════════════════════ */}
       <CTASection
-        headline={<>Build a more <span style={{ color: C.gold }}>structured trading workflow.</span></>}
-        body="Explore the platform, understand the workflow and practice your strategies before putting capital at risk."
+        headline={
+          <>
+            Enter the <span style={{ color: COLOR.strategy }}>StrikeNova</span> workflow.
+          </>
+        }
+        body="Explore the platform, understand the workflow, and practice your strategies before putting capital at risk."
         primaryLabel="Get Started"
         primaryOnClick={openAuth}
         secondaryLabel="Explore the Platform"
