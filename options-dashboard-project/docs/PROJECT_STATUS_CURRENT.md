@@ -16,7 +16,7 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently. Day41 broker-sync architecture work was committed separately on the shared feature branch between public-site maintenance commits. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as historical baseline. |
-| Public Website V1.2 — Signal Field | ✅ DEPLOYED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 reviewed and accepted. Approved candidate `cedea111dd400e72c4a57a468d6d994417a1cc6f` is now promoted to Vercel production. | Monitor production; future changes use a new controlled maintenance/change-set record. |
+| Public Website V1.2 — Signal Field | 🟡 DEPLOYED / AUTH HANDOFF BLOCKED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 reviewed and accepted. Approved candidate `cedea111dd400e72c4a57a468d6d994417a1cc6f` is deployed to the public Vercel project, but the public-to-authenticated-app login handoff is not yet present in the authoritative GitHub candidate and is therefore not accepted. | Commit the auth handoff fix, redeploy the public Vercel project from the clean committed tree, and perform end-to-end login verification. |
 | Public design system | ✅ Complete | P1 semantic design system and motion foundation accepted. | Preserve/reuse. |
 | Signal Field visualization | ✅ UX CORRECTION 01 + 02 ACCEPTED | Greeks, IV-by-strike curve, OI scale/legend, and strike-connected structure guides are implemented. Final OI legend/strike-label spacing correction accepted and deployed. | Preserve/reuse. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
@@ -96,21 +96,39 @@ This history is preserved as-is; no force-rewrite or hidden rebase is authorized
 
 **Post-V1.2 Signal Field UX Correction 02:** ACCEPTED.
 
-**Production deployment:** COMPLETE.
+**Public production deployment:** COMPLETE for the accepted public-site candidate, but **authentication handoff is BLOCKED pending a committed source fix and public-site redeployment**.
 
-**Production deployment ID:** `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ`
+**Public production deployment ID:** `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ`
 
-**Production URL:** https://options-dashboard-sigma-coral.vercel.app
+**Public production URL:** https://options-dashboard-sigma-coral.vercel.app
 
-**Production candidate SHA:** `cedea111dd400e72c4a57a468d6d994417a1cc6f`
+**Public production candidate SHA:** `cedea111dd400e72c4a57a468d6d994417a1cc6f`
 
-**Production state:** READY.
+**Authenticated application deployment:** The separate Vercel project `frontend` currently has a READY production deployment serving `cedea111dd400e72c4a57a468d6d994417a1cc6f` with alias `frontend-zeta-gray-75.vercel.app`, but Vercel reports `gitDirty: 1` for that deployment. It must not be treated as the authoritative committed implementation of the auth handoff.
 
-The exact accepted Signal Field candidate was promoted to Vercel production. Live production smoke verification returned HTTP 200 for the homepage and Features page, and Vercel reported no runtime errors in the selected verification window.
+**Current release state:** NOT FULLY RELEASE-READY for end-to-end authentication until the public auth handoff is committed, pushed, redeployed, and independently verified.
+
+## Authentication handoff finding
+
+The public-site production candidate at `cedea11` still contains `router.push("/dashboard")` in `AuthModal.js` and `router.push(redirectPath || "/dashboard")` in `PublicLayout.js`. It does not contain committed `NEXT_PUBLIC_APP_URL`-based cross-origin navigation.
+
+The backend connection itself is healthy enough to reach `POST /auth/google/state`, which returned HTTP 200 in Railway production logs.
+
+The required architecture is:
+
+`public Vercel → Railway auth → session_id → authenticated Vercel /dashboard#session_id=...`
+
+The public and authenticated Vercel projects must remain separate.
+
+### Review record
+
+`docs/superpowers/audits/2026-09-11-strikenova-production-auth-handoff-review.md`
+
+Review commit: `363ef69889e8fa1074a3eb68fe13ccbd6632b807`
 
 ## Deployment verification evidence
 
-Production deployment was promoted from the already-built accepted Vercel candidate rather than rebuilt from an unrelated branch state.
+Production public-site deployment was promoted from the already-built accepted Vercel candidate rather than rebuilt from an unrelated branch state.
 
 Vercel independently confirms:
 
