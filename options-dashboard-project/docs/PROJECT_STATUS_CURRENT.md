@@ -18,11 +18,12 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
-| Public Website V1.2 — Signal Field | 🟢 P3 ACCEPTED / P4 READY | P0, P1 and P2 accepted. P3 homepage flagship redesign is accepted at commit `6d901c4a8e8063daf758ecabe29b3e8f0aeac227`; the other six public pages remain on the V1.1 composition. | Begin P4 — Product Page Redesign. |
+| Public Website V1.2 — Signal Field | 🟣 P4 AUTHORIZED / ACTIVE | P0, P1, P2 accepted. P3 homepage flagship redesign is accepted at commit `6d901c4a8e8063daf758ecabe29b3e8f0aeac227`; P4 now covers the four product pages. | Execute P4 Product Page Redesign only. |
 | Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS are implemented. | Reuse/evolve these primitives in P4–P6. |
 | Signal Field visualization | ✅ Complete | P2 reusable deterministic `SignalField` foundation is implemented and integrated into the homepage during P3. | Reuse/evolve for product pages where appropriate. |
-| Public homepage redesign | ✅ P3 accepted | Homepage `/` now uses StrikeNova branding, the Signal Field hero, market-layer storytelling, capability sections, risk framing, paper-trading workflow, canonical process and final CTA. | Preserve as the flagship reference while P4 begins. |
-| Public page redesign | 🟡 P4 next | `/features`, `/market-intelligence`, `/strategy-lab`, `/paper-trading` remain on V1.1 composition. | P4 product-page redesign. |
+| Public homepage redesign | ✅ P3 accepted | Homepage `/` is the flagship StrikeNova public experience. | Preserve as reference while P4 product pages are redesigned. |
+| Public product pages | 🟣 P4 active | `/features`, `/market-intelligence`, `/strategy-lab`, `/paper-trading` remain on V1.1 composition until P4 implementation completes. | Redesign four product pages with distinct roles using P1/P2 foundations. |
+| Public story pages | ⏳ Planned | `/how-it-works` and `/about` remain on V1.1 composition. | P5 after P4 gate. |
 | Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser hardening remain separately gated. | P6–P8. |
 
 ## V1.2 control documents
@@ -63,9 +64,17 @@ Commit: `750311d0f5d1af2250d09fddc9d4d2573567abc1`
 
 `docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p3-homepage.md`
 
-Status: ✅ authorized execution contract
+Status: ✅ committed to `main`
 
 Commit: `fafbd19da29afbb3c6b401fbfc3bc9df594b9b68`
+
+### P4 execution handoff
+
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p4-product-pages.md`
+
+Status: ✅ authorized execution contract
+
+Commit: `ed8021a49b4dc552cce4a2f98ee5c47efa69e04c`
 
 ## P1 implementation record
 
@@ -148,7 +157,7 @@ The homepage redesign satisfies the approved P3 boundary and establishes `/` as 
 | P1 — StrikeNova public design system | ✅ Complete / ACCEPTED |
 | P2 — Signal Field foundation | ✅ Complete / ACCEPTED |
 | P3 — Homepage flagship redesign | 🟢 Complete / ACCEPTED |
-| P4 — Product pages | 🟣 Authorized / Ready to start |
+| P4 — Product pages | 🟣 Authorized / Active |
 | P5 — Story pages | ⏳ Planned |
 | P6 — Navigation, footer, metadata and cohesion | ⏳ Planned |
 | P7 — Accessibility, responsive and performance hardening | ⏳ Planned |
@@ -176,15 +185,39 @@ P4 must not:
 - modify trading/financial engines;
 - deploy.
 
+## P4 execution contract
+
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p4-product-pages.md` is the active execution contract.
+
+The four page roles are:
+
+```text
+/features
+→ Capability Atlas
+
+/market-intelligence
+→ Market State / Signal Field
+
+/strategy-lab
+→ Strategy Forge / workspace
+
+/paper-trading
+→ Rehearsal cockpit
+```
+
+The pages should share the same StrikeNova visual language but must not become four copies of the homepage.
+
+Known mobile table overflow on Paper Trading should be addressed as part of the page redesign where the composition is changed; P7 remains the comprehensive whole-site hardening gate.
+
 ## Known deferred findings
 
 The following remain intentionally deferred to their separately gated phases:
 
-- Narrow-viewport overflow and table overflow → P7.
+- Narrow-viewport overflow and table overflow → P7, except page-specific Paper Trading overflow remediation that is part of P4 redesign.
 - Color-only P&L encoding → P7.
-- Legacy accessibility gaps outside the new homepage work → P7.
-- Remaining page-level inline style migration → P4–P6.
-- Full legacy branding migration → P4–P6.
+- Legacy accessibility gaps outside redesigned product pages → P7.
+- Remaining page-level inline style migration → P4–P6 as each page is redesigned.
+- Full legacy branding migration → P4–P6, page by page.
 
 ## Public pages in scope
 
