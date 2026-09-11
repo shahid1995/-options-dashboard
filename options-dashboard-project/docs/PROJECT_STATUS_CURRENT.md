@@ -16,9 +16,9 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as historical baseline. |
-| Public Website V1.2 — Signal Field | 🟡 POST-V1.2 UX CORRECTION UNDER REVIEW | P0–P8 accepted. Follow-up Signal Field UX Correction 01 is implemented at candidate `3dc9f1e90d2d10727803271833b7772b341f0849`, but Project Control Center found one remaining visual overlap between the OI axis label and strike-label row. | Apply the focused spacing/legend correction and rerun Signal Field verification before treating the post-acceptance candidate as release-ready again. |
+| Public Website V1.2 — Signal Field | 🟡 POST-V1.2 UX CORRECTION UNDER REVIEW | P0–P8 accepted historically. UX Correction 01 is implemented at candidate `3dc9f1e90d2d10727803271833b7772b341f0849`; one remaining OI-axis/strike-label spacing defect is isolated. | Apply UX Correction 02 and rerun focused Signal Field verification before re-accepting the current candidate for deployment. |
 | Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS. | Preserve/reuse. |
-| Signal Field visualization | 🟡 UX CORRECTION REQUIRED | Four requested readability/semantics corrections are present; one new OI legend/strike-label spacing defect remains. | Correct spacing/legend placement only; preserve the accepted concept. |
+| Signal Field visualization | 🟡 UX CORRECTION 02 ACTIVE | Greeks, IV curve, OI scale/legend and structure connections are implemented; OI axis title/legend needs dedicated vertical separation from strike labels. | Apply focused layout correction only; preserve the accepted concept. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
 | Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
 | Public story pages | ✅ P5 accepted | How It Works and About redesigned with page-local StrikeNova metadata. | Preserve. |
@@ -102,6 +102,11 @@ Candidate commit: `3dc9f1e90d2d10727803271833b7772b341f0849`
 Status: 🟡 CONDITIONAL — one remaining layout collision  
 Review commit: `15c1b7e3f1b281052ef1952d0a7788351d8c0786`
 
+### Signal Field UX Correction 02
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-signalfield-ux-correction-02.md`  
+Status: 🟣 authorized / active  
+Plan commit: `95c7189fe6ba4dcaf2f3557aa1b7a58406a39e45`
+
 ## Phase implementation records
 
 | Phase | Implementation / acceptance commit | Status |
@@ -116,6 +121,7 @@ Review commit: `15c1b7e3f1b281052ef1952d0a7788351d8c0786`
 | P7 — Hardening | `cb0c2621cf8ded658b611d8e506042e0d4349260` | ✅ ACCEPTED |
 | P8 — Final acceptance | `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b` | ✅ PASS / RELEASE-READY (historical acceptance) |
 | UX Correction 01 | `3dc9f1e90d2d10727803271833b7772b341f0849` | 🟡 Conditional / corrective patch required |
+| UX Correction 02 | `—` | 🟣 Authorized / active |
 
 ## Current release state
 
@@ -123,9 +129,9 @@ Review commit: `15c1b7e3f1b281052ef1952d0a7788351d8c0786`
 
 **Current candidate after UX Correction 01:** NOT YET RE-ACCEPTED.
 
-Deployment remains unperformed and is blocked until the current candidate passes the focused UX correction review.
+**UX Correction 02:** authorized to proceed. Deployment remains unperformed and blocked until the current Signal Field candidate passes focused review.
 
-## Current UX correction finding
+## Current UX Correction 02 finding
 
 The OI axis/legend correction introduced a visual collision risk because `OPEN INTEREST · CONTRACTS` is rendered at approximately the same Y position as the strike labels. The implementation's tests verify presence of the legend but do not verify SVG text geometry.
 
@@ -137,7 +143,7 @@ Required next action:
 
 ## Strict no-touch boundary
 
-The public V1.2 workstream must not modify:
+The public V1.2 workstream and post-V1.2 UX corrections must not modify:
 
 - backend/FastAPI code;
 - database/schema/migrations;
@@ -153,4 +159,4 @@ The UX correction must remain limited to Signal Field presentation and its focus
 
 ## Operating rule
 
-Public V1.2 redesign phases P0–P8 are closed historically. Any post-acceptance changes are handled as separately controlled maintenance/correction changes and do not silently alter the accepted P0–P8 history.
+Public V1.2 redesign phases P0–P8 remain closed historically. Post-acceptance corrections are handled as separately controlled maintenance changes and do not silently alter the accepted P0–P8 history.
