@@ -18,10 +18,11 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
-| Public Website V1.2 — Signal Field | 🟢 P2 ACCEPTED / P3 READY | P0 passed. P1 design system and corrective patch were accepted. P2 Signal Field foundation is implemented at `9f86412345cd49c25351491d6541a7aaba9950e2`; no public-page redesign has started. | Begin P3 — Homepage flagship redesign. |
-| Public design system | ✅ P1 implementation complete | Semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion/reduced-motion CSS and focused tests are implemented. | Reuse/evolve these primitives in P3–P6. |
-| Signal Field visualization | ✅ P2 implementation accepted | Reusable deterministic `SignalField` composes P1 primitives; SVG/CSS-first, accessibility-aware, responsive, broker-independent and demo-data safe. | Integrate SignalField into the homepage in P3. |
-| Public page redesign | 🟡 Next | Seven public pages remain on the V1.1 composition. | P3 homepage flagship redesign. |
+| Public Website V1.2 — Signal Field | 🟣 P3 AUTHORIZED / ACTIVE | P0 passed. P1 design system accepted. P2 Signal Field foundation accepted at `9f86412345cd49c25351491d6541a7aaba9950e2`. P3 homepage redesign is now authorized; the other six public pages remain unchanged. | Execute P3 Homepage Flagship Redesign only. |
+| Public design system | ✅ P1 implementation complete | Semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion/reduced-motion CSS and focused tests are implemented. | Reuse/evolve these primitives in P3 and later phases. |
+| Signal Field visualization | ✅ P2 foundation complete | Reusable `SignalField` with deterministic illustrative state, accessible labeling, responsive SVG/CSS rendering and P1 primitive reuse. | Integrate SignalField into homepage during P3 without adding live data. |
+| Public homepage redesign | 🟣 P3 active | P3 is formally authorized. Current homepage remains V1.1 until implementation completes. | Redesign `/` as the flagship StrikeNova experience. |
+| Public page redesign | ⏳ Not started beyond homepage | Product/story pages remain on their V1.1 composition. | P4–P5 after P3 gate. |
 | Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser hardening remain separately gated. | P6–P8. |
 
 ## V1.2 control documents
@@ -50,27 +51,7 @@ Status: ✅ PASS — audit-only; no production code changes
 
 Commit: `dd271e109d1e72f3e2aaa5b860fe02e74424dc73`
 
-## P1 implementation record
-
-### Base implementation
-
-Commit: `1eece4028ae05ed9b610c859e6c0d542e615a521`
-
-Branch: `feat/strikenova-day35-portfolio-intelligence`
-
-### Corrective patch
-
-Commit: `17492609dfb031f2b23e6566798e4c787caba669`
-
-Purpose:
-
-1. Wire `PUBLIC_DS_CSS` into `PublicLayout` alongside the existing `PUBLIC_CSS`.
-2. Raise the `sm` Button/LinkButton minimum height from 36px to 44px.
-3. Add focused regression coverage for both findings.
-
-Independent Project Control Center review accepted the corrective patch. GitHub Vercel status is successful. The implementation-session verification reported 1,550 passing tests across 62 files and a successful 21-route build; those test/build numbers remain implementation-reported evidence rather than an independently re-executed local run in this environment.
-
-## P2 execution handoff
+### P2 execution handoff
 
 `docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p2-signal-field.md`
 
@@ -78,83 +59,97 @@ Status: ✅ committed to `main`
 
 Commit: `750311d0f5d1af2250d09fddc9d4d2573567abc1`
 
+### P3 execution handoff
+
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p3-homepage.md`
+
+Status: ✅ authorized execution contract
+
+Commit: `fafbd19da29afbb3c6b401fbfc3bc9df594b9b68`
+
+## P1 implementation record
+
+Base implementation:
+
+`1eece4028ae05ed9b610c859e6c0d542e615a521`
+
+Corrective patch:
+
+`17492609dfb031f2b23e6566798e4c787caba669`
+
+P1 review outcome: ✅ IMPLEMENTATION ACCEPTED.
+
 ## P2 implementation record
 
-### Implementation branch
+Implementation branch:
 
 `feat/strikenova-day35-portfolio-intelligence`
 
-### Implementation commit
+Commit:
 
 `9f86412345cd49c25351491d6541a7aaba9950e2`
 
-### P2 scope delivered
+P2 review outcome: ✅ PASS / ACCEPTED.
 
-- `frontend/components/public/SignalField.js` — reusable signature visualization.
-- `frontend/components/public/index.js` — SignalField and deterministic demo-state exports.
-- `frontend/components/public/design-system.test.js` — focused Signal Field coverage.
+Verified from the GitHub diff:
 
-### Signal Field characteristics
+- P2 is exactly one commit after the accepted P1 corrective patch.
+- Diff is limited to `SignalField.js`, `design-system.test.js`, and `index.js`.
+- SignalField is deterministic, broker-independent, SVG/CSS-first, and composes existing P1 primitives.
+- No public page composition was changed.
+- No backend, database, broker, OAuth, execution, authenticated-app, market-data, or financial-calculation files were changed.
+- GitHub Vercel status is `success`.
 
-- Eight conceptual layers: spot/reference, strike structure, OI, OI change, IV, Greeks, structure, market state.
-- Reuses P1 signal/layout/metric/truth primitives.
-- Deterministic `DEMO_SIGNAL_STATE`; no `Math.random()`, network, broker or live-data dependency.
-- SVG/CSS-first responsive rendering.
-- Accessible semantic label with supporting visible metrics and decorative SVG hidden appropriately.
-- Uses P1 motion system; no requestAnimationFrame or heavy animation engine.
+Implementation-session verification reported:
 
-### Independent GitHub review
-
-- P2 commit exists and is exactly one commit ahead of the accepted P1 corrective patch.
-- Diff contains only `SignalField.js`, `design-system.test.js`, and `index.js`.
-- No public page composition changes were included.
-- Protected backend/platform files are not part of the diff.
-- GitHub Vercel status for the P2 commit is `success`.
-- GitHub Actions reports no workflow run for the P2 commit.
-
-### Implementation-session verification reported by FreeBuff
-
-- **1,574 frontend tests passed across 62 files.**
-- **Next.js production build succeeded; 21 routes generated.**
+- 1,574 tests passed across 62 files.
+- Production build succeeded with 21 static routes.
 - All seven public routes returned HTTP 200.
-- Browser harness verification reported correct rendering, no console errors, no horizontal overflow, SVG presence, Signal Field aria-label, visible strike labels and demo badge.
-- No deployment was performed.
+- Browser harness verification reported correct SignalField rendering, no console errors, no horizontal overflow, visible strike labels, and SignalField accessibility labeling.
 
-These test/build/browser numbers are recorded as implementation-reported evidence, not independently re-executed by Project Control Center in this environment.
-
-## P2 review outcome
-
-**P2: IMPLEMENTATION ACCEPTED.**
-
-The delivered Signal Field foundation satisfies the approved P2 boundary: reusable, deterministic, public-only, broker-independent and not coupled to page redesign.
-
-P3 is now authorized to begin.
+These local test/build/browser figures are implementation-reported evidence rather than independently rerun by Project Control Center.
 
 ## Public V1.2 phase status
 
 | Phase | Status |
 |---|---|
 | P0 — Baseline, inventory and safety fence | ✅ Complete / PASS |
-| P1 — StrikeNova public design system | ✅ Complete / ACCEPTED |
-| P2 — Signal Field foundation | ✅ Complete / ACCEPTED |
-| P3 — Homepage flagship redesign | 🟡 Authorized / Ready to start |
+| P1 — StrikeNova public design system | 🟢 Implementation accepted |
+| P2 — Signal Field foundation | 🟢 Implementation accepted |
+| P3 — Homepage flagship redesign | 🟣 Authorized / Active |
 | P4 — Product pages | ⏳ Planned |
 | P5 — Story pages | ⏳ Planned |
 | P6 — Navigation, footer, metadata and cohesion | ⏳ Planned |
 | P7 — Accessibility, responsive and performance hardening | ⏳ Planned |
 | P8 — Final public acceptance | ⏳ Planned |
 
+## P3 boundary
+
+P3 may modify the homepage `/` and homepage-specific/public shared presentation code required for the homepage.
+
+P3 must not:
+
+- redesign `/features`;
+- redesign `/market-intelligence`;
+- redesign `/strategy-lab`;
+- redesign `/paper-trading`;
+- redesign `/how-it-works`;
+- redesign `/about`;
+- add live broker or market data;
+- add backend endpoints;
+- change authenticated application behavior;
+- modify trading/financial engines;
+- deploy.
+
 ## Known deferred findings
 
 The following remain intentionally deferred to their separately gated phases:
 
-- Narrow-viewport horizontal overflow and table overflow → P7.
+- Narrow-viewport overflow and table overflow → P7.
 - Color-only P&L encoding → P7.
-- Existing visualization accessibility gaps outside the new Signal Field → P7.
-- Heading hierarchy cleanup → P7.
-- Mobile-menu interactive verification → P7.
-- Migration of remaining page-level inline styles → P3–P6.
-- Full legacy branding migration → P3–P6.
+- Legacy accessibility gaps outside the new homepage work → P7.
+- Remaining page-level inline style migration → P3–P6, as each page is redesigned.
+- Full legacy branding migration → P3–P6, page by page.
 
 ## Public pages in scope
 
@@ -211,14 +206,6 @@ Unless separately approved, V1.2 must not modify:
 - market-data architecture
 - authenticated `(app)` routes
 - financial calculation engines
-
-## P3 boundary
-
-P3 will build the homepage flagship experience using the accepted P1 design system and P2 Signal Field foundation.
-
-P3 must remain presentation-only and must not introduce backend shortcuts, live broker data, fake testimonials/performance claims, or authenticated-app coupling.
-
-P3 will be separately reviewed before P4 begins.
 
 ## Working rule
 
