@@ -18,14 +18,14 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as baseline. |
-| Public Website V1.2 — Signal Field | 🟣 P7 AUTHORIZED / ACTIVE | P0–P6 accepted. P6 global navigation/footer/metadata/cohesion accepted at commit `665a3adc593bfd9beeac1d05e36734584910f5b4`. | Execute P7 accessibility, responsive, runtime and performance hardening only. |
-| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS implemented. | Harden/reuse in P7. |
+| Public Website V1.2 — Signal Field | 🟡 P7 verification blocked | P0–P6 accepted. The claimed P7 implementation commit `cb0c262` cannot currently be resolved in GitHub; the feature branch still points to accepted P6 `665a3adc593bfd9beeac1d05e36734584910f5b4`. | Confirm/push the actual P7 commit, rerun verification from that pushed state, then request P8 authorization. |
+| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS implemented. | Preserve/reuse. |
 | Signal Field visualization | ✅ Complete | P2 deterministic `SignalField` implemented and used by homepage and Market Intelligence. | Preserve/reuse. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
 | Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
 | Public story pages | ✅ P5 accepted | How It Works and About redesigned with page-local StrikeNova metadata. | Preserve. |
-| Public navigation/cohesion | ✅ P6 accepted | Header, footer, global/public metadata, active states, mobile menu, branding/truth/link sweep completed. | Preserve while P7 hardens the whole surface. |
-| Public hardening | 🟣 P7 active | Whole-site accessibility, responsive, browser/runtime and performance hardening is next. | Execute P7 only. |
+| Public navigation/cohesion | ✅ P6 accepted | Header, footer, global/public metadata, active states, mobile menu, branding/truth/link sweep completed. | Preserve while P7 is verified. |
+| Public hardening | 🟡 P7 verification blocked | Claimed P7 result reports 1,635 tests and clean accessibility/responsive/performance checks, but the claimed commit is not present on the authoritative GitHub branch. | Restore authoritative P7 repository state and re-run the gate. |
 
 ## V1.2 control documents
 
@@ -105,15 +105,23 @@ Commit: `cab4971372f1170e86e5138973b074a57fc2c46d`
 
 `docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p7-hardening.md`
 
-Status: 🟣 authorized execution contract
+Status: ✅ authorized execution contract
 
 Commit: `9c6cdb72d2b58f25e5fe899bcbef81d1ce399efd`
+
+### P7 verification review
+
+`docs/superpowers/audits/2026-09-11-strikenova-public-website-v1-2-p7-review.md`
+
+Status: 🟡 BLOCKED — claimed P7 commit not available in GitHub
+
+Commit: `281faba88e8b649e6998491bdd2218144a3fe725`
 
 ## Implementation records
 
 ### P1
 
-Base: `1eece4028ae05ed9b610c859e6c0d542e615a521`
+Base: `1eece4028ae05ed9b610c0d...`
 
 Corrective: `17492609dfb031f2b23e6566798e4c787caba669`
 
@@ -174,6 +182,29 @@ Implementation-session verification reported 1,630 passing tests across 70 files
 
 GitHub Vercel status for P6: `success`.
 
+### P7
+
+Claimed implementation commit: `cb0c262` (unresolved in GitHub)
+
+Authoritative feature-branch head: `665a3adc593bfd9beeac1d05e36734584910f5b4` (P6)
+
+Claimed verification:
+- 1,635 tests across 71 files;
+- successful 21-route build;
+- all seven public routes HTTP 200;
+- accessibility findings resolved;
+- responsive verification clean at four target viewports;
+- no console errors;
+- no protected-scope changes;
+- no deployment.
+
+Repository verification outcome:
+- claimed P7 commit cannot be fetched from GitHub;
+- feature branch still resolves to P6;
+- claimed `frontend/components/public/PublicLayout.test.js` is absent from the feature branch.
+
+Review: 🟡 BLOCKED / NOT VERIFIABLE FROM GITHUB.
+
 ## Public V1.2 phase status
 
 | Phase | Status |
@@ -185,31 +216,28 @@ GitHub Vercel status for P6: `success`.
 | P4 — Product pages | ✅ Complete / ACCEPTED |
 | P5 — Story pages | ✅ Complete / ACCEPTED |
 | P6 — Navigation, footer, metadata and cohesion | ✅ Complete / ACCEPTED |
-| P7 — Accessibility, responsive and performance hardening | 🟣 Authorized / Active |
-| P8 — Final public acceptance | ⏳ Planned |
+| P7 — Accessibility, responsive and performance hardening | 🟡 Verification blocked — commit unavailable in GitHub |
+| P8 — Final public acceptance | ⛔ Not authorized |
 
-## P7 boundary
+## P7 recovery boundary
 
-P7 may harden the whole public surface for:
+The next action is NOT a new hardening redesign.
 
-- accessibility;
-- responsive behavior;
-- browser/runtime reliability;
-- performance;
-- public truth/branding regression checks.
+FreeBuff must first restore an authoritative pushed P7 state by:
 
-P7 must not introduce new product capabilities, redesign the information architecture, change authenticated-app behavior, or modify backend/data/trading infrastructure.
+1. confirming the actual P7 commit SHA;
+2. pushing it to `feat/strikenova-day35-portfolio-intelligence`;
+3. confirming the branch points to that commit;
+4. rerunning P7 tests/build/browser verification from that pushed state;
+5. returning the exact commit SHA and evidence.
 
-Known baseline targets include:
-- narrow viewport overflow;
-- mobile table/card behavior;
-- color-only P&L/status semantics;
-- visualization ARIA/text-equivalent coverage;
-- heading hierarchy;
-- reduced-motion behavior;
-- unnecessary client state/listeners or heavy visual dependencies.
+Do not force-push or rewrite history unless explicitly directed.
 
-P8 remains the separate final acceptance phase.
+## Known deferred findings
+
+P8 remains the final public acceptance phase only after P7 is accepted.
+
+Whole-site final acceptance, release approval and deployment remain blocked until P7 is independently verifiable.
 
 ## Public pages in scope
 
