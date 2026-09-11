@@ -17,14 +17,15 @@ _Last updated: 2026-09-11_
 | Workstream | Status | Current position | Next controlled action |
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
-| Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
-| Public Website V1.2 — Signal Field | 🟣 P6 AUTHORIZED / ACTIVE | P0–P5 accepted. P5 story pages are accepted at `4a2eda84589609da54f151f80ae87289acda3f1e`; global navigation/footer/metadata remain the next controlled workstream. | Execute P6 Navigation, Footer, Metadata & Cohesion only. |
-| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS are implemented. | Reuse/evolve in P6 and later hardening. |
-| Signal Field visualization | ✅ Complete | P2 reusable deterministic `SignalField` is implemented and integrated into the homepage and Market Intelligence page. | Preserve/reuse. |
-| Public homepage redesign | ✅ P3 accepted | Homepage `/` is the flagship StrikeNova public experience. | Preserve as reference. |
-| Public product pages | ✅ P4 accepted | `/features`, `/market-intelligence`, `/strategy-lab`, `/paper-trading` redesigned as Capability Atlas, Market State / Signal Field, Strategy Forge, and Rehearsal Cockpit. | Preserve as reference. |
-| Public story pages | ✅ P5 accepted | `/how-it-works` and `/about` redesigned as workflow/philosophy experiences with page-local StrikeNova metadata. Global header/footer/default metadata remain for P6. | Preserve while P6 unifies public chrome and metadata. |
-| Public hardening | ⏳ Planned | Accessibility, responsive, performance and browser hardening remain separately gated. | P7–P8. |
+| Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as baseline. |
+| Public Website V1.2 — Signal Field | 🟣 P7 AUTHORIZED / ACTIVE | P0–P6 accepted. P6 global navigation/footer/metadata/cohesion accepted at commit `665a3adc593bfd9beeac1d05e36734584910f5b4`. | Execute P7 accessibility, responsive, runtime and performance hardening only. |
+| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS implemented. | Harden/reuse in P7. |
+| Signal Field visualization | ✅ Complete | P2 deterministic `SignalField` implemented and used by homepage and Market Intelligence. | Preserve/reuse. |
+| Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
+| Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
+| Public story pages | ✅ P5 accepted | How It Works and About redesigned with page-local StrikeNova metadata. | Preserve. |
+| Public navigation/cohesion | ✅ P6 accepted | Header, footer, global/public metadata, active states, mobile menu, branding/truth/link sweep completed. | Preserve while P7 hardens the whole surface. |
+| Public hardening | 🟣 P7 active | Whole-site accessibility, responsive, browser/runtime and performance hardening is next. | Execute P7 only. |
 
 ## V1.2 control documents
 
@@ -48,7 +49,7 @@ Commit: `33d8488be096e8d3c019c0c43b09fec0dd6d0b98`
 
 `docs/superpowers/audits/2026-09-10-strikenova-public-website-v1-2-p0-baseline.md`
 
-Status: ✅ PASS — audit-only; no production code changes
+Status: ✅ PASS
 
 Commit: `dd271e109d1e72f3e2aaa5b860fe02e74424dc73`
 
@@ -80,7 +81,7 @@ Commit: `ed8021a49b4dc552cce4a2f98ee5c47efa69e04c`
 
 `docs/superpowers/audits/2026-09-11-strikenova-public-website-v1-2-p4-review.md`
 
-Status: ✅ review findings closed by corrective patch
+Status: ✅ findings closed
 
 Commit: `87b1fa789cf759e1cd0fd98850ca5bf364338667`
 
@@ -96,126 +97,82 @@ Commit: `099f344ffa0e4b932e94d6c40179e91811b94fbc`
 
 `docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p6-navigation-cohesion.md`
 
-Status: ✅ authorized execution contract
+Status: ✅ committed / accepted
 
 Commit: `cab4971372f1170e86e5138973b074a57fc2c46d`
 
-## P1 implementation record
+### P7 execution handoff
 
-Base implementation:
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p7-hardening.md`
 
-`1eece4028ae05ed9b610c859e6c0d542e615a521`
+Status: 🟣 authorized execution contract
 
-Corrective patch:
+Commit: `9c6cdb72d2b58f25e5fe899bcbef81d1ce399efd`
 
-`17492609dfb031f2b23e6566798e4c787caba669`
+## Implementation records
 
-P1 review outcome: ✅ IMPLEMENTATION ACCEPTED.
+### P1
 
-## P2 implementation record
+Base: `1eece4028ae05ed9b610c859e6c0d542e615a521`
 
-Implementation branch:
+Corrective: `17492609dfb031f2b23e6566798e4c787caba669`
 
-`feat/strikenova-day35-portfolio-intelligence`
+Review: ✅ ACCEPTED
 
-Commit:
+### P2
 
-`9f86412345cd49c25351491d6541a7aaba9950e2`
+Implementation: `9f86412345cd49c25351491d6541a7aaba9950e2`
 
-P2 review outcome: ✅ PASS / ACCEPTED.
+Review: ✅ ACCEPTED
 
-## P3 implementation record
+### P3
 
-Implementation commit:
+Implementation: `6d901c4a8e8063daf758ecabe29b3e8f0aeac227`
 
-`6d901c4a8e8063daf758ecabe29b3e8f0aeac227`
+Review: ✅ ACCEPTED
 
-Branch:
+### P4
 
-`feat/strikenova-day35-portfolio-intelligence`
+Base implementation: `9b22eec2d0e56387379a8fb19b06e5f044254b6a`
 
-P3 review outcome: ✅ IMPLEMENTATION ACCEPTED.
+Corrective patch: `c008386d0ac2d1800f675f1cb7570de7c2df67fe`
 
-## P4 implementation record
+Review: ✅ ACCEPTED
 
-### Base implementation
+Key review findings closed:
+- shared `DataStateBadge` used;
+- focused tests added for all four product pages;
+- misleading live-style Features wording removed.
 
-`9b22eec2d0e56387379a8fb19b06e5f044254b6a`
+### P5
 
-### Corrective patch
+Implementation: `4a2eda84589609da54f151f80ae87289acda3f1e`
 
-`c008386d0ac2d1800f675f1cb7570de7c2df67fe`
+Review: ✅ ACCEPTED
 
-### Review outcome
+Scope: `/how-it-works` and `/about` page bodies, page-local metadata and focused tests only.
 
-✅ P4 IMPLEMENTATION ACCEPTED.
+### P6
 
-Verified corrective scope included:
+Implementation: `665a3adc593bfd9beeac1d05e36734584910f5b4`
 
-- `DataStateBadge` resolved to shared public truth primitive and local duplicate removed;
-- focused tests added for all four redesigned product pages;
-- misleading Features live-style wording removed/clarified.
+Review: ✅ ACCEPTED
 
-Implementation-session verification reported 1,605 passing tests across 66 files, successful 21-route build, all seven public routes HTTP 200, and clean browser verification. These local figures remain implementation-reported evidence; Project Control Center independently verified the corrective diff scope and GitHub Vercel status.
+Scope verified from the accepted P5 commit: only global public/header/footer/metadata/cohesion files and focused tests were changed.
 
-## P5 implementation record
+Delivered:
+- StrikeNova header/footer branding;
+- Product/Learn grouping;
+- active route indicators;
+- mobile menu open/close, click-outside and Escape;
+- 44px header touch targets;
+- global/public StrikeNova metadata;
+- final public legacy-branding sweep;
+- CTA/link and truth/research cohesion audit.
 
-### Implementation commit
+Implementation-session verification reported 1,630 passing tests across 70 files, successful 21-route build, all seven public routes HTTP 200, no console errors and no horizontal overflow. These local figures are implementation-reported evidence; Project Control Center independently verified the P6 diff scope and GitHub Vercel status.
 
-`4a2eda84589609da54f151f80ae87289acda3f1e`
-
-Branch:
-
-`feat/strikenova-day35-portfolio-intelligence`
-
-### Scope verified from GitHub diff
-
-From the accepted P4 corrective patch to the P5 head, GitHub reports only:
-
-- `frontend/app/(public)/about/ClientPage.js`
-- `frontend/app/(public)/about/page.js`
-- `frontend/app/(public)/about/page.test.js`
-- `frontend/app/(public)/how-it-works/ClientPage.js`
-- `frontend/app/(public)/how-it-works/page.js`
-- `frontend/app/(public)/how-it-works/page.test.js`
-
-No homepage, product-page, global header/footer, or backend/platform files are part of the P5 diff.
-
-### How It Works delivered
-
-- StrikeNova workflow hero.
-- Continuous six-stage workflow rail: OBSERVE → ANALYZE → BUILD → TEST → PAPER TRADE → REVIEW.
-- Illustrative Signal Field.
-- Stage detail content.
-- CTAs to Market Intelligence, Strategy Lab and Paper Trading.
-
-### About delivered
-
-- Why StrikeNova exists.
-- DATA → INTELLIGENCE → STRATEGY → RISK → REHEARSAL → REVIEW conceptual flow.
-- Four principles: DATA FIRST, RISK FIRST, STRUCTURED ANALYSIS, TRANSPARENCY.
-- What StrikeNova Is Not section.
-- Future/research direction content with status labels.
-- Final CTA.
-
-### P5 metadata
-
-Page-local metadata was updated to StrikeNova for `/how-it-works` and `/about`.
-
-Global root metadata, public-layout site name, global header aria-label and global footer identity remain intentionally deferred to P6.
-
-### Independent Project Control Center review
-
-- P5 commit exists and is exactly one commit after the accepted P4 corrective patch.
-- P5 diff is limited to the two story pages, their page-local metadata, and focused tests.
-- GitHub Vercel status for P5 is `success`.
-- The implementation agent reported 1,617 passing tests across 68 files, a successful 21-route build, all seven public routes HTTP 200, and clean browser verification. These local test/build/browser figures are implementation-reported evidence rather than independently re-executed by Project Control Center.
-
-## P5 review outcome
-
-**P5: IMPLEMENTATION ACCEPTED.**
-
-The story-page redesign satisfies the P5 page-body boundary and leaves global public chrome for P6.
+GitHub Vercel status for P6: `success`.
 
 ## Public V1.2 phase status
 
@@ -227,43 +184,32 @@ The story-page redesign satisfies the P5 page-body boundary and leaves global pu
 | P3 — Homepage flagship redesign | ✅ Complete / ACCEPTED |
 | P4 — Product pages | ✅ Complete / ACCEPTED |
 | P5 — Story pages | ✅ Complete / ACCEPTED |
-| P6 — Navigation, footer, metadata and cohesion | 🟣 Authorized / Active |
-| P7 — Accessibility, responsive and performance hardening | ⏳ Planned |
+| P6 — Navigation, footer, metadata and cohesion | ✅ Complete / ACCEPTED |
+| P7 — Accessibility, responsive and performance hardening | 🟣 Authorized / Active |
 | P8 — Final public acceptance | ⏳ Planned |
 
-## P6 boundary
+## P7 boundary
 
-P6 may modify only global public chrome and cohesion:
+P7 may harden the whole public surface for:
 
-- `frontend/components/public/PublicHeader.js`
-- `frontend/components/public/PublicFooter.js`
-- global/public metadata
-- cross-page CTA/link consistency
-- final public branding sweep
-- truth/research wording consistency
+- accessibility;
+- responsive behavior;
+- browser/runtime reliability;
+- performance;
+- public truth/branding regression checks.
 
-P6 must not redesign page bodies.
+P7 must not introduce new product capabilities, redesign the information architecture, change authenticated-app behavior, or modify backend/data/trading infrastructure.
 
-P6 must not modify:
+Known baseline targets include:
+- narrow viewport overflow;
+- mobile table/card behavior;
+- color-only P&L/status semantics;
+- visualization ARIA/text-equivalent coverage;
+- heading hierarchy;
+- reduced-motion behavior;
+- unnecessary client state/listeners or heavy visual dependencies.
 
-- backend/FastAPI;
-- database/schema/migrations;
-- broker integrations;
-- OAuth/session implementation;
-- execution/trading semantics;
-- trading/financial engines;
-- market-data architecture;
-- authenticated `(app)` behavior;
-- deployment.
-
-## Known deferred findings
-
-The following remain intentionally deferred to their separately gated phases:
-
-- Whole-site accessibility hardening → P7.
-- Whole-site responsive/performance hardening → P7.
-- Remaining page-level inline-style migration → P4–P6 where useful.
-- Final public branding/metadata cohesion → P6.
+P8 remains the separate final acceptance phase.
 
 ## Public pages in scope
 
@@ -278,34 +224,6 @@ Existing URLs remain unchanged:
 - `/about`
 
 The `(public)` / `(app)` route-group architecture remains unchanged.
-
-## V1.2 design target
-
-### Current
-
-```text
-Options Dashboard
-    ↓
-dark + gold SaaS/trading presentation
-    ↓
-repeated cards + tables + restrained animation
-```
-
-### Target
-
-```text
-StrikeNova
-    ↓
-Options intelligence for structured decisions
-    ↓
-Signal Field
-    ↓
-market-native visual language
-    ↓
-computational / futuristic / premium
-    ↓
-credible, restrained, distinctive
-```
 
 ## Strict no-touch boundary for public V1.2
 
