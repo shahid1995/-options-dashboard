@@ -22,3 +22,4 @@ export { VisualizationFrame } from "./VisualizationFrame";
 export { SignalLine, SignalNode, StrikeRail, DataTrace, TechnicalDivider, GridOverlay } from "./signals";
 export { Section, Container, TwoColumn, MetricGrid, CardGrid, BentoGrid, FlexRow, FlexColumn, Asymmetric } from "./layout";
 export { DemoLabel, ResearchBadge, DataStateBadge, Eyebrow, SectionTitle } from "./truth";
+export { SignalField, DEMO_SIGNAL_STATE } from "./SignalField";

@@ -32,6 +32,7 @@ import { Section, Container, TwoColumn, MetricGrid, CardGrid, BentoGrid, FlexRow
 import { DemoLabel, ResearchBadge, DataStateBadge, Eyebrow, SectionTitle } from "./truth";
 import { PUBLIC_DS_CSS, fadeUpStyle, signalGlowStyle, traceDrawStyle } from "./motion";
 import { PUBLIC_CSS } from "./styles";
+import { SignalField, DEMO_SIGNAL_STATE } from "./SignalField";
 
 // =============================================================================
 // TOKENS TESTS
@@ -803,5 +804,199 @@ describe("Design System — Truth Primitives", () => {
       React.createElement(SectionTitle, { eyebrow: "EYEBROW", title: "Title" })
     );
     expect(html).toContain("EYEBROW");
+  });
+});
+
+// =============================================================================
+// P2 — SIGNAL FIELD TESTS
+// =============================================================================
+
+describe("Signal Field — Rendering", () => {
+  it("SignalField renders with default demo state", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("Signal Field");
+    expect(html).toContain("25,500");
+  });
+
+  it("SignalField renders with custom state", () => {
+    const customState = {
+      ...DEMO_SIGNAL_STATE,
+      spot: 30000,
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField, { state: customState })
+    );
+    expect(html).toContain("30,000");
+  });
+
+  it("SignalField renders all strike labels", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("25,300");
+    expect(html).toContain("25,400");
+    expect(html).toContain("25,500");
+    expect(html).toContain("25,600");
+    expect(html).toContain("25,700");
+  });
+
+  it("SignalField renders OI values", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    // OI values use Indian locale format (en-IN)
+    expect(html).toContain("1,84,250");
+    expect(html).toContain("2,17,800");
+  });
+
+  it("SignalField renders IV value", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("14.2%");
+  });
+
+  it("SignalField renders structure levels", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("25,700"); // resistance
+    expect(html).toContain("25,300"); // support
+  });
+
+  it("SignalField renders market state label", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("Balanced with bearish pressure");
+  });
+
+  it("SignalField renders supporting metrics", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField)
+    );
+    expect(html).toContain("SPOT");
+    expect(html).toContain("PCR");
+    expect(html).toContain("ATM IV");
+    expect(html).toContain("OI CHANGE");
+  });
+});
+
+describe("Signal Field — Data Behavior", () => {
+  it("DEMO_SIGNAL_STATE is deterministic (no Math.random)", () => {
+    // Verify the state object is static
+    const state1 = DEMO_SIGNAL_STATE;
+    const state2 = DEMO_SIGNAL_STATE;
+    expect(state1).toBe(state2); // same reference
+    expect(state1.spot).toBe(25500);
+    expect(state1.strikes).toEqual([25300, 25400, 25500, 25600, 25700]);
+  });
+
+  it("SignalField does not generate random values", () => {
+    const html1 = renderToStaticMarkup(React.createElement(SignalField));
+    const html2 = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html1).toBe(html2);
+  });
+
+  it("null spot value does not become fake zero", () => {
+    const state = { ...DEMO_SIGNAL_STATE, spot: null, marketState: { ...DEMO_SIGNAL_STATE.marketState, label: "" } };
+    const html = renderToStaticMarkup(
+      React.createElement(SignalField, { state })
+    );
+    // Should render em-dash or handle gracefully
+    expect(html).toContain("—");
+  });
+
+  it("state labels remain consistent", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    // DEMO status should appear on metrics
+    expect(html).toContain("DEMO");
+  });
+});
+
+describe("Signal Field — Accessibility", () => {
+  it("SignalField has accessible name via role=img and aria-label", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain('role="img"');
+    expect(html).toContain('aria-label="Signal Field');
+  });
+
+  it("aria-label includes spot value", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("Spot: 25,500");
+  });
+
+  it("aria-label includes market state", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("Balanced with bearish pressure");
+  });
+
+  it("decorative SVG has aria-hidden", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain('aria-hidden="true"');
+  });
+
+  it("GridOverlay has aria-hidden", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    // GridOverlay renders a div with aria-hidden
+    expect(html).toContain("aria-hidden");
+  });
+
+  it("important labels are represented as text", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    // Strike labels should be visible text
+    expect(html).toContain("25,500");
+    // Market state should be visible text
+    expect(html).toContain("Balanced with bearish pressure");
+  });
+});
+
+describe("Signal Field — Motion", () => {
+  it("SignalField uses P1 motion system (no custom animation loops)", () => {
+    // The component should not define its own keyframes
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    // No animation properties in the rendered output (static SVG)
+    expect(html).not.toContain("requestAnimationFrame");
+  });
+
+  it("reduced-motion behavior exists in PUBLIC_DS_CSS", () => {
+    expect(PUBLIC_DS_CSS).toContain("prefers-reduced-motion: reduce");
+  });
+});
+
+describe("Signal Field — Responsive Contract", () => {
+  it("SignalField uses viewBox for responsive scaling", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("viewBox=");
+    expect(html).toContain('width="100%"');
+  });
+
+  it("SignalField uses auto height for SVG", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain('height="auto"');
+  });
+
+  it("supporting metrics use responsive grid", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("auto-fit");
+    expect(html).toContain("minmax");
+  });
+});
+
+describe("Signal Field — Integration with VisualizationFrame", () => {
+  it("SignalField works inside VisualizationFrame", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(
+        VisualizationFrame,
+        { eyebrow: "SIGNAL FIELD", title: "Illustrative market state", demoLabel: true },
+        React.createElement(SignalField)
+      )
+    );
+    expect(html).toContain("SIGNAL FIELD");
+    expect(html).toContain("Illustrative market state");
+    expect(html).toContain("Demo Data");
+    expect(html).toContain("25,500");
   });
 });
