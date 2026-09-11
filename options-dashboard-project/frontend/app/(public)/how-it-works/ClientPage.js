@@ -1,46 +1,183 @@
 "use client";
-import { C, useIsMobile } from "@/lib/ui";
-import { SectionHeading, CTASection, PAGE_MAX, sectionPad } from "@/components/public";
+import { useIsMobile } from "@/lib/ui";
 import { useAuthModal } from "@/components/public/AuthModalContext";
+import {
+  SignalField,
+  DEMO_SIGNAL_STATE,
+} from "@/components/public/SignalField";
+import { VisualizationFrame } from "@/components/public/VisualizationFrame";
+import { Container, Section, FlexRow, FlexColumn, MetricGrid } from "@/components/public/layout";
+import { Panel, SignalPanel } from "@/components/public/surfaces";
+import { LinkButton } from "@/components/public/buttons";
+import { DemoLabel, Eyebrow, SectionTitle } from "@/components/public/truth";
+import { SignalLine, SignalNode, TechnicalDivider, GridOverlay } from "@/components/public/signals";
+import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "@/components/public/tokens";
+import { CTASection, PAGE_MAX } from "@/components/public";
 
-const STEPS = [
+const WORKFLOW_STAGES = [
   {
     num: "01",
     title: "OBSERVE",
-    desc: "Understand price, option chain, OI, volume, IV and Greeks. The platform streams a full option chain for eight Indian index derivatives in real time.",
-    detail: "Each strike shows LTP, OI, change in OI, volume, IV and the full Greek stack — updated over WebSocket with automatic HTTP fallback.",
+    desc: "Price, option chain, OI, volume, IV and Greeks.",
+    detail: "Raw market observation — the foundation of every decision.",
+    color: COLOR.info,
+    visual: "CHAIN",
   },
   {
     num: "02",
     title: "ANALYZE",
-    desc: "Study positioning, volatility and market structure. PCR, max pain, OI distribution and IV skew help you understand the forces behind the price.",
-    detail: "Go beyond the raw chain to investigate put/call ratios, open interest clusters, and how implied volatility is pricing risk.",
+    desc: "Positioning, volatility, structure and market relationships.",
+    detail: "Interpret the signals — understand what the market is telling you.",
+    color: COLOR.intelligence,
+    visual: "SIGNALS",
   },
   {
     num: "03",
     title: "BUILD",
-    desc: "Construct a strategy around the market view. Choose from 42 templates or build custom multi-leg strategies with full control over strikes and expiries.",
-    detail: "Spreads, condors, butterflies, ratios, calendars — every combination available with full strike and expiry selection.",
+    desc: "Construct a strategy around the market view.",
+    detail: "Turn analysis into a structured multi-leg options strategy.",
+    color: COLOR.strategy,
+    visual: "LEGS",
   },
   {
     num: "04",
     title: "TEST",
-    desc: "Analyze payoff, risk, Greeks and scenarios. The platform shows you max profit, max loss, breakevens and position Greeks before you commit.",
-    detail: "Stress-test under spot, IV, time and rate changes using a Black-Scholes scenario model. Understand the risk profile from every angle.",
+    desc: "Payoff, risk, Greeks and scenarios.",
+    detail: "Understand the outcome before committing capital.",
+    color: COLOR.warning,
+    visual: "PAYOFF",
   },
   {
     num: "05",
     title: "PAPER TRADE",
-    desc: "Simulate the strategy without risking real capital. Execute in a paper environment that mirrors real market conditions.",
-    detail: "Track positions, P&L, capital and strategy performance over time — all without placing a single real broker order.",
+    desc: "Simulate without risking real capital.",
+    detail: "Execute in a paper environment that mirrors market conditions.",
+    color: COLOR.positive,
+    visual: "SIM",
   },
   {
     num: "06",
     title: "REVIEW",
-    desc: "Study the result, execution and risk. Review trade history, per-strategy statistics and equity curves to improve over time.",
-    detail: "Export trade history to CSV, review per-strategy win rates, and study execution quality against market conditions.",
+    desc: "Trade outcome, execution review, journal, learning loop.",
+    detail: "Study results and refine the process over time.",
+    color: COLOR.textSecondary,
+    visual: "JOURNAL",
   },
 ];
+
+function WorkflowRail() {
+  return (
+    <div style={{ position: "relative" }}>
+      {/* Continuous rail line */}
+      <div
+        style={{
+          position: "absolute",
+          left: 28,
+          top: 56,
+          bottom: 56,
+          width: 2,
+          background: `linear-gradient(180deg, ${COLOR.info}, ${COLOR.intelligence}, ${COLOR.strategy}, ${COLOR.warning}, ${COLOR.positive}, ${COLOR.textSecondary})`,
+          opacity: 0.4,
+        }}
+        aria-hidden="true"
+      />
+
+      <FlexColumn gap={SPACE.cardLg}>
+        {WORKFLOW_STAGES.map((stage, i) => (
+          <div
+            key={stage.num}
+            style={{
+              display: "flex",
+              gap: SPACE.cardLg,
+              alignItems: "flex-start",
+              position: "relative",
+            }}
+          >
+            {/* Signal node */}
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: "50%",
+                background: `${stage.color}15`,
+                border: `2px solid ${stage.color}`,
+                display: "grid",
+                placeItems: "center",
+                flexShrink: 0,
+                position: "relative",
+                zIndex: 1,
+              }}
+              aria-hidden="true"
+            >
+              <span
+                style={{
+                  fontSize: TYPE.caption.size,
+                  fontWeight: 700,
+                  color: stage.color,
+                  letterSpacing: "0.06em",
+                }}
+              >
+                {stage.num}
+              </span>
+            </div>
+
+            {/* Content */}
+            <Panel padding={SPACE.cardLg} style={{ flex: 1 }}>
+              <FlexRow gap={SPACE.comp} align="center" style={{ marginBottom: SPACE.small }}>
+                <h3
+                  style={{
+                    fontSize: TYPE.h3.size,
+                    fontWeight: 700,
+                    color: COLOR.textPrimary,
+                    margin: 0,
+                    letterSpacing: "-0.01em",
+                  }}
+                >
+                  {stage.title}
+                </h3>
+                <span
+                  style={{
+                    fontSize: TYPE.caption.size,
+                    fontWeight: 600,
+                    letterSpacing: "0.06em",
+                    color: stage.color,
+                    textTransform: "uppercase",
+                    background: `${stage.color}10`,
+                    border: `1px solid ${stage.color}30`,
+                    borderRadius: RADIUS.sm,
+                    padding: "0.125rem 0.5rem",
+                  }}
+                >
+                  {stage.visual}
+                </span>
+              </FlexRow>
+              <p
+                style={{
+                  fontSize: TYPE.body.size,
+                  color: COLOR.textSecondary,
+                  lineHeight: 1.7,
+                  margin: `0 0 ${SPACE.xs}`,
+                }}
+              >
+                {stage.desc}
+              </p>
+              <p
+                style={{
+                  fontSize: TYPE.bodySmall.size,
+                  color: COLOR.textMuted,
+                  lineHeight: 1.6,
+                  margin: 0,
+                }}
+              >
+                {stage.detail}
+              </p>
+            </Panel>
+          </div>
+        ))}
+      </FlexColumn>
+    </div>
+  );
+}
 
 export default function HowItWorksClientPage() {
   const isMobile = useIsMobile();
@@ -48,97 +185,182 @@ export default function HowItWorksClientPage() {
 
   return (
     <>
-      {/* Hero */}
-      <section style={{ paddingTop: 72, paddingBottom: 32, textAlign: "center" }}>
-        <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: "0 20px" }}>
-          <SectionHeading
-            level={1}
-            tag="HOW IT WORKS"
-            title="From Market Data to a Structured Trading Workflow."
-            sub="A six-step process that separates observation from analysis, analysis from strategy construction, and strategy from execution."
+      {/* ════════════════════════════════════════════════════════════════════════
+          HERO
+          ════════════════════════════════════════════════════════════════════════ */}
+      <header style={{ position: "relative", overflow: "hidden" }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: `radial-gradient(ellipse 60% 50% at 50% 20%, ${COLOR.strategyDim}, transparent 60%),
+                         radial-gradient(ellipse 40% 40% at 80% 80%, ${COLOR.intelligenceDim}, transparent 60%)`,
+            pointerEvents: "none",
+          }}
+        />
+
+        <div
+          style={{
+            position: "relative",
+            maxWidth: PAGE_MAX,
+            margin: "0 auto",
+            padding: isMobile ? `${SPACE.sectionLg} 1.25rem` : `${SPACE.hero} 1.25rem`,
+            textAlign: "center",
+          }}
+        >
+          <Eyebrow color={COLOR.strategy}>HOW IT WORKS</Eyebrow>
+          <h1
+            style={{
+              margin: `${SPACE.comp} 0 ${SPACE.compLg}`,
+              fontSize: TYPE.displayH1.size,
+              lineHeight: TYPE.displayH1.lineHeight,
+              fontWeight: TYPE.displayH1.weight,
+              letterSpacing: TYPE.displayH1.letterSpacing,
+              color: COLOR.textPrimary,
+            }}
+          >
+            From market observation
+            <br />
+            <span style={{ color: COLOR.strategy }}>to structured decision.</span>
+          </h1>
+          <p
+            style={{
+              color: COLOR.textSecondary,
+              fontSize: TYPE.bodyLarge.size,
+              lineHeight: TYPE.bodyLarge.lineHeight,
+              maxWidth: "40ch",
+              margin: "0 auto",
+            }}
+          >
+            StrikeNova separates observation from analysis, analysis from strategy,
+            and strategy from execution — so each decision can be evaluated on its own merits.
+          </p>
+        </div>
+      </header>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          CANONICAL WORKFLOW RAIL
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section>
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="THE WORKFLOW"
+            title="Six stages from data to decision."
+            subtitle="Each stage builds on the previous one. Together they form a complete workflow from observation to review."
           />
-        </div>
-      </section>
 
-      {/* Steps */}
-      <section style={sectionPad(isMobile)}>
-        <div style={{ maxWidth: 800, margin: "0 auto" }}>
-          {STEPS.map((step, i) => (
-            <div
-              key={step.num}
-              style={{
-                display: "flex",
-                gap: isMobile ? 16 : 28,
-                marginBottom: i < STEPS.length - 1 ? 40 : 0,
-                alignItems: "flex-start",
-              }}
-            >
-              {/* Step number */}
-              <div
-                style={{
-                  width: 56,
-                  height: 56,
-                  borderRadius: 14,
-                  background: "rgba(201,161,90,0.1)",
-                  border: "1px solid rgba(201,161,90,0.25)",
-                  display: "grid",
-                  placeItems: "center",
-                  fontSize: 20,
-                  fontWeight: 800,
-                  color: C.gold,
-                  flexShrink: 0,
-                }}
-              >
-                {step.num}
-              </div>
+          <WorkflowRail />
+        </Container>
+      </Section>
 
-              {/* Content */}
-              <div style={{ flex: 1, paddingTop: 4 }}>
-                <h3 style={{ fontSize: 17, fontWeight: 700, color: C.text, margin: "0 0 8px", letterSpacing: 0.5 }}>
-                  {step.title}
-                </h3>
-                <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.65, margin: "0 0 8px" }}>
-                  {step.desc}
+      {/* ════════════════════════════════════════════════════════════════════════
+          SIGNAL FIELD — ILLUSTRATIVE MARKET STATE
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          background: COLOR.baseElevated,
+          borderTop: `1px solid ${COLOR.border}`,
+          borderBottom: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="ILLUSTRATIVE STATE"
+            title="What the workflow produces."
+            subtitle="A synthesized view of positioning, volatility, structure and market state. This example uses illustrative data."
+          />
+
+          <VisualizationFrame
+            eyebrow="SIGNAL FIELD"
+            title="Illustrative market state"
+            demoLabel
+            caption="This is an illustrative visualization. Data is not live."
+          >
+            <SignalField />
+          </VisualizationFrame>
+        </Container>
+      </Section>
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          STAGE DETAILS
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section>
+        <Container maxWidth={PAGE_MAX}>
+          <SectionTitle
+            eyebrow="STAGE BREAKDOWN"
+            title="What happens at each stage."
+          />
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)",
+              gap: SPACE.cardLg,
+            }}
+          >
+            {WORKFLOW_STAGES.map((stage) => (
+              <Panel key={stage.num} padding={SPACE.cardLg}>
+                <FlexRow gap={SPACE.small} align="center" style={{ marginBottom: SPACE.comp }}>
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: stage.color,
+                      boxShadow: `0 0 8px ${stage.color}40`,
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: TYPE.caption.size,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      color: stage.color,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {stage.num} {stage.title}
+                  </span>
+                </FlexRow>
+                <p
+                  style={{
+                    fontSize: TYPE.bodySmall.size,
+                    color: COLOR.textMuted,
+                    lineHeight: 1.65,
+                    margin: 0,
+                  }}
+                >
+                  {stage.desc}
                 </p>
-                <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.6, margin: 0 }}>
-                  {step.detail}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Closing statement */}
-      <section style={{ borderTop: `1px solid ${C.border}`, background: "linear-gradient(180deg, rgba(18,22,31,0.5), rgba(11,14,20,0.2))" }}>
-        <div style={sectionPad(isMobile)}>
-          <div style={{ maxWidth: 640, margin: "0 auto", textAlign: "center" }}>
-            <blockquote
-              style={{
-                fontSize: isMobile ? 18 : 22,
-                fontWeight: 600,
-                color: C.text,
-                lineHeight: 1.5,
-                margin: 0,
-                padding: 0,
-                borderLeft: "none",
-                fontStyle: "normal",
-              }}
-            >
-              &ldquo;Good trading is not just finding an entry. It is understanding the risk around the decision.&rdquo;
-            </blockquote>
+              </Panel>
+            ))}
           </div>
-        </div>
-      </section>
+        </Container>
+      </Section>
 
-      {/* CTA */}
-      <CTASection
-        headline={<>Ready to put it into practice?</>}
-        primaryLabel="Get Started"
-        primaryOnClick={openAuth}
-        secondaryLabel="Explore the Platform"
-        secondaryHref="/features"
-      />
+      {/* ════════════════════════════════════════════════════════════════════════
+          CTAs
+          ════════════════════════════════════════════════════════════════════════ */}
+      <Section
+        style={{
+          background: COLOR.baseElevated,
+          borderTop: `1px solid ${COLOR.border}`,
+        }}
+      >
+        <Container maxWidth={PAGE_MAX}>
+          <FlexRow gap={SPACE.cardLg} justify="center" wrap={true}>
+            <LinkButton variant="primary" size="lg" href="/market-intelligence">
+              Explore Market Intelligence <span aria-hidden>→</span>
+            </LinkButton>
+            <LinkButton variant="secondary" size="lg" href="/strategy-lab">
+              Open Strategy Lab
+            </LinkButton>
+            <LinkButton variant="ghost" size="lg" href="/paper-trading">
+              Start Paper Trading
+            </LinkButton>
+          </FlexRow>
+        </Container>
+      </Section>
     </>
   );
 }
