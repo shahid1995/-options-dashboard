@@ -55,11 +55,11 @@ const CAPABILITIES = [
     href: "/market-intelligence",
     color: COLOR.intelligence,
     accent: "intelligence",
-    tagline: "Live positioning. Real-time signals.",
+    tagline: "Tracked positioning. Streaming signals.",
     description:
       "Full call/put chain with open interest, volume, IV and Greeks — streaming over WebSocket to show you what the market is doing right now.",
     metrics: [
-      { label: "LIVE CHAIN", value: "STREAM" },
+      { label: "OPTION CHAIN", value: "STREAMING" },
       { label: "OI TRACKING", value: "PER-STRIKE" },
       { label: "VOLATILITY", value: "IV SKEW" },
     ],
@@ -121,7 +121,7 @@ const CAPABILITIES = [
     metrics: [
       { label: "CAPITAL", value: "SIMULATED" },
       { label: "ORDERS", value: "REALISTIC" },
-      { label: "P&L", value: "LIVE" },
+      { label: "P&L", value: "SIMULATED" },
     ],
     highlights: [
       { label: "Simulated Orders", desc: "Realistic fills without broker orders" },
@@ -638,7 +638,7 @@ export default function FeaturesClientPage() {
               {/* Signal nodes positioned on the demo visualization */}
               <SignalNode
                 label="INTEL"
-                value="LIVE"
+                value="ACTIVE"
                 x={120}
                 y={80}
                 color={COLOR.intelligence}

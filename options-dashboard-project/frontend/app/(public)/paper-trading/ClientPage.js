@@ -10,6 +10,7 @@ import {
   DATA_STATE,
 } from "@/components/public";
 import {
+  DataStateBadge,
   DemoLabel,
   Eyebrow,
   SectionTitle,
@@ -1066,43 +1067,4 @@ export default function PaperTradingClientPage() {
   );
 }
 
-// =============================================================================
-// DATA STATE BADGE (local helper)
-// =============================================================================
 
-function DataStateBadge({ state }) {
-  const s = DATA_STATE[state];
-  if (!s) return null;
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "0.25rem",
-        fontSize: "0.625rem",
-        fontWeight: 600,
-        letterSpacing: "0.06em",
-        color: s.color,
-        textTransform: "uppercase",
-        background: `${s.color}10`,
-        border: `1px solid ${s.color}30`,
-        borderRadius: RADIUS.sm,
-        padding: "0.125rem 0.5rem",
-      }}
-    >
-      {state === "LIVE" && (
-        <span
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: "50%",
-            background: s.color,
-            boxShadow: `0 0 4px ${s.color}`,
-            animation: "sn-pulse 1.6s ease-in-out infinite",
-          }}
-        />
-      )}
-      {s.label}
-    </span>
-  );
-}
