@@ -16,9 +16,9 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as historical baseline. |
-| Public Website V1.2 — Signal Field | ✅ P8 ACCEPTED / RELEASE-READY | P0–P8 complete. Final acceptance recorded against candidate `cb0c2621cf8ded658b611d8e506042e0d4349260`. | Deployment remains a separate explicit decision. |
+| Public Website V1.2 — Signal Field | 🟡 POST-V1.2 UX CORRECTION UNDER REVIEW | P0–P8 accepted. Follow-up Signal Field UX Correction 01 is implemented at candidate `3dc9f1e90d2d10727803271833b7772b341f0849`, but Project Control Center found one remaining visual overlap between the OI axis label and strike-label row. | Apply the focused spacing/legend correction and rerun Signal Field verification before treating the post-acceptance candidate as release-ready again. |
 | Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS. | Preserve/reuse. |
-| Signal Field visualization | ✅ Complete | P2 deterministic `SignalField` implemented and used by homepage and Market Intelligence. | Preserve/reuse. |
+| Signal Field visualization | 🟡 UX CORRECTION REQUIRED | Four requested readability/semantics corrections are present; one new OI legend/strike-label spacing defect remains. | Correct spacing/legend placement only; preserve the accepted concept. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
 | Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
 | Public story pages | ✅ P5 accepted | How It Works and About redesigned with page-local StrikeNova metadata. | Preserve. |
@@ -89,8 +89,18 @@ Commit: `37420706318c6eb845a52b1b8513de99a119167b`
 
 ### P8 final acceptance audit
 `docs/superpowers/audits/2026-09-11-strikenova-public-website-v1-2-p8-final-acceptance.md`  
-Status: ✅ PASS / RELEASE-READY  
+Status: ✅ PASS / RELEASE-READY (historical acceptance record)  
 Acceptance record commit: `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b`
+
+### Signal Field UX Correction 01
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-signalfield-ux-correction.md`  
+Status: ✅ implemented / under review  
+Candidate commit: `3dc9f1e90d2d10727803271833b7772b341f0849`
+
+### Signal Field UX Correction 01 review
+`docs/superpowers/audits/2026-09-11-strikenova-public-website-v1-2-signalfield-ux-correction-review.md`  
+Status: 🟡 CONDITIONAL — one remaining layout collision  
+Review commit: `15c1b7e3f1b281052ef1952d0a7788351d8c0786`
 
 ## Phase implementation records
 
@@ -104,85 +114,30 @@ Acceptance record commit: `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b`
 | P5 — Story pages | `4a2eda84589609da54f151f80ae87289acda3f1e` | ✅ ACCEPTED |
 | P6 — Navigation/cohesion | `665a3adc593bfd9beeac1d05e36734584910f5b4` | ✅ ACCEPTED |
 | P7 — Hardening | `cb0c2621cf8ded658b611d8e506042e0d4349260` | ✅ ACCEPTED |
-| P8 — Final acceptance | `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b` | ✅ PASS / RELEASE-READY |
+| P8 — Final acceptance | `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b` | ✅ PASS / RELEASE-READY (historical acceptance) |
+| UX Correction 01 | `3dc9f1e90d2d10727803271833b7772b341f0849` | 🟡 Conditional / corrective patch required |
 
-## P8 final acceptance evidence
+## Current release state
 
-Candidate state:
+**Historical V1.2 P8 acceptance:** RELEASE-READY.
 
-- Feature branch: `feat/strikenova-day35-portfolio-intelligence`
-- Candidate implementation: `cb0c2621cf8ded658b611d8e506042e0d4349260`
-- P8 acceptance record: `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b`
+**Current candidate after UX Correction 01:** NOT YET RE-ACCEPTED.
 
-Implementation-session evidence recorded:
+Deployment remains unperformed and is blocked until the current candidate passes the focused UX correction review.
 
-- 71 test files / 1,635 tests passed;
-- 21 routes generated successfully;
-- all seven public routes return HTTP 200;
-- no console errors;
-- no horizontal overflow;
-- desktop and mobile browser checks reported clean at 1440×900, 1280×800, 390×844 and 360×800;
-- navigation/menu/auth CTA interactions verified;
-- accessibility checks passed for landmarks, heading structure, keyboard/focus, SignalField semantics, reduced motion, color-independent P&L semantics and touch targets;
-- no unsupported public branding/live-style claims remained;
-- protected backend/data/trading/authenticated-app scope remained untouched;
-- deployment was not performed.
+## Current UX correction finding
 
-Project Control Center independently verified:
+The OI axis/legend correction introduced a visual collision risk because `OPEN INTEREST · CONTRACTS` is rendered at approximately the same Y position as the strike labels. The implementation's tests verify presence of the legend but do not verify SVG text geometry.
 
-- P8 acceptance commit exists on GitHub;
-- P8 is documentation-only and correctly references the accepted P7 candidate;
-- P7 is authoritative on GitHub and exactly one commit after P6;
-- GitHub Vercel status for P8 is `success`.
-
-Known evidence limitations explicitly recorded in the P8 acceptance document:
-
-- no Lighthouse score was measured;
-- final screenshots were not captured;
-- some browser verification was automated rather than manual visual inspection for every viewport;
-- the earlier mobile-menu link-count caveat was covered by functional verification/tests rather than a separate manual count.
-
-These are evidence-method notes, not release-blocking defects under the approved P8 plan.
-
-## Public V1.2 final phase status
-
-| Phase | Status |
-|---|---|
-| P0 — Baseline, inventory and safety fence | ✅ Complete / PASS |
-| P1 — StrikeNova public design system | ✅ Complete / ACCEPTED |
-| P2 — Signal Field foundation | ✅ Complete / ACCEPTED |
-| P3 — Homepage flagship redesign | ✅ Complete / ACCEPTED |
-| P4 — Product pages | ✅ Complete / ACCEPTED |
-| P5 — Story pages | ✅ Complete / ACCEPTED |
-| P6 — Navigation, footer, metadata and cohesion | ✅ Complete / ACCEPTED |
-| P7 — Accessibility, responsive and performance hardening | ✅ Complete / ACCEPTED |
-| P8 — Final public acceptance | ✅ Complete / PASS / RELEASE-READY |
-
-## V1.2 release rule
-
-**StrikeNova Public Website V1.2 is RELEASE-READY from the collected acceptance evidence.**
-
-This status does **not** authorize deployment.
-
-Deployment remains a separate explicit decision.
-
-## Public pages
-
-Existing URLs remain unchanged:
-
-- `/`
-- `/features`
-- `/market-intelligence`
-- `/strategy-lab`
-- `/paper-trading`
-- `/how-it-works`
-- `/about`
-
-The `(public)` / `(app)` route-group architecture remains unchanged.
+Required next action:
+- move the OI axis label/legend into dedicated vertical space away from the strike-label row;
+- add/adjust a regression assertion for the chosen layout contract where practical;
+- re-run browser verification at 1440×900, 1280×800, 390×844 and 360×800;
+- re-review the resulting commit.
 
 ## Strict no-touch boundary
 
-The public V1.2 workstream did not modify:
+The public V1.2 workstream must not modify:
 
 - backend/FastAPI code;
 - database/schema/migrations;
@@ -194,10 +149,8 @@ The public V1.2 workstream did not modify:
 - financial calculation engines;
 - authenticated `(app)` behavior.
 
-## Operating rule after V1.2
+The UX correction must remain limited to Signal Field presentation and its focused tests.
 
-The public V1.2 redesign is closed as an independently gated workstream.
+## Operating rule
 
-Any future public-site changes should be treated as a new controlled change set or versioned workstream rather than silently appended to the completed V1.2 acceptance chain.
-
-The core platform/base-architecture workstream continues independently.
+Public V1.2 redesign phases P0–P8 are closed historically. Any post-acceptance changes are handled as separately controlled maintenance/correction changes and do not silently alter the accepted P0–P8 history.
