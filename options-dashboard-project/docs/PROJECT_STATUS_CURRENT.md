@@ -18,11 +18,11 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
-| Public Website V1.2 — Signal Field | 🟢 P1 implementation accepted / P2 pending | P0 passed. P1 design system is implemented on `feat/strikenova-day35-portfolio-intelligence`; corrective patch `17492609dfb031f2b23e6566798e4c787caba669` closes the two Project Control Center findings. No page redesign or P2 Signal Field implementation has started. | Owner review/merge decision, then authorize P2 Signal Field Foundation. |
-| Public design system | ✅ P1 implementation complete | Semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion/reduced-motion CSS and focused tests are implemented. | Use the system as the foundation for P2–P6. |
-| Signal Field visualization | ⏳ Not started | Signature market-native visualization remains intentionally unimplemented. | P2 after P1 gate. |
-| Public page redesign | ⏳ Not started | Seven public pages remain on the V1.1 composition; redesign is separately gated. | P3–P5 after P2. |
-| Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser hardening remain deferred to P6–P8. | P6–P8. |
+| Public Website V1.2 — Signal Field | 🟣 P2 AUTHORIZED | P0 passed. P1 design system and corrective patch were accepted. P2 Signal Field foundation is now the active public-site phase; no page redesign has started. | Execute P2 Signal Field Foundation only. |
+| Public design system | ✅ P1 implementation complete | Semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion/reduced-motion CSS and focused tests are implemented. | Reuse/evolve these primitives in P2 and later phases. |
+| Signal Field visualization | 🟡 P2 in progress | P1 provides generic `signals.js` primitives; the reusable composed `SignalField` itself is not yet implemented. | Build and verify `SignalField` without page redesign or live data. |
+| Public page redesign | ⏳ Not started | Seven public pages remain on the V1.1 composition. | P3–P5 after P2 gate. |
+| Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser hardening remain separately gated. | P6–P8. |
 
 ## V1.2 control documents
 
@@ -34,7 +34,7 @@ Status: ✅ committed to `main`
 
 Commit: `db2b7c4582c749a9864e638127c0a93fdc7f1284`
 
-### Implementation plan
+### Master implementation plan
 
 `docs/superpowers/plans/2026-09-10-strikenova-public-website-v1-2.md`
 
@@ -68,33 +68,26 @@ Purpose:
 2. Raise the `sm` Button/LinkButton minimum height from 36px to 44px.
 3. Add focused regression coverage for both findings.
 
-Independent GitHub review verified:
+Independent Project Control Center review accepted the corrective patch. GitHub Vercel status is successful. The implementation-session verification reported 1,550 passing tests across 62 files and a successful 21-route build; those test/build numbers remain implementation-reported evidence rather than an independently re-executed local run in this environment.
 
-- The corrective commit exists and is exactly one commit ahead of the P1 base.
-- Its diff is limited to `PublicLayout.js`, `buttons.js`, and `design-system.test.js`.
-- Protected backend/platform files are not part of the corrective diff.
-- GitHub Vercel status for the corrective commit is `success`.
-- GitHub Actions reports no workflow run for the commit.
+## P2 execution handoff
 
-Implementation-session verification reported by FreeBuff:
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p2-signal-field.md`
 
-- **1,550 frontend tests passed across 62 files.**
-- **Next.js production build succeeded; 21 routes generated.**
-- All seven public routes returned HTTP 200.
-- No deployment was performed.
+Status: ✅ committed to `main`
 
-These test/build numbers are recorded as implementation-reported evidence, not independently re-executed by Project Control Center in this environment.
+Commit: `750311d0f5d1af2250d09fddc9d4d2573567abc1`
 
-## P1 review outcome
+Scope:
 
-**P1: IMPLEMENTATION ACCEPTED.**
-
-The two Project Control Center findings are closed in source:
-
-- `PUBLIC_DS_CSS` is now injected by `PublicLayout`.
-- The `sm` button/link primitives now have a 44px minimum height.
-
-P2 has **not** been implemented and is not included in the corrective patch.
+- build reusable `SignalField` foundation;
+- reuse/evolve the P1 `signals.js` primitives rather than duplicating `SignalNode` or `StrikeRail` files;
+- use deterministic illustrative state only;
+- provide semantic/accessibility text equivalents;
+- support reduced motion;
+- verify responsive behavior at the target viewports;
+- keep the work broker-independent and presentation-only;
+- do not redesign any public page.
 
 ## Public V1.2 phase status
 
@@ -102,7 +95,7 @@ P2 has **not** been implemented and is not included in the corrective patch.
 |---|---|
 | P0 — Baseline, inventory and safety fence | ✅ Complete / PASS |
 | P1 — StrikeNova public design system | 🟢 Implementation accepted |
-| P2 — Signal Field foundation | ⏳ Not started / pending authorization |
+| P2 — Signal Field foundation | 🟣 Authorized / Active |
 | P3 — Homepage flagship redesign | ⏳ Planned |
 | P4 — Product pages | ⏳ Planned |
 | P5 — Story pages | ⏳ Planned |
@@ -112,15 +105,15 @@ P2 has **not** been implemented and is not included in the corrective patch.
 
 ## Known deferred findings
 
-The following remain intentionally deferred to later phases:
+The following remain intentionally deferred to their separately gated phases:
 
 - Narrow-viewport horizontal overflow and table overflow → P7.
 - Color-only P&L encoding → P7.
-- Visualization accessibility labeling gaps → P7.
+- Visualization accessibility labeling gaps → P7, except the new Signal Field must meet its own accessibility contract during P2.
 - Heading hierarchy cleanup → P7.
 - Mobile-menu interactive verification → P7.
 - Migration of remaining page-level inline styles → P3–P6.
-- Full legacy branding migration → P6 / page redesign phases.
+- Full legacy branding migration → P3–P6.
 
 ## Public pages in scope
 
@@ -180,9 +173,22 @@ Unless separately approved, V1.2 must not modify:
 
 ## P2 boundary
 
-P2 will build the reusable **Signal Field foundation** using the P1 system.
+P2 is presentation-only and broker-independent.
 
-P2 must remain presentation-only and broker-independent. It must not redesign the seven pages, add live broker data, introduce backend dependencies, or alter authenticated application behavior.
+P2 may add or evolve public visualization components, deterministic demo-state fixtures, and focused public tests.
+
+P2 must not:
+
+- redesign the seven public pages;
+- change public information architecture;
+- add live broker or market-data calls;
+- add backend endpoints;
+- add authentication dependencies;
+- duplicate financial calculations;
+- change authenticated application behavior;
+- deploy.
+
+P3 remains the homepage redesign gate.
 
 ## Working rule
 
