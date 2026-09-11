@@ -18,12 +18,12 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently of the public-site workstream. Latest known documented core handoff: Day 38 at commit `5094fb461e1baf9981a19ec3cd450477073c5091`. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Seven public routes with shared components, dark/gold foundation, responsive behavior and accessibility foundations. | Preserve as historical implementation baseline. |
-| Public Website V1.2 — Signal Field | 🟡 P4 review / corrective patch required | P0, P1, P2 and P3 accepted. P4 implementation is present at `9b22eec2d0e56387379a8fb19b06e5f044254b6a`, but Project Control Center review found three corrective items before acceptance. | Apply P4 corrective findings, re-run fresh verification, then request P5 authorization. |
-| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS are implemented. | Reuse/evolve these primitives in P4–P6. |
-| Signal Field visualization | ✅ Complete | P2 reusable deterministic `SignalField` foundation is implemented and integrated into the homepage during P3. | Reuse/evolve for product pages where appropriate. |
-| Public homepage redesign | ✅ P3 accepted | Homepage `/` is the flagship StrikeNova public experience. | Preserve as reference while P4 is corrected. |
-| Public product pages | 🟡 P4 corrective patch required | `/features`, `/market-intelligence`, `/strategy-lab`, `/paper-trading` were redesigned, but acceptance is gated on runtime/test/truth corrections. | Close P4 review findings. |
-| Public story pages | ⏳ Planned | `/how-it-works` and `/about` remain on V1.1 composition. | P5 only after P4 acceptance. |
+| Public Website V1.2 — Signal Field | 🟣 P5 AUTHORIZED / ACTIVE | P0–P4 accepted. P4 corrective patch `c008386d0ac2d1800f675f1cb7570de7c2df67fe` closes the three review findings; four product pages are now accepted. | Execute P5 Story Pages only. |
+| Public design system | ✅ Complete | P1 semantic tokens, typography, surfaces, buttons, metrics, visualization framing, signal primitives, layouts, truth/research states, motion and reduced-motion CSS are implemented. | Reuse/evolve in P5–P6. |
+| Signal Field visualization | ✅ Complete | P2 reusable deterministic `SignalField` is implemented and integrated into the homepage and Market Intelligence page. | Reuse/evolve where appropriate. |
+| Public homepage redesign | ✅ P3 accepted | Homepage `/` is the flagship StrikeNova public experience. | Preserve as reference. |
+| Public product pages | ✅ P4 accepted | `/features`, `/market-intelligence`, `/strategy-lab`, `/paper-trading` redesigned as Capability Atlas, Market State / Signal Field, Strategy Forge, and Rehearsal Cockpit. | Preserve while P5 story pages are built. |
+| Public story pages | 🟣 P5 active | `/how-it-works` and `/about` remain on V1.1 composition until P5 implementation completes. | Redesign the two story pages using the P5 execution contract. |
 | Public hardening | ⏳ Planned | Accessibility, responsive, performance, metadata and browser hardening remain separately gated. | P6–P8. |
 
 ## V1.2 control documents
@@ -80,9 +80,17 @@ Commit: `ed8021a49b4dc552cce4a2f98ee5c47efa69e04c`
 
 `docs/superpowers/audits/2026-09-11-strikenova-public-website-v1-2-p4-review.md`
 
-Status: 🟡 CONDITIONAL / corrective patch required
+Status: ✅ review findings closed by corrective patch
 
 Commit: `87b1fa789cf759e1cd0fd98850ca5bf364338667`
+
+### P5 execution handoff
+
+`docs/superpowers/plans/2026-09-11-strikenova-public-website-v1-2-p5-story-pages.md`
+
+Status: ✅ authorized execution contract
+
+Commit: `099f344ffa0e4b932e94d6c40179e91811b94fbc`
 
 ## P1 implementation record
 
@@ -110,7 +118,7 @@ P2 review outcome: ✅ PASS / ACCEPTED.
 
 ## P3 implementation record
 
-### Implementation commit
+Implementation commit:
 
 `6d901c4a8e8063daf758ecabe29b3e8f0aeac227`
 
@@ -122,65 +130,48 @@ P3 review outcome: ✅ IMPLEMENTATION ACCEPTED.
 
 ## P4 implementation record
 
-### Implementation commit
+### Base implementation
 
 `9b22eec2d0e56387379a8fb19b06e5f044254b6a`
 
-Branch:
+### Corrective patch
 
-`feat/strikenova-day35-portfolio-intelligence`
+`c008386d0ac2d1800f675f1cb7570de7c2df67fe`
 
 ### Scope verified from GitHub diff
 
-From the accepted P3 commit to the P4 head, GitHub reports only:
+The corrective patch is exactly one commit after the P4 implementation and contains only:
 
 - `frontend/app/(public)/features/ClientPage.js`
-- `frontend/app/(public)/market-intelligence/ClientPage.js`
-- `frontend/app/(public)/strategy-lab/ClientPage.js`
+- `frontend/app/(public)/features/page.test.js`
+- `frontend/app/(public)/market-intelligence/page.test.js`
 - `frontend/app/(public)/paper-trading/ClientPage.js`
+- `frontend/app/(public)/paper-trading/page.test.js`
+- `frontend/app/(public)/strategy-lab/page.test.js`
 
-No backend, database, broker, OAuth/session, execution, trading-engine, market-data, financial-calculation, authenticated-app, or other public-page files were part of the P4 implementation diff.
+No backend/platform files or unrelated public pages are part of the correction.
 
-### Product pages delivered by implementation
+### Corrective findings closed
 
-- `/features` — Capability Atlas.
-- `/market-intelligence` — Market State / Signal Field.
-- `/strategy-lab` — Strategy Forge.
-- `/paper-trading` — Rehearsal Cockpit.
+1. `DataStateBadge` is imported from the shared public truth module and the local duplicate was removed.
+2. Focused tests were added for all four redesigned product pages.
+3. Misleading live-style wording on Features was rewritten (`LIVE CHAIN` → `OPTION CHAIN / STREAMING`, P&L → `SIMULATED`, SignalNode `LIVE` → `ACTIVE`).
 
-### Independent Project Control Center review
+### Verification reported by implementation agent
 
-The implementation is correctly scoped, but P4 is **not yet accepted**.
-
-#### Finding 1 — Paper Trading runtime symbol verification
-
-`paper-trading/ClientPage.js` renders `DataStateBadge`. The visible import block does not include that symbol. This must be explicitly resolved and runtime-verified; a successful compile/build alone is not sufficient evidence for this render path.
-
-#### Finding 2 — Required focused page tests are missing from the P4 diff
-
-The P4 implementation diff contains the four redesigned page files but no page test files or test updates. The P4 contract required focused tests for branding, page structure, CTA destinations, demo/research truth, SignalField usage and responsive-safe composition.
-
-#### Finding 3 — Live-style wording on public capability cards
-
-The Features capability data includes labels such as `Live positioning. Real-time signals.`, `LIVE CHAIN`, and `P&L = LIVE`. These can be read as the static public capability-card values being live data. They should be rewritten to describe actual capability without creating a misleading live-data presentation on a presentation-only page.
-
-### P4 verification reported by implementation agent
-
-The agent reported:
-
-- 1,577 tests passed across 62 files.
+- 1,605 tests passed across 66 files.
 - Production build succeeded with 21 static routes.
 - All seven public routes returned HTTP 200.
-- Browser verification reported no console errors and no responsive overflow.
+- Browser verification reported DataStateBadge rendering, no console errors, and no responsive overflow.
 - No deployment was performed.
 
-These figures remain implementation-reported evidence. Project Control Center independently verified the P4 commit/diff scope and GitHub Vercel status, but did not execute the local test suite in this environment.
+These local test/build/browser figures are implementation-reported evidence. Project Control Center independently verified the corrective diff scope and GitHub Vercel status.
 
 ## P4 review outcome
 
-**P4: CONDITIONAL — CORRECTIVE PATCH REQUIRED.**
+**P4: IMPLEMENTATION ACCEPTED.**
 
-P5 is **not authorized** until all three findings are closed and fresh verification is supplied.
+The three Project Control Center findings were closed and the four redesigned product pages are accepted for the next phase.
 
 ## Public V1.2 phase status
 
@@ -190,28 +181,35 @@ P5 is **not authorized** until all three findings are closed and fresh verificat
 | P1 — StrikeNova public design system | ✅ Complete / ACCEPTED |
 | P2 — Signal Field foundation | ✅ Complete / ACCEPTED |
 | P3 — Homepage flagship redesign | ✅ Complete / ACCEPTED |
-| P4 — Product pages | 🟡 Corrective patch required |
-| P5 — Story pages | ⛔ Not authorized |
+| P4 — Product pages | ✅ Complete / ACCEPTED |
+| P5 — Story pages | 🟣 Authorized / Active |
 | P6 — Navigation, footer, metadata and cohesion | ⏳ Planned |
 | P7 — Accessibility, responsive and performance hardening | ⏳ Planned |
 | P8 — Final public acceptance | ⏳ Planned |
 
-## P4 corrective boundary
+## P5 boundary
 
-The corrective patch may modify only the P4 product-page implementation and its focused tests as required to close the review findings.
+P5 may redesign only:
 
-It must not:
+- `/how-it-works`
+- `/about`
+
+P5 must use the accepted public design system and the established Signal Field visual language where useful.
+
+P5 must not:
 
 - redesign `/`;
-- redesign `/how-it-works`;
-- redesign `/about`;
-- change backend/FastAPI;
-- change database/schema/migrations;
-- change broker integrations;
-- change OAuth/session logic;
-- change execution/trading semantics;
-- change trading/financial engines;
-- add live broker/market data to the public pages;
+- redesign `/features`;
+- redesign `/market-intelligence`;
+- redesign `/strategy-lab`;
+- redesign `/paper-trading`;
+- modify global navigation/footer;
+- modify backend/FastAPI;
+- modify database/schema/migrations;
+- modify broker integrations;
+- modify OAuth/session logic;
+- modify execution/trading semantics;
+- add live broker/market data;
 - deploy.
 
 ## Known deferred findings
@@ -222,7 +220,7 @@ The following remain intentionally deferred to their separately gated phases:
 - Whole-site responsive/performance hardening → P7.
 - Navigation/footer/metadata → P6.
 - Remaining page-level inline-style migration → P4–P6.
-- Full legacy-branding sweep → P4–P6, page by page.
+- Final legacy-branding sweep → P4–P6, page by page.
 
 ## Public pages in scope
 
