@@ -35,7 +35,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
@@ -47,6 +47,7 @@ from app.broker_sync import (
     CanonicalOrderState,
     FillFacts,
     OrderFacts,
+    compute_ceid,
 )
 from app.broker_sync.models import BrokerOrderProjection, BrokerSyncIdempotency, BrokerSyncSequenceAnchor
 from app.trade_lifecycle.persistence import append_lifecycle_event, next_event_sequence
@@ -117,6 +118,39 @@ def _content_fingerprint(event: BrokerSyncEvent) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _verify_ceid_metadata(event: BrokerSyncEvent) -> str | None:
+    """Day40.4 §3.4 — verify a supplied CEID against its strikenova metadata block.
+
+    Returns None when the event carries no ``metadata["strikenova"]`` block
+    (legacy events continue through the existing path unchanged) or when the
+    supplied canonical_event_id equals the derived CEID.  Returns a failure
+    reason string on mismatch.
+    """
+    if event.metadata is None:
+        return None
+    strikenova = event.metadata.get("strikenova")
+    if not isinstance(strikenova, Mapping):
+        return None
+    d1 = strikenova.get("d1")
+    fp = strikenova.get("content_fingerprint")
+    if d1 is None and fp is None:
+        return None
+    if not isinstance(d1, str) or not isinstance(fp, str) or not d1 or not fp:
+        return "canonical identity mismatch: strikenova metadata block is incomplete"
+    if event.canonical_event_id is None:
+        return (
+            "canonical identity mismatch: strikenova metadata present but the "
+            "event supplies no canonical_event_id"
+        )
+    derived = compute_ceid(d1, fp)
+    if derived != event.canonical_event_id:
+        return (
+            f"canonical identity mismatch: derived CEID {derived[:16]}... does not "
+            f"match supplied canonical_event_id {event.canonical_event_id[:16]}..."
+        )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Terminal-state enforcement
 # ---------------------------------------------------------------------------
@@ -143,6 +177,14 @@ def _is_terminal(state: CanonicalOrderState) -> bool:
 # Day38 state transition, so it must not be persisted as a lifecycle event.
 _BROKER_TO_LIFECYCLE: dict[str, str | None] = {
     BrokerEventType.ORDER_SUBMITTED.value: "OrderSubmitted",
+    # ORDER_PROCESSING → None (projection-only, Day40 §1.3):
+    # Processing chatter (validation pending / open pending / trigger pending /
+    # modify pending / modify validation pending / modified / not modified /
+    # cancel pending / not cancelled / modify after market order req received)
+    # is broker-observed state, NOT a lifecycle transition.  It must never mint
+    # a Day38 event: the order is already SUBMITTED and the replay engine
+    # would reject a duplicate SUBMITTED transition.
+    BrokerEventType.ORDER_PROCESSING.value: None,
     # ORDER_ACCEPTED → None (projection-only):
     # The approved Day38 design defines ``OrderSubmitted`` as an audit
     # record of the submission attempt that explicitly "does not mean
@@ -194,6 +236,9 @@ def _event_canonical_state(event: BrokerSyncEvent) -> CanonicalOrderState:
     """Map event type to canonical order state."""
     mapping = {
         BrokerEventType.ORDER_SUBMITTED: CanonicalOrderState.SUBMITTED,
+        # Day40 §1.3/§8: processing chatter projects SUBMITTED (the order is
+        # submitted-but-not-yet-open); projection-only — no Day38 transition.
+        BrokerEventType.ORDER_PROCESSING: CanonicalOrderState.SUBMITTED,
         BrokerEventType.ORDER_ACCEPTED: CanonicalOrderState.OPEN,
         BrokerEventType.ORDER_REJECTED: CanonicalOrderState.REJECTED,
         BrokerEventType.ORDER_CANCELLED: CanonicalOrderState.CANCELLED,
@@ -847,6 +892,22 @@ def _do_ingest(
                 f"tenant mismatch: event tenant '{event.tenant_id}' "
                 f"!= projection tenant '{tenant_id}'"
             ),
+        }
+
+    # --- Day40.4 §3.4 CEID verification hook (BEFORE idempotency) ---
+    # When a Task3-derived event carries the strikenova identity metadata
+    # block, the supplied canonical_event_id MUST equal the derived
+    # CEID = SHA256("CEIDv1:" || d1 || content_fingerprint).  A mismatch means
+    # the event's identity does not derive from its claimed correlation
+    # identity + content: reject fail-closed before any idempotency
+    # arbitration can record it.
+    ceid_metadata_error = _verify_ceid_metadata(event)
+    if ceid_metadata_error is not None:
+        return {
+            "canonical_id": canonical_id,
+            "action": "REJECTED",
+            "normalized_state": None,
+            "reason": ceid_metadata_error,
         }
 
     # --- Compute content fingerprint ---

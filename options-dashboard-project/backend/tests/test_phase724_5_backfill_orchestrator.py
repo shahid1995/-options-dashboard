@@ -51,6 +51,19 @@ from app.services.backfill_orchestrator import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_rate_limit_sleep(monkeypatch):
+    """Day41 maintenance: the suite never touches the real API, but the
+    orchestrator still sleeps REQUEST_DELAY_SECONDS (3s) after every date
+    chunk / instrument.  The NIFTY default range spans ~14 chunks and the
+    idempotency test runs the backfill twice, so this file alone could take
+    4-10+ minutes and stall the full suite run.  Zero the delay; no behavior
+    under test changes."""
+    import app.services.backfill_orchestrator as _bo
+
+    monkeypatch.setattr(_bo, "REQUEST_DELAY_SECONDS", 0.0)
+
+
 @pytest.fixture()
 def db():
     """Create an isolated in-memory SQLite database for each test."""

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -22,6 +23,7 @@ class BrokerEventType(str, Enum):
     """Canonical broker-event types consumed by the sync layer."""
 
     ORDER_SUBMITTED = "ORDER_SUBMITTED"
+    ORDER_PROCESSING = "ORDER_PROCESSING"  # Day40 §1.3: projection-only chatter
     ORDER_ACCEPTED = "ORDER_ACCEPTED"
     ORDER_REJECTED = "ORDER_REJECTED"
     ORDER_CANCELLED = "ORDER_CANCELLED"
@@ -108,6 +110,48 @@ def _deep_freeze(value: Any) -> Any:
 
 _CANONICAL_SEP = "\x1f"
 
+# Day40.3/40.4 Option-A contract: an externally supplied canonical event id
+# (CEID) must be exactly 64 lowercase hexadecimal characters.
+_CANONICAL_EVENT_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def compute_d1(
+    *,
+    tenant_id: str,
+    broker: str,
+    order_id: str,
+    event_type: str,
+    trade_id: str = "",
+) -> str:
+    """Day40 §2.2 — observation CORRELATION identity (D1).
+
+    D1(order) = SHA256("D1v1:" \x1f tenant \x1f broker \x1f order_id \x1f event_type)
+    D1(fill)  = SHA256("D1v1:" \x1f tenant \x1f broker \x1f order_id \x1f event_type \x1f trade_id)
+
+    D1 is correlation identity ONLY: it is never an idempotency key and never
+    a ledger primary key (Day40.3 §2.1).  ``trade_id`` participates only for
+    fill observations; non-fill callers pass the default empty string.
+    """
+    if isinstance(event_type, Enum):
+        event_type = event_type.value
+    parts = ("D1v1:", tenant_id, broker, order_id, event_type)
+    if trade_id:
+        parts = parts + (trade_id,)
+    return _sha256_hex(_CANONICAL_SEP.join(str(p) for p in parts))
+
+
+def compute_ceid(d1: str, content_fingerprint: str) -> str:
+    """Day40.3 §2.3 — canonical_event_id (CEID) derivation contract.
+
+    CEID = SHA256( "CEIDv1:" \x1f d1 \x1f content_fingerprint )
+
+    The "CEIDv1:" prefix guarantees structural disjointness from the legacy
+    identity family (Day40.3 §2.6-5).  Task3 derives CEIDs with this function;
+    Task2 verifies supplied CEIDs against the ``metadata["strikenova"]`` block
+    (Day40.4 §3.4) using the same function.
+    """
+    return _sha256_hex(_CANONICAL_SEP.join(("CEIDv1:", d1, content_fingerprint)))
+
 
 def _sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -135,6 +179,7 @@ class BrokerSyncEvent:
     order_facts: Optional[OrderFacts] = None
     fill_facts: Optional[FillFacts] = None
     metadata: Optional[Mapping[str, Any]] = None
+    canonical_event_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         for name in ("tenant_id", "broker", "event_type", "event_version"):
@@ -165,23 +210,41 @@ class BrokerSyncEvent:
         if self.metadata is not None:
             object.__setattr__(self, "metadata", _deep_freeze(self.metadata))
 
-        # Fail closed: insufficient deterministic identity
-        if not self.provider_event_id:
-            if not self.broker_order_id:
+        # Day40.3 §2.5 / Day40.4 §2.2 (Option A): a supplied canonical_event_id
+        # is validated as 64-char lowercase hex and is authoritative deterministic
+        # identity.  It skips ONLY the legacy discriminator requirement below —
+        # every other validation above still applies.
+        if self.canonical_event_id is not None:
+            if (
+                not isinstance(self.canonical_event_id, str)
+                or not _CANONICAL_EVENT_ID_RE.fullmatch(self.canonical_event_id)
+            ):
                 raise ValueError(
-                    "insufficient deterministic identity: "
-                    "provider_event_id missing and broker_order_id required for fallback identity"
+                    "canonical_event_id must be a 64-character lowercase hex string"
                 )
-            if self.canonical_sequence is None and self.fill_facts is None:
-                raise ValueError(
-                    "insufficient deterministic identity: "
-                    "provider_event_id missing and broker_order_id alone is insufficient; "
-                    "canonical_sequence or fill_facts required as additional discriminator"
-                )
+        else:
+            # Fail closed: insufficient deterministic identity
+            if not self.provider_event_id:
+                if not self.broker_order_id:
+                    raise ValueError(
+                        "insufficient deterministic identity: "
+                        "provider_event_id missing and broker_order_id required for fallback identity"
+                    )
+                if self.canonical_sequence is None and self.fill_facts is None:
+                    raise ValueError(
+                        "insufficient deterministic identity: "
+                        "provider_event_id missing and broker_order_id alone is insufficient; "
+                        "canonical_sequence or fill_facts required as additional discriminator"
+                    )
 
     @property
     def canonical_id(self) -> str:
         """Deterministic tenant-scoped event identity."""
+        # Day40.3 §2.5 (Option A): a supplied CEID is vended unchanged — it is
+        # the single authoritative identity for this event.
+        if self.canonical_event_id is not None:
+            return self.canonical_event_id
+
         if self.provider_event_id:
             parts = (self.tenant_id, self.broker, self.provider_event_id, self.event_type)
         else:
@@ -235,6 +298,7 @@ def make_broker_sync_event(
     order_facts: Optional[OrderFacts] = None,
     fill_facts: Optional[FillFacts] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    canonical_event_id: Optional[str] = None,
 ) -> BrokerSyncEvent:
     """Factory with sensible defaults for tests and adapters."""
     if received_at is None:
@@ -254,6 +318,7 @@ def make_broker_sync_event(
         order_facts=order_facts,
         fill_facts=fill_facts,
         metadata=metadata,
+        canonical_event_id=canonical_event_id,
     )
 
 

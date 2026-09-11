@@ -166,25 +166,17 @@ def validate_migration_state() -> dict:
 
         result["expected_head"] = heads[0]
 
-        # Collect every revision ID in the migration graph by walking
-        # backwards from head.  This lets us distinguish "behind" (revision
-        # is in the graph but not the head) from "unknown" (revision is not
-        # in the graph at all).
+        # Collect every revision ID in the migration graph.  This lets us
+        # distinguish "behind" (revision is in the graph but not the head)
+        # from "unknown" (revision is not in the graph at all).
+        #
+        # Uses Alembic's full-graph walk: a manual down_revision walk that
+        # picks downs[0] at merge points silently drops sibling parents and
+        # misclassifies real chain revisions as "unknown" (Day41 fix — the
+        # graph has merge points since Day38).
         all_revisions: set = set()
         try:
-            rev_map = script.revision_map
-            # Walk the full chain from each head backwards
-            for h in heads:
-                rev = rev_map.get_revision(h)
-                while rev is not None:
-                    all_revisions.add(rev.revision)
-                    if not rev.down_revision:
-                        break
-                    downs = rev.down_revision
-                    if isinstance(downs, (list, tuple)):
-                        rev = rev_map.get_revision(downs[0])
-                    else:
-                        rev = rev_map.get_revision(downs)
+            all_revisions = {r.revision for r in script.walk_revisions()}
         except Exception:
             # If graph walking fails, fall back to checking only against head
             all_revisions = set(heads)

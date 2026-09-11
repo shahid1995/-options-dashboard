@@ -65,6 +65,17 @@ from app.services.upstox_client import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_rate_limit_sleep(monkeypatch):
+    """Day41 maintenance: same rate-limit seam as test_phase724_5 — this suite
+    never touches the real API but the orchestrator sleeps 3s per chunk/
+    instrument, making run_nifty-driven tests take minutes on the 365-day
+    default range.  Zero the delay; no behavior under test changes."""
+    import app.services.backfill_orchestrator as _bo
+
+    monkeypatch.setattr(_bo, "REQUEST_DELAY_SECONDS", 0.0)
+
+
 @pytest.fixture()
 def db():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
