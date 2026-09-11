@@ -16,9 +16,9 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently. Day41 broker-sync architecture work was committed separately on the shared feature branch between public-site maintenance commits. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as historical baseline. |
-| Public Website V1.2 — Signal Field | ✅ RELEASE-READY / CURRENT CANDIDATE RE-ACCEPTED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 are now reviewed and accepted. | Deployment remains a separate explicit decision. |
+| Public Website V1.2 — Signal Field | ✅ DEPLOYED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 reviewed and accepted. Approved candidate `cedea111dd400e72c4a57a468d6d994417a1cc6f` is now promoted to Vercel production. | Monitor production; future changes use a new controlled maintenance/change-set record. |
 | Public design system | ✅ Complete | P1 semantic design system and motion foundation accepted. | Preserve/reuse. |
-| Signal Field visualization | ✅ UX CORRECTION 01 + 02 ACCEPTED | Greeks, IV-by-strike curve, OI scale/legend, and strike-connected structure guides are implemented. Final OI legend/strike-label spacing correction accepted. | Preserve/reuse. |
+| Signal Field visualization | ✅ UX CORRECTION 01 + 02 ACCEPTED | Greeks, IV-by-strike curve, OI scale/legend, and strike-connected structure guides are implemented. Final OI legend/strike-label spacing correction accepted and deployed. | Preserve/reuse. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
 | Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
 | Public story pages | ✅ P5 accepted | How It Works and About redesigned. | Preserve. |
@@ -96,24 +96,30 @@ This history is preserved as-is; no force-rewrite or hidden rebase is authorized
 
 **Post-V1.2 Signal Field UX Correction 02:** ACCEPTED.
 
-**Current public-site candidate:** RELEASE-READY from the collected evidence.
+**Production deployment:** COMPLETE.
 
-Deployment remains unperformed and requires a separate explicit decision.
+**Production deployment ID:** `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ`
 
-## Recorded verification evidence
+**Production URL:** https://options-dashboard-sigma-coral.vercel.app
 
-Implementation-session evidence for Correction 02:
+**Production candidate SHA:** `cedea111dd400e72c4a57a468d6d994417a1cc6f`
 
-- 71 test files / 1,653 tests passed;
-- production build succeeded;
-- 21 routes generated;
-- all seven public routes returned HTTP 200;
-- browser checks reported clean at 1440×900, 1280×800, 390×844 and 360×800;
-- no console errors;
-- no horizontal overflow;
-- previous Greek, IV, OI-scale, and structure-connection findings remained resolved.
+**Production state:** READY.
 
-These figures are recorded as implementation-session evidence; the Project Control Center independently verified the GitHub commit and exact diff scope.
+The exact accepted Signal Field candidate was promoted to Vercel production. Live production smoke verification returned HTTP 200 for the homepage and Features page, and Vercel reported no runtime errors in the selected verification window.
+
+## Deployment verification evidence
+
+Production deployment was promoted from the already-built accepted Vercel candidate rather than rebuilt from an unrelated branch state.
+
+Vercel independently confirms:
+
+- production deployment `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ` is `READY`;
+- the deployment metadata points to GitHub commit `cedea111dd400e72c4a57a468d6d994417a1cc6f`;
+- production aliases include `options-dashboard-sigma-coral.vercel.app`, `options-dashboard-claude-109a.vercel.app`, and the feature deployment alias;
+- no runtime errors were found in the selected production window.
+
+The implementation-session browser report verified all seven public routes, navigation, mobile behavior, console cleanliness, and zero horizontal overflow. Project Control Center also performed live production smoke verification of `/` and `/features` after promotion.
 
 ## Strict no-touch boundary
 
