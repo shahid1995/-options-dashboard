@@ -25,7 +25,7 @@ _Last updated: 2026-09-11_
 | Public product pages | ✅ P4 accepted | Features, Market Intelligence, Strategy Lab and Paper Trading redesigned. | Preserve. |
 | Public story pages | ✅ P5 accepted | How It Works and About redesigned with page-local StrikeNova metadata. | Preserve. |
 | Public navigation/cohesion | ✅ P6 accepted | Header, footer, global/public metadata, active states, mobile menu, branding/truth/link sweep completed. | Preserve while P7 is verified. |
-| Public hardening | 🟡 P7 verification blocked | Claimed P7 result reports 1,635 tests and clean accessibility/responsive/performance checks, but the claimed commit is not present on the authoritative GitHub branch. | Restore authoritative P7 repository state and re-run the gate. |
+| Public hardening | 🟡 P7 verification blocked | Claimed P7 result reports 1,635 tests and clean accessibility/responsive/performance checks, but the claimed commit is not present on the authoritative GitHub branch. | Restore authoritative P7 repository state and rerun the gate. |
 
 ## V1.2 control documents
 
@@ -121,7 +121,7 @@ Commit: `281faba88e8b649e6998491bdd2218144a3fe725`
 
 ### P1
 
-Base: `1eece4028ae05ed9b610c0d...`
+Base: `1eece4028ae05ed9b610c859e6c0d542e615a521`
 
 Corrective: `17492609dfb031f2b23e6566798e4c787caba669`
 
