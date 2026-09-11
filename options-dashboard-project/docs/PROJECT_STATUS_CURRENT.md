@@ -16,7 +16,7 @@ _Last updated: 2026-09-11_
 |---|---|---|---|
 | Core platform / base architecture | 🔄 Ongoing | Continues independently. Day41 broker-sync architecture work was committed separately on the shared feature branch between public-site maintenance commits. | Continue approved architecture/review work independently. |
 | Public Website V1.1 | ✅ Complete | Historical seven-route V1.1 baseline. | Preserve as historical baseline. |
-| Public Website V1.2 — Signal Field | 🟡 DEPLOYED / AUTH HANDOFF BLOCKED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 reviewed and accepted. Approved candidate `cedea111dd400e72c4a57a468d6d994417a1cc6f` is deployed to the public Vercel project, but the public-to-authenticated-app login handoff is not yet present in the authoritative GitHub candidate and is therefore not accepted. | Commit the auth handoff fix, redeploy the public Vercel project from the clean committed tree, and perform end-to-end login verification. |
+| Public Website V1.2 — Signal Field | ✅ DEPLOYED | P0–P8 accepted historically. Signal Field UX Correction 01 and 02 reviewed and accepted. Approved candidate `cedea111dd400e72c4a57a468d6d994417a1cc6f` was promoted to Vercel production, then the committed auth-handoff correction `31563dad542651f47ab53d1106748a0ff90908c4` was promoted to the same public production project. | Monitor production; future changes use a new controlled maintenance/change-set record. |
 | Public design system | ✅ Complete | P1 semantic design system and motion foundation accepted. | Preserve/reuse. |
 | Signal Field visualization | ✅ UX CORRECTION 01 + 02 ACCEPTED | Greeks, IV-by-strike curve, OI scale/legend, and strike-connected structure guides are implemented. Final OI legend/strike-label spacing correction accepted and deployed. | Preserve/reuse. |
 | Public homepage redesign | ✅ P3 accepted | `/` is the flagship StrikeNova public experience. | Preserve. |
@@ -70,6 +70,7 @@ Acceptance review commit: `60e866f17fb08ba5799c854d14505bcc288e9e25`
 | P8 — Final acceptance | `4ebbc37ee3247093b5f90eff65ac31c8d1a0892b` | ✅ PASS / RELEASE-READY (historical) |
 | UX Correction 01 | `3dc9f1e90d2d10727803271833b7772b341f0849` | ✅ ACCEPTED after review |
 | UX Correction 02 | `cedea111dd400e72c4a57a468d6d994417a1cc6f` | ✅ ACCEPTED after review |
+| Auth Handoff Correction | `31563dad542651f47ab53d1106748a0ff90908c4` | ✅ ACCEPTED — production deployed |
 
 ## Post-V1.2 Signal Field correction state
 
@@ -96,67 +97,65 @@ This history is preserved as-is; no force-rewrite or hidden rebase is authorized
 
 **Post-V1.2 Signal Field UX Correction 02:** ACCEPTED.
 
-**Public production deployment:** COMPLETE for the accepted public-site candidate, but **authentication handoff is BLOCKED pending a committed source fix and public-site redeployment**.
+**Production deployment:** COMPLETE.
 
-**Public production deployment ID:** `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ`
+**Public production deployment ID:** `dpl_7ZfCychuzJ1UgCZuudiCAxF6FCxt`
 
 **Public production URL:** https://options-dashboard-sigma-coral.vercel.app
 
-**Public production candidate SHA:** `cedea111dd400e72c4a57a468d6d994417a1cc6f`
+**Public production candidate SHA:** `31563dad542651f47ab53d1106748a0ff90908c4`
 
-**Authenticated application deployment:** The separate Vercel project `frontend` currently has a READY production deployment serving `cedea111dd400e72c4a57a468d6d994417a1cc6f` with alias `frontend-zeta-gray-75.vercel.app`, but Vercel reports `gitDirty: 1` for that deployment. It must not be treated as the authoritative committed implementation of the auth handoff.
+**Public production state:** READY.
 
-**Current release state:** NOT FULLY RELEASE-READY for end-to-end authentication until the public auth handoff is committed, pushed, redeployed, and independently verified.
+**Authenticated application:** Separate Vercel project `frontend`, serving `https://frontend-zeta-gray-75.vercel.app` and its authenticated routes.
 
-## Authentication handoff finding
+**NEXT_PUBLIC_APP_URL:** `https://frontend-zeta-gray-75.vercel.app`
 
-The public-site production candidate at `cedea11` still contains `router.push("/dashboard")` in `AuthModal.js` and `router.push(redirectPath || "/dashboard")` in `PublicLayout.js`. It does not contain committed `NEXT_PUBLIC_APP_URL`-based cross-origin navigation.
+**NEXT_PUBLIC_API_URL:** `https://options-dashboard-production-fb47.up.railway.app`
 
-The backend connection itself is healthy enough to reach `POST /auth/google/state`, which returned HTTP 200 in Railway production logs.
+The committed auth-handoff correction is present in the public production deployment. `AuthModal.js` and `PublicLayout.js` use `NEXT_PUBLIC_APP_URL` and place the returned `session_id` in the URL fragment for cross-origin navigation to `/dashboard`.
 
-The required architecture is:
+### End-to-end auth evidence status
 
-`public Vercel → Railway auth → session_id → authenticated Vercel /dashboard#session_id=...`
+The code path and production deployment were independently verified. The exact real-user email/password and Google OAuth transactions were **not executed in the verification environment because test credentials/OAuth test flow were not available**. Therefore they are recorded as **not end-to-end tested**, not as failed.
 
-The public and authenticated Vercel projects must remain separate.
+The authenticated application's existing fragment session-capture mechanism remains the target handoff contract.
 
-### Review record
+The public and authenticated Vercel projects remain intentionally separate.
+
+## Authentication handoff review
 
 `docs/superpowers/audits/2026-09-11-strikenova-production-auth-handoff-review.md`
 
-Review commit: `363ef69889e8fa1074a3eb68fe13ccbd6632b807`
+The earlier review correctly blocked the old `cedea11` public deployment because it lacked the committed cross-origin handoff. That finding is now superseded by the committed `31563dad542651f47ab53d1106748a0ff90908c4` correction and its production promotion.
 
-## Deployment verification evidence
+## Production deployment evidence
 
-Production public-site deployment was promoted from the already-built accepted Vercel candidate rather than rebuilt from an unrelated branch state.
+Vercel independently confirms production deployment `dpl_7ZfCychuzJ1UgCZuudiCAxF6FCxt` is `READY`, targets production, and points to GitHub commit `31563dad542651f47ab53d1106748a0ff90908c4`. It was promoted from preview deployment `dpl_DpVwYoeDM3eFNQTh3T9xuBMdhDhZ`.
 
-Vercel independently confirms:
+GitHub confirms commit `31563dad542651f47ab53d1106748a0ff90908c4` contains the intended auth-handoff changes in `AuthModal.js`, `PublicLayout.js`, and its focused auth tests.
 
-- production deployment `dpl_4tqQyqpGRQS41kf2RBCpZY8HirfZ` is `READY`;
-- the deployment metadata points to GitHub commit `cedea111dd400e72c4a57a468d6d994417a1cc6f`;
-- production aliases include `options-dashboard-sigma-coral.vercel.app`, `options-dashboard-claude-109a.vercel.app`, and the feature deployment alias;
-- no runtime errors were found in the selected production window.
-
-The implementation-session browser report verified all seven public routes, navigation, mobile behavior, console cleanliness, and zero horizontal overflow. Project Control Center also performed live production smoke verification of `/` and `/features` after promotion.
+Vercel runtime-error aggregation for the public project reports no runtime errors in the selected verification window.
 
 ## Strict no-touch boundary
 
-The public V1.2 redesign and Signal Field maintenance corrections did not modify:
+The public V1.2 redesign and public auth-handoff correction did not intentionally modify:
 
-- backend/FastAPI code as part of the public corrections;
-- database/schema/migrations as part of the public corrections;
-- broker integrations as part of the public corrections;
-- OAuth/session internals;
+- backend/FastAPI business logic;
+- database/schema/migrations;
+- broker integrations;
 - execution/trading semantics;
 - trading engine;
 - market-data architecture;
 - financial calculation engines;
-- authenticated `(app)` behavior.
+- authenticated application business logic.
+
+The authenticated app remains a separate deployment target. The public correction only establishes the cross-origin navigation contract needed to reach it.
 
 ## Operating rule after V1.2
 
 The P0–P8 redesign workstream is closed historically.
 
-Post-acceptance public UX corrections are separately controlled maintenance changes and do not silently alter the P0–P8 acceptance history.
+Post-acceptance public UX and integration corrections are separately controlled maintenance changes and do not silently alter the P0–P8 acceptance history.
 
 Future public changes should start as a new controlled maintenance/change-set record.
