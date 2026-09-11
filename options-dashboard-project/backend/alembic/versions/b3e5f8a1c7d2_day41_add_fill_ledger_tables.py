@@ -54,6 +54,11 @@ def upgrade() -> None:
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("raw_payload_excerpt", sa.Text(), nullable=True),
         sa.Column("reconciliation_state", sa.String(length=32), nullable=False),
+        # Day40.5 §5.4: a proven duplicate delivery points at the prior
+        # preserved observation; the duplicate row itself is NEVER deleted
+        # (Invariant AF).  (Day41.1 correction: this column was missing from
+        # the original migration — ORM/migration field-matrix finding.)
+        sa.Column("duplicate_of", sa.String(length=36), nullable=True),
         sa.Column("observed_count", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("observation_id"),

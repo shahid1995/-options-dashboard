@@ -58,6 +58,7 @@ from app.broker_sync.fill_ledger import (  # noqa: E402
     composite_eq_key,
     evaluate_lane_c_equivalence,
     record_fill_observation,
+    upgrade_composite_to_trade,
 )
 
 _RECEIVED_AT = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
@@ -119,6 +120,13 @@ def test_skip_locked_no_double_claim(pg_tables, db) -> None:
 # ---------------------------------------------------------------------------
 
 def test_lane_b_same_trade_id_two_workers(pg_tables) -> None:
+    """Day41.1 invariant: for economic identity (tenant, broker, order,
+    trade_id) exactly ONE worker is the first APPLIER.  Two simultaneous
+    first-sighting workers ⇒ one APPLIED + one DUPLICATE_FILL, one fill row,
+    one RECONCILED observation (one economic effect).  Both-APPLIED is
+    IMPOSSIBLE under INSERT … ON CONFLICT DO NOTHING RETURNING arbitration.
+    Callers own their commits (Day41.1 Defect-3): each worker commits.
+    """
     barrier = threading.Barrier(2)
     outcomes: list[str] = ["", ""]
 
@@ -129,6 +137,7 @@ def test_lane_b_same_trade_id_two_workers(pg_tables) -> None:
             provider_trade_id="T-CC", d1="D1CC", content_fingerprint="FPCC",
             source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=5,
         )
+        session.commit()  # caller-owned transaction
         outcomes[idx] = outcome
 
     t1 = threading.Thread(target=apply, args=(TestSession(), 0))
@@ -144,7 +153,17 @@ def test_lane_b_same_trade_id_two_workers(pg_tables) -> None:
             )
         ).scalars().all()
         assert len(fills) == 1, "exactly-once violated: multiple TRADE_ID rows"
-        assert sorted(outcomes) == ["APPLIED", "DUPLICATE_FILL"] or set(outcomes) == {"APPLIED"}
+        # Day41.1 strict arbitration: exactly one first applier.
+        assert sorted(outcomes) == ["APPLIED", "DUPLICATE_FILL"], (
+            f"expected exactly one APPLIED + one DUPLICATE_FILL, got {outcomes}"
+        )
+        obs_rows = check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.provider_order_id == "O-CC",
+            )
+        ).scalars().all()
+        reconciled = [r for r in obs_rows if r.reconciliation_state == "RECONCILED"]
+        assert len(reconciled) == 1, "one economic effect: exactly one RECONCILED observation"
     finally:
         check.close()
 
@@ -165,7 +184,9 @@ def test_two_no_id_fills_concurrent_no_merge(pg_tables) -> None:
             source_mode="STREAM", received_at=_RECEIVED_AT,
             fill_quantity=5, fill_price="100",
         )
-        return obs, evaluate_lane_c_equivalence(session, obs)
+        state = evaluate_lane_c_equivalence(session, obs)
+        session.commit()  # caller-owned transaction (Day41.1)
+        return obs.observation_id, state
 
     results: list = [None, None]
     t1 = threading.Thread(target=lambda: results.__setitem__(0, apply(TestSession())))
@@ -234,3 +255,361 @@ def test_crash_and_replay_idempotent(pg_tables, db) -> None:
     assert (raw.raw_observation_id, ProcessingStatus.SUCCEEDED.value) in [
         (rid, status) for rid, status in outcomes
     ]
+
+
+# ===========================================================================
+# Day41.1 — required transaction tests A–J (real PostgreSQL)
+# ===========================================================================
+
+
+def test_day41_1_B_duplicate_t1_replay_sequential(pg_tables) -> None:
+    """B. duplicate T1 replay: same trade_id + same content after the applied
+    fill commits ⇒ DUPLICATE_FILL, preserved DUPLICATE observation, ONE fill
+    row, original content untouched."""
+    s = TestSession()
+    row1, out1, obs1 = fill_ledger.apply_lane_b_fill(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-B1",
+        provider_trade_id="T-B1", d1="D-B1", content_fingerprint="FP-B1",
+        source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    s.commit()
+    obs1_id = obs1.observation_id
+    row2, out2, obs2 = fill_ledger.apply_lane_b_fill(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-B1",
+        provider_trade_id="T-B1", d1="D-B1-dup", content_fingerprint="FP-B1",
+        source_mode="RECOVERY", received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    s.commit()
+    assert out1 == "APPLIED" and out2 == "DUPLICATE_FILL"
+    assert row2.fill_quantity == 5
+    dup_id, dup_dup_of = obs2.observation_id, obs2.duplicate_of
+    s.close()
+
+    check = TestSession()
+    try:
+        dup = check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.observation_id == dup_id)
+        ).scalar_one()
+        assert dup.reconciliation_state == ReconciliationState.DUPLICATE.value
+        assert dup.duplicate_of == obs1_id
+        fills = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-B1")
+        ).scalars().all()
+        assert len(fills) == 1 and fills[0].fill_quantity == 5
+    finally:
+        check.close()
+
+
+def test_day41_1_C_conflicting_t1_replay(pg_tables) -> None:
+    """C. conflicting T1 replay: same trade_id + DIFFERENT content ⇒ CONFLICT;
+    conflict observation preserved, applied fill never overwritten."""
+    s = TestSession()
+    row1, out1, _ = fill_ledger.apply_lane_b_fill(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-C1",
+        provider_trade_id="T-C1", d1="D-C1", content_fingerprint="FP-C1",
+        source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    s.commit()
+    row2, out2, conflict_obs = fill_ledger.apply_lane_b_fill(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-C1",
+        provider_trade_id="T-C1", d1="D-C1", content_fingerprint="FP-C1-DIFF",
+        source_mode="RECOVERY", received_at=_RECEIVED_AT, fill_quantity=9,
+    )
+    s.commit()
+    assert out1 == "APPLIED" and out2 == "CONFLICT"
+    assert row2.fill_quantity == 5  # original fill NOT overwritten
+    conflict_id, conflict_state = (
+        conflict_obs.observation_id, conflict_obs.reconciliation_state,
+    )
+    s.close()
+
+    check = TestSession()
+    try:
+        conflict = check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.observation_id == conflict_id)
+        ).scalar_one()
+        assert conflict.reconciliation_state == ReconciliationState.CONFLICT.value
+        fills = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-C1")
+        ).scalars().all()
+        assert len(fills) == 1 and fills[0].fill_quantity == 5
+        assert conflict.reconciliation_state == conflict_state
+    finally:
+        check.close()
+
+
+def test_day41_1_D_rollback_after_fill_observation_write(pg_tables) -> None:
+    """D. rollback after fill-observation write: NO Phase-2 state survives —
+    while the committed Phase-1 raw evidence does (raw durability, §7)."""
+    s = TestSession()
+    raw = commit_raw_observation(
+        s, tenant_id="t1", broker="UPSTOX", source_mode="STREAM",
+        raw_payload=b'{"rb":1}', received_at=_RECEIVED_AT,
+    )  # Phase-1: its own committed transaction
+    raw_id = raw.raw_observation_id  # captured while the session is live
+    obs = record_fill_observation(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-D1",
+        observation_class=ObservationClass.ECONOMIC_FILL, d1="D-D1",
+        content_fingerprint="FP-D1", source_mode="STREAM",
+        received_at=_RECEIVED_AT, raw_observation_id=raw_id,
+        fill_quantity=5,
+    )
+    evaluate_lane_c_equivalence(s, obs)
+    s.rollback()  # Phase-2 rollback
+    s.close()
+
+    check = TestSession()
+    try:
+        # Phase-2 writes for THIS scenario's order are gone (order-scoped —
+        # the disposable DB legitimately retains other scenarios' rows).
+        assert check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.provider_order_id == "O-D1")
+        ).scalars().all() == []
+        assert check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-D1")
+        ).scalars().all() == []
+        # Phase-1 raw evidence survived the Phase-2 rollback.
+        raw_back = check.execute(
+            select(BrokerRawObservation).where(
+                BrokerRawObservation.raw_observation_id == raw_id)
+        ).scalar_one()
+        assert raw_back.raw_payload == b'{"rb":1}'
+    finally:
+        check.close()
+
+
+def test_day41_1_E_rollback_after_lineage_write(pg_tables) -> None:
+    """E. rollback after lineage/upgrade write: alias + lineage + TRADE_ID
+    rows all vanish; the AMBIGUOUS composite is unchanged (no partial state)."""
+    s = TestSession()
+    obs = record_fill_observation(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-E1",
+        observation_class=ObservationClass.ECONOMIC_FILL, d1="D-E1",
+        content_fingerprint="FP-E1", source_mode="STREAM",
+        received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    evaluate_lane_c_equivalence(s, obs)
+    s.commit()
+    composite_key = composite_eq_key("t1", "O-E1", "D-E1")
+    upgrade_composite_to_trade(
+        s, tenant_id="t1", provider_order_id="O-E1",
+        composite_key=composite_key, trade_ids=["T-E1"],
+        trigger="TRADE_HISTORY", observation_ids=[obs.observation_id],
+    )
+    s.rollback()  # upgrade unit rolled back
+    s.close()
+
+    check = TestSession()
+    try:
+        from app.broker_sync.fill_ledger import (
+            BrokerFillIdentityAlias, BrokerFillIdentityLineage,
+        )
+        # Order-scoped: this scenario's upgrade must have left NO trace.
+        assert check.execute(
+            select(BrokerFillIdentityAlias).where(
+                BrokerFillIdentityAlias.provider_order_id == "O-E1")
+        ).scalars().all() == []
+        # The upgrade's OWN lineage row (outcome UPGRADED) is gone; the
+        # pre-upgrade NO_CANDIDATE lineage was committed by the earlier
+        # equivalence transaction and legitimately remains as evidence.
+        lineage = check.execute(
+            select(BrokerFillIdentityLineage).where(
+                BrokerFillIdentityLineage.provider_order_id == "O-E1")
+        ).scalars().all()
+        assert lineage, "pre-upgrade equivalence lineage must be preserved"
+        assert all(
+            l.outcome != "UPGRADED" for l in lineage
+        ), "rolled-back upgrade lineage must not survive"
+        assert check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-E1",
+                BrokerFillLedgerFill.fill_identity_type == "TRADE_ID")
+        ).scalars().all() == []
+        composite = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.fill_eq_key == composite_key)
+        ).scalar_one()
+        assert composite.reconciliation_state == ReconciliationState.AMBIGUOUS.value
+        assert composite.frozen_reason is None  # no partial freeze survived
+    finally:
+        check.close()
+
+
+def test_day41_1_F_rollback_before_canonical_emission(pg_tables) -> None:
+    """F. rollback before canonical emission: the full economic unit (fill +
+    observation + lineage) rolls back together — nothing is applied, and a
+    later retry (G) applies exactly once."""
+    s = TestSession()
+    _, _, obs = fill_ledger.apply_lane_b_fill(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-F1",
+        provider_trade_id="T-F1", d1="D-F1", content_fingerprint="FP-F1",
+        source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=4,
+    )
+    # Canonical emission (Task2) would happen here — simulate failure BEFORE it.
+    s.rollback()
+    s.close()
+
+    check = TestSession()
+    try:
+        assert check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-F1")
+        ).scalars().all() == []
+    finally:
+        check.close()
+
+
+def test_day41_1_G_canonical_emission_retry(pg_tables) -> None:
+    """G. canonical emission retry: the same economic delivery re-submitted
+    after a committed application is a retry-safe DUPLICATE_FILL — still one
+    fill row, one RECONCILED observation."""
+    for expected in ("APPLIED", "DUPLICATE_FILL"):
+        s = TestSession()
+        _, outcome, _ = fill_ledger.apply_lane_b_fill(
+            s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-G1",
+            provider_trade_id="T-G1", d1="D-G1", content_fingerprint="FP-G1",
+            source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=6,
+        )
+        s.commit()
+        s.close()
+        assert outcome == expected
+
+    check = TestSession()
+    try:
+        assert len(check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-G1")
+        ).scalars().all()) == 1
+        reconciled = check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.provider_order_id == "O-G1",
+                BrokerFillLedgerObservation.reconciliation_state == "RECONCILED")
+        ).scalars().all()
+        assert len(reconciled) == 1
+    finally:
+        check.close()
+
+
+def test_day41_1_H_same_raw_observation_replay(pg_tables) -> None:
+    """H. same raw observation replay: reprocessing an already-classified
+    observation is a durable no-op — the composite observed_count must NOT
+    double-increment (recovery replay is idempotent)."""
+    s = TestSession()
+    obs = record_fill_observation(
+        s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-H1",
+        observation_class=ObservationClass.ECONOMIC_FILL, d1="D-H1",
+        content_fingerprint="FP-H1", source_mode="STREAM",
+        received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    s.commit()
+    state1 = evaluate_lane_c_equivalence(s, obs)
+    s.commit()
+    state2 = evaluate_lane_c_equivalence(s, obs)  # replay
+    s.commit()
+    s.close()
+    assert state1 == ReconciliationState.AMBIGUOUS.value
+    assert state2 == ReconciliationState.AMBIGUOUS.value
+
+    check = TestSession()
+    try:
+        composite = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.fill_eq_key == composite_eq_key("t1", "O-H1", "D-H1"))
+        ).scalar_one()
+        assert composite.observed_count == 1, "replay re-incremented the composite"
+    finally:
+        check.close()
+
+
+def test_day41_1_I_two_workers_same_no_id_observation(pg_tables) -> None:
+    """I. two workers evaluating the SAME no-ID observation concurrently:
+    serialization + the replay guard yield exactly ONE effective increment —
+    observed_count == 1, both workers report AMBIGUOUS."""
+    setup = TestSession()
+    obs = record_fill_observation(
+        setup, tenant_id="t1", broker="UPSTOX", provider_order_id="O-I1",
+        observation_class=ObservationClass.ECONOMIC_FILL, d1="D-I1",
+        content_fingerprint="FP-I1", source_mode="STREAM",
+        received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    setup.commit()
+    obs_id = obs.observation_id
+    setup.close()
+
+    barrier = threading.Barrier(2)
+    states: list[str] = ["", ""]
+
+    def worker(idx):
+        s = TestSession()
+        try:
+            row = s.execute(
+                select(BrokerFillLedgerObservation).where(
+                    BrokerFillLedgerObservation.observation_id == obs_id)
+            ).scalar_one()
+            states[idx] = fill_ledger.evaluate_lane_c_equivalence(s, row)
+            s.commit()
+        finally:
+            s.close()
+
+    t1 = threading.Thread(target=worker, args=(0,))
+    t2 = threading.Thread(target=worker, args=(1,))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    assert states == [ReconciliationState.AMBIGUOUS.value] * 2
+    check = TestSession()
+    try:
+        composite = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.fill_eq_key == composite_eq_key("t1", "O-I1", "D-I1"))
+        ).scalar_one()
+        assert composite.observed_count == 1, (
+            "two workers on the SAME observation double-applied the increment"
+        )
+    finally:
+        check.close()
+
+
+def test_day41_1_J_two_distinct_no_id_fills_sequential_no_merge(pg_tables) -> None:
+    """J. two distinct no-ID fills with identical attributes, sequential:
+    two preserved observations, ONE AMBIGUOUS composite with observed_count=2,
+    no economic canonical fill (fail-closed, Invariants X/Z)."""
+    s = TestSession()
+    for _ in range(2):
+        obs = record_fill_observation(
+            s, tenant_id="t1", broker="UPSTOX", provider_order_id="O-J1",
+            observation_class=ObservationClass.ECONOMIC_FILL, d1="D-J1",
+            content_fingerprint="FP-J1", source_mode="STREAM",
+            received_at=_RECEIVED_AT, fill_quantity=5,
+        )
+        assert evaluate_lane_c_equivalence(s, obs) == ReconciliationState.AMBIGUOUS.value
+        s.commit()
+    s.close()
+
+    check = TestSession()
+    try:
+        rows = check.execute(
+            select(BrokerFillLedgerObservation).where(
+                BrokerFillLedgerObservation.provider_order_id == "O-J1")
+        ).scalars().all()
+        assert len(rows) == 2
+        composite = check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.fill_eq_key == composite_eq_key("t1", "O-J1", "D-J1"))
+        ).scalar_one()
+        assert composite.observed_count == 2
+        assert composite.reconciliation_state == ReconciliationState.AMBIGUOUS.value
+        # No TRADE_ID row for THIS scenario's order (order-scoped — the
+        # shared disposable DB legitimately retains other scenarios' TRADE_IDs).
+        assert check.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.provider_order_id == "O-J1",
+                BrokerFillLedgerFill.fill_identity_type == "TRADE_ID")
+        ).scalars().all() == []
+    finally:
+        check.close()

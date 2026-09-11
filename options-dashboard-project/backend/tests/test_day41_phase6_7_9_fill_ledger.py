@@ -15,6 +15,14 @@ Verifies (Day40.5 §3/§5, Day40.6 §6, Day40.3 §4):
   different content CONFLICT (preserved, never overwritten)
 - Phase 9 edges: complete+short-fill ⇒ INVALID_OBSERVATION quarantine;
   open+filled>0 ⇒ two explicit observations; never a synthetic fill
+
+Day41.1 correction pass:
+- helpers NEVER commit — the caller owns COMMIT/ROLLBACK (Phase-2 contract);
+  Lane-B duplicate/conflict deliveries record a PRESERVED observation
+  (DUPLICATE with duplicate_of / CONFLICT) — evidence never discarded
+- atomic first-applier arbitration via INSERT … ON CONFLICT DO NOTHING
+  RETURNING is verified on real PostgreSQL in
+  test_day41_phase10_postgres_concurrency.py
 """
 from __future__ import annotations
 
@@ -377,7 +385,9 @@ def test_lane_b_first_fill_applied(db) -> None:
 
 def test_lane_b_same_trade_id_same_fingerprint_is_duplicate_fill(db) -> None:
     """Case 74-analog for Lane B: same economic identity + same content ⇒
-    DUPLICATE_FILL; NO second observation row; fill row untouched."""
+    DUPLICATE_FILL.  Day41.1: the replay is recorded as a PRESERVED DUPLICATE
+    observation (duplicate_of → the applied observation) — evidence is never
+    discarded (Invariants AA/AF); the fill row is untouched."""
     first, outcome1, obs1 = apply_lane_b_fill(
         db, tenant_id="tenant-1", broker="UPSTOX", provider_order_id="O1",
         provider_trade_id="T9", d1="D1T9", content_fingerprint="FPT9",
@@ -390,11 +400,19 @@ def test_lane_b_same_trade_id_same_fingerprint_is_duplicate_fill(db) -> None:
         source_mode="RECOVERY", received_at=_RECEIVED_AT, fill_quantity=5,
     )
     assert outcome2 == "DUPLICATE_FILL"
-    assert obs2 is None  # no duplicate observation row
+    # Day41.1: duplicate delivery keeps evidence — DUPLICATE observation row.
+    assert obs2 is not None
+    assert obs2.reconciliation_state == ReconciliationState.DUPLICATE.value
+    assert obs2.duplicate_of == obs1.observation_id
     # Fill row identity unchanged (same PK row).
     assert fill_row.fill_eq_key == first.fill_eq_key
+    assert fill_row.fill_quantity == 5  # not re-applied/overwritten
     obs_rows = db.execute(select(BrokerFillLedgerObservation)).scalars().all()
-    assert len(obs_rows) == 1
+    assert len(obs_rows) == 2  # RECONCILED + preserved DUPLICATE
+    assert {r.reconciliation_state for r in obs_rows} == {
+        ReconciliationState.RECONCILED.value,
+        ReconciliationState.DUPLICATE.value,
+    }
 
 
 def test_lane_b_same_trade_id_different_fingerprint_is_conflict(db) -> None:
@@ -439,6 +457,50 @@ def test_lane_b_concurrent_workers_same_trade_converge(db) -> None:
         select(BrokerFillLedgerFill).where(BrokerFillLedgerFill.fill_identity_type == "TRADE_ID")
     ).scalars().all()
     assert len(fills) == 1
+
+
+# ---------------------------------------------------------------------------
+# Day41.1 — caller-owned transaction contract (helpers never commit)
+# ---------------------------------------------------------------------------
+
+def test_lane_b_rollback_discards_all_phase2_writes(db) -> None:
+    """Day41.1 Defect-3: helpers never commit.  A caller ROLLBACK after a full
+    Lane-B application (fill + observation + lineage) discards EVERY Phase-2
+    write — no partial state.  (Phase-1 raw evidence is a separate committed
+    transaction and is unaffected by design.)"""
+    from app.broker_sync.fill_ledger import BrokerFillIdentityLineage
+
+    apply_lane_b_fill(
+        db, tenant_id="tenant-1", broker="UPSTOX", provider_order_id="O1",
+        provider_trade_id="TRB", d1="D1RB", content_fingerprint="FPRB",
+        source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=5,
+    )
+    db.rollback()  # caller-owned rollback of the entire Phase-2 unit
+
+    assert db.execute(select(BrokerFillLedgerFill)).scalars().all() == []
+    assert db.execute(select(BrokerFillLedgerObservation)).scalars().all() == []
+    assert db.execute(select(BrokerFillIdentityLineage)).scalars().all() == []
+
+
+def test_lane_b_explicit_commit_applies_atomically(db) -> None:
+    """Day41.1: the CALLER's commit persists the whole Lane-B unit (fill +
+    observation + lineage) — one atomic Phase-2 transaction."""
+    _, outcome, obs = apply_lane_b_fill(
+        db, tenant_id="tenant-1", broker="UPSTOX", provider_order_id="O1",
+        provider_trade_id="TRC", d1="D1RC", content_fingerprint="FPRC",
+        source_mode="STREAM", received_at=_RECEIVED_AT, fill_quantity=3,
+    )
+    assert outcome == "APPLIED"
+    db.commit()
+
+    fresh = db.execute(
+        select(BrokerFillLedgerFill).where(
+            BrokerFillLedgerFill.fill_eq_key == trade_eq_key("TRC"),
+        )
+    ).scalar_one()
+    assert fresh.reconciliation_state == ReconciliationState.RECONCILED.value
+    assert obs.reconciliation_state == ReconciliationState.RECONCILED.value
+    assert db.execute(select(BrokerFillIdentityLineage)).scalars().all() == []
 
 
 # ---------------------------------------------------------------------------

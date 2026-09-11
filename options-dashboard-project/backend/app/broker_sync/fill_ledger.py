@@ -18,6 +18,22 @@ Edge contract (Day40.5 §5 / Day41 Phase 9):
 - complete + filled_quantity < quantity  ⇒ INVALID_OBSERVATION (quarantined)
 - open + filled_quantity > 0             ⇒ two explicit observations
   (order-state + economic fill candidate) — never an implicit synthetic fill
+
+Day41.1 hardening (caller-owned transactions + atomic arbitration):
+- NO helper in this module commits.  Helpers add/update/FLUSH only; the
+  caller owns COMMIT/ROLLBACK so observation + fill + lineage + canonical
+  authorization commit atomically (Phase-2 transaction contract).  The
+  Phase-1 raw ingest commit (raw_ingress.commit_raw_observation) remains
+  intentionally independent and is unchanged.
+- Lane B first-applier arbitration is ATOMIC: the TRADE_ID fill row is
+  created with ``INSERT … ON CONFLICT DO NOTHING RETURNING`` — the database
+  itself decides whether THIS transaction created the fill.  Winner ⇒
+  APPLIED; loser ⇒ DUPLICATE_FILL (same fingerprint) or CONFLICT (different
+  fingerprint).  The "did we create it?" answer is never inferred from a
+  follow-up read (that race is the Day41.1 Defect 1).
+- Lane B duplicate/conflicting deliveries record a preserved observation
+  (DUPLICATE with duplicate_of / CONFLICT) — evidence is never discarded
+  (Invariants AA/AF, Day40.5 §5.4).
 """
 from __future__ import annotations
 
@@ -253,7 +269,13 @@ def record_fill_observation(
     initial_state: ReconciliationState = ReconciliationState.PENDING,
 ) -> BrokerFillLedgerObservation:
     """Insert ONE immutable observation row.  NEVER dedups on (D1, FPv2):
-    two identical no-ID fills produce two rows (Invariant X/AA)."""
+    two identical no-ID fills produce two rows (Invariant X/AA).
+
+    Day41.1: flush (not commit) — the caller owns COMMIT/ROLLBACK so the
+    observation, fill, lineage, and canonical authorization commit atomically
+    in the caller's Phase-2 transaction.  The Phase-1 raw commit remains
+    separate and independent (Invariants AB/AC).
+    """
     row = BrokerFillLedgerObservation(
         observation_id=str(uuid.uuid4()),
         raw_observation_id=raw_observation_id,
@@ -280,7 +302,7 @@ def record_fill_observation(
         observed_count=1,
     )
     db.add(row)
-    db.commit()
+    db.flush()
     return row
 
 
@@ -311,38 +333,110 @@ def apply_lane_b_fill(
     The provider minted the trade_id, so it is authoritative economic-fill
     identity; delivery dedup is irrelevant here.
 
-    Returns (fill_row, outcome, new_observation_row):
-    - ("DUPLICATE_FILL", None):      same trade_id + same FPv2 already known;
-                                      NO new observation row (Day40.4-style
-                                      delivery dedup is unnecessary — the
-                                      economic identity already applied).
-    - ("CONFLICT", None):            same trade_id + different FPv2 → economic
-                                      identity conflict; quarantined, no new
-                                      observation row, no overwrite.
-    - ("APPLIED", obs_row):          first sighting; TRADE_ID fill row created
-                                      RECONCILED + observation row recorded.
+    Day41.1 atomic arbitration — NO application-level check-then-insert:
+    the TRADE_ID fill row is created with ``INSERT … ON CONFLICT DO NOTHING
+    RETURNING`` and the DATABASE tells this transaction whether it created
+    the row (Defect-1 fix).  Two simultaneous first-sighting workers on the
+    same (tenant, broker, order, trade_id) can never both observe "I
+    created it": exactly one INSERT returns a row.
 
-    Concurrency: the TRADE_ID fill row is created under an ON-CONFLICT-DO-
-    NOTHING upsert keyed by the economic PK (Day40.2 §4.3A exactly-once);
-    simultaneous workers converge on one row.
+    Returns (fill_row, outcome, new_observation_row):
+    - ("APPLIED", obs_row):          THIS transaction won the arbitration —
+                                      it created the TRADE_ID fill row and
+                                      the RECONCILED observation row.
+    - ("DUPLICATE_FILL", dup_obs):    this transaction lost the race (or the
+                                      fill pre-existed) and its fingerprint
+                                      MATCHES the applied content.  A
+                                      preserved DUPLICATE observation (with
+                                      duplicate_of) records the replay —
+                                      evidence is never discarded (Invariant
+                                      AA/AF, Day40.5 §5.4); NO economic
+                                      re-application occurs.
+    - ("CONFLICT", conflict_obs):     lost/pre-existing + fingerprint
+                                      DIFFERS ⇒ economic identity conflict;
+                                      preserved observation + lineage, the
+                                      applied fill is NEVER overwritten
+                                      (Day40.3 §4.4).
+
+    Invariant (audit §1): for economic identity
+    (tenant, broker, provider_order_id, trade_id) exactly ONE worker is
+    FIRST_APPLIER (APPLIED); every other concurrent delivery yields
+    DUPLICATE_FILL or CONFLICT.  Two APPLIED results are impossible — the
+    returned-row status comes from the insert arbitration, not from "a row
+    exists after the upsert".
+
+    Caller-owned transaction (Defect-3 fix): this function performs NO
+    commit — wrap it in the caller's Phase-2 transaction (BEGIN → … →
+    COMMIT) so fill + observation + lineage commit atomically or not at
+    all.  On PostgreSQL the losing INSERT blocks only until the winning
+    transaction commits/aborts (spec-faithful exactly-once), then
+    re-classifies under a row lock.
     """
     key = trade_eq_key(provider_trade_id)
 
-    existing = db.execute(
-        select(BrokerFillLedgerFill)
-        .where(
-            BrokerFillLedgerFill.tenant_id == tenant_id,
-            BrokerFillLedgerFill.provider_order_id == provider_order_id,
-            BrokerFillLedgerFill.fill_eq_key == key,
-        )
-        .with_for_update()
-    ).scalar_one_or_none()
+    # --- ATOMIC creation attempt (Day41.1 Defect-1 fix) -------------------
+    # created is not None ⇔ THIS transaction inserted the row (winner).
+    # created is None     ⇒ row already existed or a concurrent worker won.
+    created = _upsert_trade_fill(
+        db,
+        tenant_id=tenant_id,
+        provider_order_id=provider_order_id,
+        fill_eq_key=key,
+        fill_quantity=fill_quantity,
+        fill_price=fill_price,
+        cumulative_after=cumulative_after,
+    )
 
-    if existing is not None:
-        # Same trade_id already applied: compare content fingerprints.
+    if created is None:
+        # LOST the race (or row pre-existed): classify the loser under a row
+        # lock.  On PostgreSQL, reaching this point after a DO-NOTHING insert
+        # implies the conflicting transaction has committed, so its effects
+        # (fill row + RECONCILED observation) are visible to this read.
+        existing = db.execute(
+            select(BrokerFillLedgerFill)
+            .where(
+                BrokerFillLedgerFill.tenant_id == tenant_id,
+                BrokerFillLedgerFill.provider_order_id == provider_order_id,
+                BrokerFillLedgerFill.fill_eq_key == key,
+            )
+            .with_for_update()
+        ).scalar_one()
         prior_fp = _fill_fingerprint(db, existing)
         if prior_fp == content_fingerprint:
-            return existing, "DUPLICATE_FILL", None
+            # Same economic identity + same content ⇒ DUPLICATE_FILL.
+            # Preserve the replay as a DUPLICATE observation (Day40.5 §5.4):
+            # evidence retained, NO economic re-application, fill untouched.
+            dup_obs = record_fill_observation(
+                db,
+                tenant_id=tenant_id,
+                broker=broker,
+                provider_order_id=provider_order_id,
+                observation_class=ObservationClass.ECONOMIC_FILL,
+                d1=d1,
+                content_fingerprint=content_fingerprint,
+                source_mode=source_mode,
+                received_at=received_at,
+                raw_observation_id=raw_observation_id,
+                provider_trade_id=provider_trade_id,
+                fill_quantity=fill_quantity,
+                fill_price=fill_price,
+                cumulative_after=cumulative_after,
+                provider_status=provider_status,
+                raw_payload_excerpt=raw_payload_excerpt,
+                initial_state=ReconciliationState.DUPLICATE,
+            )
+            dup_obs.duplicate_of = _first_reconciled_observation_id(db, existing)
+            _append_lineage(
+                db,
+                tenant_id=tenant_id,
+                provider_order_id=provider_order_id,
+                observation_id=dup_obs.observation_id,
+                from_eq_key=key,
+                outcome=LineageOutcome.DUPLICATE_DELIVERY,
+                evidence_ref="duplicate delivery of already-applied economic fill",
+                observed_at=received_at,
+            )
+            return existing, "DUPLICATE_FILL", dup_obs
         # Different content under the same economic identity → CONFLICT.
         # Quarantine: record the conflict observation (preserved), never
         # overwrite the applied fill row (Day40.3 §4.4 contradiction path).
@@ -377,19 +471,9 @@ def apply_lane_b_fill(
         )
         existing.reconciliation_state = ReconciliationState.CONFLICT.value
         existing.updated_at = _utcnow()
-        db.commit()
         return existing, "CONFLICT", conflict_obs
 
-    # First sighting: create the authoritative TRADE_ID fill row (upsert —
-    # a concurrent worker may have inserted between the read and the write).
-    created = _upsert_trade_fill(db,
-        tenant_id=tenant_id,
-        provider_order_id=provider_order_id,
-        fill_eq_key=key,
-        fill_quantity=fill_quantity,
-        fill_price=fill_price,
-        cumulative_after=cumulative_after,
-    )
+    # --- WINNER: this transaction created the authoritative fill row ------
     obs = record_fill_observation(
         db,
         tenant_id=tenant_id,
@@ -411,6 +495,26 @@ def apply_lane_b_fill(
     )
     return created, "APPLIED", obs
 
+
+def _first_reconciled_observation_id(
+    db: Session, fill_row: BrokerFillLedgerFill
+) -> str | None:
+    """observation_id of the fill's earliest RECONCILED observation (the
+    duplicate_of target for Lane-B replay evidence), or None."""
+    prior = db.execute(
+        select(BrokerFillLedgerObservation)
+        .where(
+            BrokerFillLedgerObservation.tenant_id == fill_row.tenant_id,
+            BrokerFillLedgerObservation.provider_order_id == fill_row.provider_order_id,
+            BrokerFillLedgerObservation.fill_eq_key == fill_row.fill_eq_key,
+            BrokerFillLedgerObservation.observation_class == ObservationClass.ECONOMIC_FILL.value,
+            BrokerFillLedgerObservation.reconciliation_state == ReconciliationState.RECONCILED.value,
+        )
+        .order_by(BrokerFillLedgerObservation.created_at.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return prior.observation_id if prior is not None else None
+
 def _upsert_trade_fill(
     db: Session,
     *,
@@ -420,9 +524,21 @@ def _upsert_trade_fill(
     fill_quantity: int | None,
     fill_price: str | None,
     cumulative_after: int | None,
-) -> BrokerFillLedgerFill:
-    """ON-CONFLICT-DO-NOTHING upsert of a TRADE_ID fill row, then read back
-    the winning row (Day40.2 §4.3A contract at the economic-PK level)."""
+) -> BrokerFillLedgerFill | None:
+    """ATOMIC first-applier arbitration for a TRADE_ID fill row (Day41.1).
+
+    ``INSERT … ON CONFLICT DO NOTHING RETURNING``: the DATABASE decides —
+    not a check-then-insert read — whether THIS transaction created the row:
+
+    - a returned row  ⇒ this transaction is the FIRST APPLIER;
+    - zero rows returned ⇒ a concurrent transaction owns the row (or it
+      already existed); the caller must re-read (under its own lock) and
+      classify the loser outcome (DUPLICATE_FILL / CONFLICT).
+
+    Works on PostgreSQL (byte-identical semantics, real SKIP-LOCKED-era
+    concurrency) and SQLite ≥ 3.35 (single-writer; tests).  Flush only —
+    never commits (Day41.1 caller-owned transaction contract).
+    """
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -442,21 +558,25 @@ def _upsert_trade_fill(
         stmt = pg_insert(BrokerFillLedgerFill).values(**values)
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["tenant_id", "provider_order_id", "fill_eq_key"]
-        )
+        ).returning(BrokerFillLedgerFill.tenant_id)
     else:
         stmt = sqlite_insert(BrokerFillLedgerFill).values(**values)
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["tenant_id", "provider_order_id", "fill_eq_key"]
-        )
-    db.execute(stmt)
-    row = db.execute(
-        select(BrokerFillLedgerFill).where(
-            BrokerFillLedgerFill.tenant_id == tenant_id,
-            BrokerFillLedgerFill.provider_order_id == provider_order_id,
-            BrokerFillLedgerFill.fill_eq_key == fill_eq_key,
-        )
-    ).scalar_one()
-    return row
+        ).returning(BrokerFillLedgerFill.tenant_id)
+    result = db.execute(stmt)
+    created = result.first() is not None
+    if created:
+        # We created the row inside this unit of work; return the ORM
+        # identity-mapped instance so callers can read/modify it naturally.
+        return db.execute(
+            select(BrokerFillLedgerFill).where(
+                BrokerFillLedgerFill.tenant_id == tenant_id,
+                BrokerFillLedgerFill.provider_order_id == provider_order_id,
+                BrokerFillLedgerFill.fill_eq_key == fill_eq_key,
+            )
+        ).scalar_one()
+    return None  # LOST the race (or row pre-existed) — atomic loser signal
 
 
 def _fill_fingerprint(db: Session, fill_row: BrokerFillLedgerFill) -> str | None:
@@ -504,6 +624,39 @@ def evaluate_lane_c_equivalence(
         observation.tenant_id, provider_order_id, observation.d1
     )
 
+    # --- Serialization on the observation row (Day41.1): re-read the
+    # observation FOR UPDATE before any decision.  Two workers evaluating the
+    # SAME observation concurrently cannot both pass the replay guard below —
+    # the second blocks until the first commits, then sees the committed
+    # state.  Lock order stays fixed: observation → composite (no cycles).
+    # populate_existing forces the identity-mapped instance to refresh from
+    # the locked read — without it a stale pre-lock snapshot (PENDING) would
+    # defeat the guard.
+    locked_observation = db.execute(
+        select(BrokerFillLedgerObservation)
+        .where(
+            BrokerFillLedgerObservation.observation_id == observation.observation_id
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if locked_observation is not None:
+        # Same PK ⇒ same identity-map instance when the caller's row was
+        # session-attached; rebinding guarantees decisions use locked truth,
+        # not a stale session snapshot (DetachedInstance callers rely on the
+        # returned state string, the durable state lives on this instance).
+        observation = locked_observation
+
+    # --- Replay safety (Day41.1): an already-classified observation is a
+    # no-op.  Reprocessing the same observation (stale-lease reclaim,
+    # recovery replay) must NEVER re-run equivalence and re-increment the
+    # composite scope — the recorded state is the durable truth.
+    if observation.reconciliation_state in (
+        ReconciliationState.AMBIGUOUS.value,
+        ReconciliationState.DUPLICATE.value,
+    ):
+        return observation.reconciliation_state
+
     # --- Case A: proven duplicate delivery (class-A evidence only) ---
     # Day40.6 §5/§6: only provider-authoritative (class A) delivery identity
     # may prove two payloads are one provider delivery.  Upstox supplies no
@@ -528,7 +681,7 @@ def evaluate_lane_c_equivalence(
                 evidence_ref="class-A delivery identity matched prior observation",
                 observed_at=observation.received_at,
             )
-            db.commit()
+            # Day41.1: no commit — caller owns the Phase-2 transaction.
             return ReconciliationState.DUPLICATE.value
 
     # --- Case B: no admissible evidence ⇒ distinct observation, quarantine ---
@@ -545,7 +698,9 @@ def evaluate_lane_c_equivalence(
     )
     # Day40.2 §4.3B: contention on the composite row is serialized by a
     # row lock (FOR UPDATE on PostgreSQL; SQLite single-writer ignores it)
-    # so the observed_count increment cannot be lost.
+    # so the observed_count increment cannot be lost.  populate_existing
+    # refreshes any stale identity-map copy so the increment starts from the
+    # committed value, never a session-local snapshot.
     composite_row = db.execute(
         select(BrokerFillLedgerFill)
         .where(
@@ -554,6 +709,7 @@ def evaluate_lane_c_equivalence(
             BrokerFillLedgerFill.fill_eq_key == composite_key,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one()
     composite_row.observed_count = composite_row.observed_count + 1
     composite_row.reconciliation_state = ReconciliationState.AMBIGUOUS.value
@@ -572,7 +728,7 @@ def evaluate_lane_c_equivalence(
         evidence_ref="no admissible delivery evidence; composite quarantined",
         observed_at=observation.received_at,
     )
-    db.commit()
+    # Day41.1: no commit — caller owns the Phase-2 transaction.
     return ReconciliationState.AMBIGUOUS.value
 
 
@@ -809,7 +965,7 @@ def upgrade_composite_to_trade(
         evidence_ref=evidence_ref,
         observed_at=_utcnow(),
     )
-    db.commit()
+    # Day41.1: no commit — caller owns the Phase-2 transaction.
     return created_rows
 
 

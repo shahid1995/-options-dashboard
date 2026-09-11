@@ -66,10 +66,18 @@ def upgrade() -> None:
         ["tenant_id", "broker", "d1", "content_fingerprint"],
         unique=False,
     )
+    # d1 lookup index (Day41.1 correction: ORM declares index=True on the d1
+    # column; the original migration omitted this index — field-matrix finding).
+    op.create_index(
+        "ix_broker_raw_observation_d1",
+        "broker_raw_observation",
+        ["d1"],
+        unique=False,
+    )
     op.create_index(
         "ix_broker_raw_observation_processing",
         "broker_raw_observation",
-        ["processing_status"],
+        ["processing_status", "created_at"],
         unique=False,
     )
 
@@ -78,5 +86,6 @@ def downgrade() -> None:
     """Downgrade schema."""
     op.drop_index("ix_broker_raw_observation_processing", table_name="broker_raw_observation")
     op.drop_index("ix_broker_raw_observation_d1_fp", table_name="broker_raw_observation")
+    op.drop_index("ix_broker_raw_observation_d1", table_name="broker_raw_observation")
     op.drop_index("ix_broker_raw_observation_tenant_id", table_name="broker_raw_observation")
     op.drop_table("broker_raw_observation")
