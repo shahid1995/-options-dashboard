@@ -1110,3 +1110,33 @@ describe("Signal Field UX Correction — Structure Connections", () => {
     expect(html).toContain("2 2");
   });
 });
+
+describe("Signal Field UX Correction 02 — OI Legend Separation", () => {
+  it("OPEN INTEREST legend is in the SVG above the strike labels", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    // Find the SVG section only (skip aria-label which contains "OPEN INTEREST" from accessible name)
+    const svgStart = html.indexOf("<svg");
+    const svgEnd = html.indexOf("</svg>");
+    const svgContent = html.substring(svgStart, svgEnd);
+    // The OI legend text element in the SVG should appear before strike labels
+    const oiLegendIndex = svgContent.indexOf("OPEN INTEREST");
+    const strikeLabelIndex = svgContent.indexOf("25,300");
+    expect(oiLegendIndex).toBeGreaterThan(-1);
+    expect(strikeLabelIndex).toBeGreaterThan(-1);
+    expect(oiLegendIndex).toBeLessThan(strikeLabelIndex);
+  });
+
+  it("CALL OI and PUT OI labels are in the SVG above the strike labels", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    const svgStart = html.indexOf("<svg");
+    const svgEnd = html.indexOf("</svg>");
+    const svgContent = html.substring(svgStart, svgEnd);
+    const callOiIndex = svgContent.indexOf("CALL OI");
+    const putOiIndex = svgContent.indexOf("PUT OI");
+    const strikeLabelIndex = svgContent.indexOf("25,300");
+    expect(callOiIndex).toBeGreaterThan(-1);
+    expect(putOiIndex).toBeGreaterThan(-1);
+    expect(callOiIndex).toBeLessThan(strikeLabelIndex);
+    expect(putOiIndex).toBeLessThan(strikeLabelIndex);
+  });
+});

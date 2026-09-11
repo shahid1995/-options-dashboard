@@ -144,6 +144,41 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
         style={{ position: "relative", overflow: "visible" }}
         aria-hidden="true"
       >
+        {/* --- Layer 0: OI Legend (rendered first to appear before strike labels) --- */}
+        <text
+          x={padding.left + plotW / 2}
+          y={padding.top - 22}
+          textAnchor="middle"
+          fill={COLOR.textFaint}
+          fontSize={9}
+          fontFamily={TYPE.data}
+          fontWeight={600}
+        >
+          OPEN INTEREST · CONTRACTS
+        </text>
+        <text
+          x={padding.left + plotW * 0.15 - 12}
+          y={padding.top - 8}
+          textAnchor="middle"
+          fill={COLOR.negative}
+          fontSize={8}
+          fontFamily={TYPE.data}
+          fontWeight={600}
+        >
+          CALL OI
+        </text>
+        <text
+          x={padding.left + plotW * 0.85 - 12}
+          y={padding.top - 8}
+          textAnchor="middle"
+          fill={COLOR.positive}
+          fontSize={8}
+          fontFamily={TYPE.data}
+          fontWeight={600}
+        >
+          PUT OI
+        </text>
+
         {/* --- Layer 1: Spot reference line --- */}
         <line
           x1={padding.left + ((spot - strikes[0]) / strikeRange) * plotW}
@@ -269,40 +304,6 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           fontFamily={TYPE.data}
         >
           {oi.put.toLocaleString("en-IN")}
-        </text>
-
-        {/* OI Legend */}
-        <text
-          x={padding.left + plotW * 0.15 - 12}
-          y={padding.top + plotH / 2 + 16}
-          textAnchor="middle"
-          fill={COLOR.negative}
-          fontSize={8}
-          fontFamily={TYPE.data}
-          fontWeight={600}
-        >
-          CALL OI
-        </text>
-        <text
-          x={padding.left + plotW * 0.85 - 12}
-          y={padding.top + plotH / 2 + 16}
-          textAnchor="middle"
-          fill={COLOR.positive}
-          fontSize={8}
-          fontFamily={TYPE.data}
-          fontWeight={600}
-        >
-          PUT OI
-        </text>
-        <text
-          x={padding.left + plotW / 2}
-          y={padding.top + plotH / 2 + 16}
-          textAnchor="middle"
-          fill={COLOR.textFaint}
-          fontSize={8}
-          fontFamily={TYPE.data}
-        >
-          OPEN INTEREST · CONTRACTS
         </text>
 
         {/* --- Layer 4: IV curve (implied volatility by strike) --- */}
