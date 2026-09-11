@@ -41,6 +41,13 @@ export const DEMO_SIGNAL_STATE = {
     vix: "13.8",
     skew: "slight put skew",
     state: "elevated",
+    byStrike: [
+      { strike: 25300, value: 15.8 },
+      { strike: 25400, value: 14.9 },
+      { strike: 25500, value: 14.2 },
+      { strike: 25600, value: 14.6 },
+      { strike: 25700, value: 15.4 },
+    ],
   },
   greeks: {
     delta: "-0.02",
@@ -70,7 +77,7 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
   // Compute layout dimensions
   const width = 600;
   const height = 320;
-  const padding = { top: 40, right: 30, bottom: 40, left: 30 };
+  const padding = { top: 50, right: 30, bottom: 50, left: 50 };
   const plotW = width - padding.left - padding.right;
   const plotH = height - padding.top - padding.bottom;
 
@@ -88,18 +95,31 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
   const callBarH = (oi.call / maxOi) * (plotH * 0.35);
   const putBarH = (oi.put / maxOi) * (plotH * 0.35);
 
-  // Compute IV arc path (illustrative)
-  const ivCenterX = padding.left + plotW * 0.25;
-  const ivCenterY = padding.top + plotH * 0.25;
-  const ivRadius = 30;
-  const ivPathD = `M${ivCenterX - ivRadius},${ivCenterY} A${ivRadius},${ivRadius} 0 0,1 ${ivCenterX + ivRadius},${ivCenterY}`;
+  // Compute OI Y-axis ticks (5 ticks from 0 to maxOi)
+  const oiTicks = [0, 50000, 100000, 150000, 200000, 250000];
 
-  // Compute Greeks vector positions
-  const greeksCenterX = padding.left + plotW * 0.75;
-  const greeksCenterY = padding.top + plotH * 0.25;
+  // Compute IV curve points
+  const ivValues = iv.byStrike.map((d) => d.value);
+  const ivMin = Math.min(...ivValues) - 0.5;
+  const ivMax = Math.max(...ivValues) + 0.5;
+  const ivRange = ivMax - ivMin;
+  const ivPlotTop = padding.top + 10;
+  const ivPlotBottom = padding.top + plotH * 0.4;
+  const ivPlotH = ivPlotBottom - ivPlotTop;
+  const ivPoints = iv.byStrike.map((d, i) => {
+    const x = padding.left + (i / (iv.byStrike.length - 1)) * plotW;
+    const y = ivPlotBottom - ((d.value - ivMin) / ivRange) * ivPlotH;
+    return { x, y, strike: d.strike, value: d.value };
+  });
+  const ivPathD = ivPoints.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
 
   // Compute structure levels
   const structureY = padding.top + plotH * 0.75;
+
+  // Find strike positions for structure connections
+  const supportStrike = strikePositions.find((s) => s.value === structure.support);
+  const pivotStrike = strikePositions.find((s) => s.value === structure.pivot);
+  const resistanceStrike = strikePositions.find((s) => s.value === structure.resistance);
 
   return (
     <div
@@ -170,7 +190,45 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           </g>
         ))}
 
-        {/* --- Layer 3: OI bars (positioning) --- */}
+        {/* --- Layer 3: OI bars with Y-axis --- */}
+        {/* Y-axis ticks and labels */}
+        {oiTicks.map((tick) => {
+          const y = padding.top + plotH / 2 - (tick / maxOi) * (plotH * 0.35);
+          return (
+            <g key={tick}>
+              <line
+                x1={padding.left - 5}
+                y1={y}
+                x2={padding.left}
+                y2={y}
+                stroke={COLOR.borderSubtle}
+                strokeWidth={1}
+              />
+              <text
+                x={padding.left - 8}
+                y={y + 3}
+                textAnchor="end"
+                fill={COLOR.textFaint}
+                fontSize={8}
+                fontFamily={TYPE.data}
+              >
+                {tick >= 1000 ? `${tick / 1000}k` : tick}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Baseline */}
+        <line
+          x1={padding.left}
+          y1={padding.top + plotH / 2}
+          x2={width - padding.right}
+          y2={padding.top + plotH / 2}
+          stroke={COLOR.borderSubtle}
+          strokeWidth={1}
+          opacity={0.5}
+        />
+
         {/* Call OI bar (left side) */}
         <rect
           x={padding.left + plotW * 0.15 - 20}
@@ -213,7 +271,41 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           {oi.put.toLocaleString("en-IN")}
         </text>
 
-        {/* --- Layer 4: IV arc (volatility) --- */}
+        {/* OI Legend */}
+        <text
+          x={padding.left + plotW * 0.15 - 12}
+          y={padding.top + plotH / 2 + 16}
+          textAnchor="middle"
+          fill={COLOR.negative}
+          fontSize={8}
+          fontFamily={TYPE.data}
+          fontWeight={600}
+        >
+          CALL OI
+        </text>
+        <text
+          x={padding.left + plotW * 0.85 - 12}
+          y={padding.top + plotH / 2 + 16}
+          textAnchor="middle"
+          fill={COLOR.positive}
+          fontSize={8}
+          fontFamily={TYPE.data}
+          fontWeight={600}
+        >
+          PUT OI
+        </text>
+        <text
+          x={padding.left + plotW / 2}
+          y={padding.top + plotH / 2 + 16}
+          textAnchor="middle"
+          fill={COLOR.textFaint}
+          fontSize={8}
+          fontFamily={TYPE.data}
+        >
+          OPEN INTEREST · CONTRACTS
+        </text>
+
+        {/* --- Layer 4: IV curve (implied volatility by strike) --- */}
         <path
           d={ivPathD}
           fill="none"
@@ -221,41 +313,62 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           strokeWidth={2}
           opacity={0.8}
         />
+        {ivPoints.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={3} fill={COLOR.intelligence} />
+        ))}
         <text
-          x={ivCenterX}
-          y={ivCenterY - ivRadius - 8}
+          x={padding.left + plotW / 2}
+          y={ivPlotTop - 6}
           textAnchor="middle"
           fill={COLOR.intelligence}
           fontSize={10}
           fontFamily={TYPE.data}
           fontWeight={600}
         >
-          IV {iv.atm}
+          IMPLIED VOLATILITY · DEMO
         </text>
 
-        {/* --- Layer 5: Greeks vectors --- */}
-        {/* Delta */}
-        <circle cx={greeksCenterX - 20} cy={greeksCenterY} r={3} fill={COLOR.textMuted} />
-        <text x={greeksCenterX - 20} y={greeksCenterY - 10} textAnchor="middle" fill={COLOR.textMuted} fontSize={8} fontFamily={TYPE.data}>
-          Δ {greeks.delta}
-        </text>
-        {/* Gamma */}
-        <circle cx={greeksCenterX} cy={greeksCenterY} r={3} fill={COLOR.textMuted} />
-        <text x={greeksCenterX} y={greeksCenterY - 10} textAnchor="middle" fill={COLOR.textMuted} fontSize={8} fontFamily={TYPE.data}>
-          Γ {greeks.gamma}
-        </text>
-        {/* Theta */}
-        <circle cx={greeksCenterX + 20} cy={greeksCenterY} r={3} fill={COLOR.positive} />
-        <text x={greeksCenterX + 20} y={greeksCenterY - 10} textAnchor="middle" fill={COLOR.positive} fontSize={8} fontFamily={TYPE.data}>
-          Θ {greeks.theta}
-        </text>
-        {/* Vega */}
-        <circle cx={greeksCenterX + 40} cy={greeksCenterY} r={3} fill={COLOR.negative} />
-        <text x={greeksCenterX + 40} y={greeksCenterY - 10} textAnchor="middle" fill={COLOR.negative} fontSize={8} fontFamily={TYPE.data}>
-          ν {greeks.vega}
-        </text>
+        {/* --- Layer 5: Structure levels with guide lines --- */}
+        {/* Support guide line */}
+        {supportStrike && (
+          <line
+            x1={supportStrike.x}
+            y1={supportStrike.y}
+            x2={supportStrike.x}
+            y2={structureY + 20}
+            stroke={COLOR.positive}
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            opacity={0.4}
+          />
+        )}
+        {/* Resistance guide line */}
+        {resistanceStrike && (
+          <line
+            x1={resistanceStrike.x}
+            y1={resistanceStrike.y}
+            x2={resistanceStrike.x}
+            y2={structureY - 20}
+            stroke={COLOR.negative}
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            opacity={0.4}
+          />
+        )}
+        {/* Pivot guide line */}
+        {pivotStrike && (
+          <line
+            x1={pivotStrike.x}
+            y1={pivotStrike.y}
+            x2={pivotStrike.x}
+            y2={structureY}
+            stroke={COLOR.strategy}
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            opacity={0.4}
+          />
+        )}
 
-        {/* --- Layer 6: Structure levels --- */}
         {/* Resistance */}
         <line
           x1={padding.left}
@@ -299,7 +412,7 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           S {structure.support.toLocaleString("en-IN")}
         </text>
 
-        {/* --- Layer 7: Market state indicator --- */}
+        {/* --- Layer 6: Market state indicator --- */}
         <circle
           cx={width / 2}
           cy={height - padding.bottom + 10}
@@ -316,6 +429,37 @@ export function SignalField({ state = DEMO_SIGNAL_STATE, style, ...rest }) {
           {marketState.label}
         </text>
       </svg>
+
+      {/* --- Greeks breakdown (responsive, full names) --- */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+          gap: SPACE.comp,
+          marginTop: SPACE.comp,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: TYPE.caption.size, fontWeight: 600, letterSpacing: "0.06em", color: COLOR.textFaint, textTransform: "uppercase" }}>Delta</div>
+          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>{greeks.delta}</div>
+          <div style={{ fontSize: "0.6875rem", color: COLOR.textFaint }}>Price sensitivity</div>
+        </div>
+        <div>
+          <div style={{ fontSize: TYPE.caption.size, fontWeight: 600, letterSpacing: "0.06em", color: COLOR.textFaint, textTransform: "uppercase" }}>Gamma</div>
+          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>{greeks.gamma}</div>
+          <div style={{ fontSize: "0.6875rem", color: COLOR.textFaint }}>Delta change</div>
+        </div>
+        <div>
+          <div style={{ fontSize: TYPE.caption.size, fontWeight: 600, letterSpacing: "0.06em", color: COLOR.textFaint, textTransform: "uppercase" }}>Theta</div>
+          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>{greeks.theta}</div>
+          <div style={{ fontSize: "0.6875rem", color: COLOR.textFaint }}>Time decay</div>
+        </div>
+        <div>
+          <div style={{ fontSize: TYPE.caption.size, fontWeight: 600, letterSpacing: "0.06em", color: COLOR.textFaint, textTransform: "uppercase" }}>Vega</div>
+          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.negative, fontFamily: TYPE.data }}>{greeks.vega}</div>
+          <div style={{ fontSize: "0.6875rem", color: COLOR.textFaint }}>Volatility sensitivity</div>
+        </div>
+      </div>
 
       {/* --- Supporting metrics below the visualization --- */}
       <div

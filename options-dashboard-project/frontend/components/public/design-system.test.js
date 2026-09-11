@@ -1000,3 +1000,113 @@ describe("Signal Field — Integration with VisualizationFrame", () => {
     expect(html).toContain("25,500");
   });
 });
+
+// =============================================================================
+// SIGNAL FIELD UX CORRECTION TESTS
+// =============================================================================
+
+describe("Signal Field UX Correction — Greeks", () => {
+  it("renders full Greek names (DELTA, GAMMA, THETA, VEGA)", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("Delta");
+    expect(html).toContain("Gamma");
+    expect(html).toContain("Theta");
+    expect(html).toContain("Vega");
+  });
+
+  it("renders Greek values", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("-0.02");
+    expect(html).toContain("0.0003");
+    expect(html).toContain("+42.15");
+    expect(html).toContain("-18.40");
+  });
+
+  it("renders Greek sensitivity hints", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("Price sensitivity");
+    expect(html).toContain("Delta change");
+    expect(html).toContain("Time decay");
+    expect(html).toContain("Volatility sensitivity");
+  });
+
+  it("Greek breakdown is deterministic", () => {
+    const html1 = renderToStaticMarkup(React.createElement(SignalField));
+    const html2 = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html1).toBe(html2);
+  });
+});
+
+describe("Signal Field UX Correction — IV Curve", () => {
+  it("DEMO_SIGNAL_STATE has byStrike array", () => {
+    expect(DEMO_SIGNAL_STATE.iv.byStrike).toBeDefined();
+    expect(DEMO_SIGNAL_STATE.iv.byStrike.length).toBe(5);
+  });
+
+  it("byStrike has one entry per displayed strike", () => {
+    const strikes = DEMO_SIGNAL_STATE.strikes;
+    const byStrike = DEMO_SIGNAL_STATE.iv.byStrike;
+    expect(byStrike.map((d) => d.strike)).toEqual(strikes);
+  });
+
+  it("renders implied volatility label", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("IMPLIED VOLATILITY");
+    expect(html).toContain("DEMO");
+  });
+
+  it("IV values are deterministic", () => {
+    const values = DEMO_SIGNAL_STATE.iv.byStrike.map((d) => d.value);
+    expect(values).toEqual([15.8, 14.9, 14.2, 14.6, 15.4]);
+  });
+});
+
+describe("Signal Field UX Correction — OI Axis and Legend", () => {
+  it("renders OPEN INTEREST label", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("OPEN INTEREST");
+    expect(html).toContain("CONTRACTS");
+  });
+
+  it("renders CALL OI and PUT OI legend", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("CALL OI");
+    expect(html).toContain("PUT OI");
+  });
+
+  it("renders OI Y-axis ticks", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("50k");
+    expect(html).toContain("100k");
+    expect(html).toContain("150k");
+    expect(html).toContain("200k");
+  });
+
+  it("OI values are deterministic", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("1,84,250");
+    expect(html).toContain("2,17,800");
+  });
+});
+
+describe("Signal Field UX Correction — Structure Connections", () => {
+  it("renders Support = 25,300", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("25,300");
+  });
+
+  it("renders Pivot = 25,500", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("25,500");
+  });
+
+  it("renders Resistance = 25,700", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("25,700");
+  });
+
+  it("structure guide lines are present (dashed vertical lines)", () => {
+    const html = renderToStaticMarkup(React.createElement(SignalField));
+    expect(html).toContain("2 2");
+  });
+});
