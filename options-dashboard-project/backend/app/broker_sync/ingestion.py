@@ -1239,38 +1239,3 @@ def _do_ingest(
         "normalized_state": normalized_state,
         "reason": None,
     }
-
-
-def ingest_canonical_event_with_retry(
-    event: BrokerSyncEvent,
-    session_factory,
-    tenant_id: str | None = None,
-    max_attempts: int = 3,
-    base_delay: float = 0.1,
-) -> dict[str, Any]:
-    """Consume a canonical broker event with CockroachDB serialization retry.
-
-    This wrapper around :func:`ingest_canonical_event` handles CockroachDB
-    serialization failures (SQLSTATE 40001) by retrying the entire operation
-    with a fresh session.
-
-    Args:
-        event: A canonical ``BrokerSyncEvent``.
-        session_factory: A callable that returns a new SQLAlchemy Session.
-        tenant_id: Optional tenant context for projection.
-        max_attempts: Maximum number of attempts (default: 3).
-        base_delay: Base delay in seconds for exponential backoff (default: 0.1).
-
-    Returns:
-        A result dictionary with ``canonical_id``, ``action``,
-        ``normalized_state``, and ``reason``.
-
-    Raises:
-        RetryExhausted: If all attempts fail with serialization failures.
-    """
-    return retry_on_serialization(
-        lambda db: ingest_canonical_event(db=db, event=event, tenant_id=tenant_id),
-        session_factory,
-        max_attempts=max_attempts,
-        base_delay=base_delay,
-    )

@@ -329,7 +329,6 @@ def make_broker_sync_event(
 from app.broker_sync.ingestion import (  # noqa: E402
     IngestionError,
     ingest_canonical_event,
-    ingest_canonical_event_with_retry,
 )
 
 __all__ = [
@@ -343,6 +342,5 @@ __all__ = [
     "make_broker_sync_event",
     # Task 2 — durable ingestion
     "ingest_canonical_event",
-    "ingest_canonical_event_with_retry",
     "IngestionError",
 ]

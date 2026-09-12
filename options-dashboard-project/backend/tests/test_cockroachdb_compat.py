@@ -5,9 +5,9 @@ and serialization retry (Gap C) implementations.
 """
 import pytest
 from unittest.mock import MagicMock, patch
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, text
+from sqlalchemy import MetaData, Table, Column, Integer, String
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.utils.db_dialect import dialect_insert
 from app.utils.retry import (
@@ -344,7 +344,6 @@ class TestUpsertTradeFillDialectDispatch:
     def test_cockroachdb_uses_postgresql_insert(self):
         """CockroachDB should use the PostgreSQL insert implementation."""
         from app.broker_sync.fill_ledger import _upsert_trade_fill
-        from sqlalchemy.dialects.postgresql import insert as pg_insert
         
         db = MagicMock(spec=Session)
         bind = MagicMock()
@@ -418,24 +417,54 @@ class TestUpsertTradeFillDialectDispatch:
 # Integration test for retry with ingest_canonical_event
 # ---------------------------------------------------------------------------
 
-class TestIngestCanonicalEventRetry:
-    """Test the ingest_canonical_event_with_retry wrapper."""
+class TestRetryWithIngestCanonicalEvent:
+    """Test retry_on_serialization with ingest_canonical_event."""
 
-    def test_wrapper_exists_and_callable(self):
-        """The retry wrapper should be importable and callable."""
-        from app.broker_sync.ingestion import ingest_canonical_event_with_retry
+    def test_retry_wrapper_uses_fresh_session_per_attempt(self):
+        """Verify that each retry attempt uses a fresh session."""
+        sessions = []
         
-        assert callable(ingest_canonical_event_with_retry)
+        def session_factory():
+            session = MagicMock(spec=Session)
+            sessions.append(session)
+            return session
+        
+        call_count = [0]
+        
+        def operation(db):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                orig = MagicMock()
+                orig.sqlstate = "40001"
+                raise OperationalError("stmt", {}, orig)
+            return {"status": "ok"}
+        
+        with patch("app.utils.retry.time.sleep"):
+            result = retry_on_serialization(operation, session_factory, max_attempts=3)
+        
+        assert result == {"status": "ok"}
+        assert len(sessions) == 2
+        # Each session should be rolled back (first) or committed (second)
+        sessions[0].rollback.assert_called_once()
+        sessions[1].commit.assert_called_once()
 
-    def test_wrapper_uses_retry_on_serialization(self):
-        """The wrapper should use retry_on_serialization internally."""
-        from app.broker_sync.ingestion import ingest_canonical_event_with_retry
+    def test_retry_exhaustion_preserves_original_error(self):
+        """Verify that exhausted retries preserve the original exception."""
+        sessions = []
         
-        # Verify the function exists and has the expected signature
-        import inspect
-        sig = inspect.signature(ingest_canonical_event_with_retry)
-        params = list(sig.parameters.keys())
+        def session_factory():
+            session = MagicMock(spec=Session)
+            sessions.append(session)
+            return session
         
-        # Should accept event and session_factory as first two params
-        assert "event" in params
-        assert "session_factory" in params
+        def operation(db):
+            orig = MagicMock()
+            orig.sqlstate = "40001"
+            raise OperationalError("serialization failure", {}, orig)
+        
+        with patch("app.utils.retry.time.sleep"):
+            with pytest.raises(RetryExhausted) as exc_info:
+                retry_on_serialization(operation, session_factory, max_attempts=2)
+        
+        assert exc_info.value.attempts == 2
+        assert len(sessions) == 2
