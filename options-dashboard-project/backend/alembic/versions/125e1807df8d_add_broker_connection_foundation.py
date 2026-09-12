@@ -78,21 +78,26 @@ def upgrade() -> None:
 
     # 4. Partial unique index: at most one default connection per (user, broker)
     #    Uses dialect detection because boolean literals differ:
-    #      PostgreSQL: WHERE is_default = true
-    #      SQLite:     WHERE is_default = 1
+    #      PostgreSQL/CockroachDB: WHERE is_default = true
+    #      SQLite:                 WHERE is_default = 1
     dialect = op.get_bind().dialect.name
-    if dialect == "postgresql":
+    if dialect in ("postgresql", "cockroachdb"):
         op.execute(
             "CREATE UNIQUE INDEX uq_one_default_per_user_broker "
             "ON broker_connections (user_id, broker) "
             "WHERE is_default = true"
         )
-    else:
+    elif dialect == "sqlite":
         # SQLite supports partial unique indexes but uses integer booleans
         op.execute(
             "CREATE UNIQUE INDEX uq_one_default_per_user_broker "
             "ON broker_connections (user_id, broker) "
             "WHERE is_default = 1"
+        )
+    else:
+        raise RuntimeError(
+            f"Unsupported dialect '{dialect}' for migration {revision}. "
+            f"Expected 'postgresql', 'cockroachdb', or 'sqlite'."
         )
 
 
