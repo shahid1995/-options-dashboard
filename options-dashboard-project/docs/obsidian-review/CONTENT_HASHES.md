@@ -1,126 +1,126 @@
 # Content Hashes (SHA-256)
 
-00 Control Center\Active Work.md
+00 Control Center/Active Work.md
 SHA256: 93d4fd7997863492fe0723a3c3d8b1a6414c3e1d86b166c41492e6769ccc954a
 
-00 Control Center\Current State.md
+00 Control Center/Current State.md
 SHA256: 0b5645d63de6aa3941eff62a409ceb65c1172c3ae040bed3e3f4d3ce9473c8e4
 
-00 Control Center\Open Questions.md
+00 Control Center/Open Questions.md
 SHA256: 92236f2d0b594d31f1f9d8bf9a0e54363530969adbf35d5ce31e79861e44e147
 
-00 Control Center\Roadmap.md
+00 Control Center/Roadmap.md
 SHA256: 0e30c56391b8b923ac922bcddd9972a717c3703fc8d3f5ee09753b4cc0d0f5ab
 
-00 Control Center\Source of Truth.md
+00 Control Center/Source of Truth.md
 SHA256: 3d37db89b668d331053c076d0c30ed7e3d0804e4dcc340bf234c43bf29bcac4a
 
-00 Control Center\StrikeNova Home.md
+00 Control Center/StrikeNova Home.md
 SHA256: f5a934412d8eeb119e5a2807f598cf0ea487540dbf4513f32e896cfe0489ef69
 
-01 Product\Product Ideas.md
-SHA256: 67cac47286f842e118ed7994e26a8b58c3e68bc1e4ca00005cee3ec1f1909823
+01 Product/Product Ideas.md
+SHA256: ea57bcd063c27e8581b7a9890d1bfdee9bb9e25b72944a3299864be004dcbdd2
 
-01 Product\Product Overview.md
-SHA256: 10f4850525727e9fa85afdea279a69b2fcbd0d4ba9891ca05070fea98c74ad20
+01 Product/Product Overview.md
+SHA256: b0904200ede7d268a2376f1bb65f4274d71f85a707a78b10c6b7a8a0be2e9522
 
-02 Architecture\Application Architecture.md
-SHA256: a4414aa300c9b9fe8758a6c321bb49f77aa0b9d33b6e14740806b332cc2f83e2
+02 Architecture/Application Architecture.md
+SHA256: 448b523df0311375bfbbd6a42f0e764eec857885b92a6d6de7b89e2ed55e4833
 
-02 Architecture\Architecture Overview.md
-SHA256: 07f0b9cb78d1caea91b3233f8513e9395e350dfbd9104237303caab63c7916c1
+02 Architecture/Architecture Overview.md
+SHA256: 2d5acf3bcd9b58eb5a140cfbce57833166ffddb82c37c42fb62be12478d55afc
 
-02 Architecture\Broker & Identity.md
-SHA256: 9e64d6f9f253e54100c34930326c3670c3c820cf4914b9399fc06b390000a55c
+02 Architecture/Broker & Identity.md
+SHA256: 270d1fb673c3931d3c3f92ca0a3735f9fc40ae91e15d2edb169d3481ff4eca84
 
-02 Architecture\Data & Persistence.md
+02 Architecture/Data & Persistence.md
 SHA256: 5d0ad680d1db87f31c0c96fb0cf555e1e9a4d3361e1df164f473182f41cb26ff
 
-02 Architecture\Infrastructure.md
+02 Architecture/Infrastructure.md
 SHA256: 51a751d15008c4413d369c949cb9f53bdb7a65bcfab5545fb9de12d0d4810ea0
 
-02 Architecture\Security.md
+02 Architecture/Security.md
 SHA256: ff5384864105cf02c2e9b6d8fd697f239e8c7662600879c8caa77703ba4e3bc1
 
-03 Quant Intelligence\GEX.md
+03 Quant Intelligence/GEX.md
 SHA256: b07d7277c7ebfa062fa2c3b98ab4fe47c095b3c7400d7de574a4210e8e01e78b
 
-03 Quant Intelligence\Greeks & IV.md
+03 Quant Intelligence/Greeks & IV.md
 SHA256: bae145ab69fba62337bffcc172d9b70516dfc913bf0773987e253d875874df45
 
-03 Quant Intelligence\Market Intelligence.md
+03 Quant Intelligence/Market Intelligence.md
 SHA256: bbb76b4158cc9bf1bcb3b5c80bb19c73ecba91eb85276e7af1e2500f16336d75
 
-03 Quant Intelligence\Quant Overview.md
+03 Quant Intelligence/Quant Overview.md
 SHA256: 34c8e8e4ae154b51b72a82f3124f9ba5f37e90ef766f9e77fbd5181feff0cc0e
 
-04 Decisions\ADR-001 BYOB & Identity Separation.md
+04 Decisions/ADR-001 BYOB & Identity Separation.md
 SHA256: 7442bca4710043214755b314c5f32084782055cf03638c4782779a4bfc61b038
 
-04 Decisions\ADR-002 GEX Modeling Convention.md
-SHA256: 08d91f81b716f0b1cb3d79a8cc4bce6f95802db7a25b18d4e5a7a060fb488b6a
+04 Decisions/ADR-002 GEX Modeling Convention.md
+SHA256: ee1b06599e37f01b26fd0a64a0026675671d826e09274c78a2d69cf6db917ca5
 
-04 Decisions\ADR-003 Cross-D1 Locking.md
+04 Decisions/ADR-003 Cross-D1 Locking.md
 SHA256: 7e1e6d34843629b84b3623823819a6b0ae2ac401b7de596ea0a121f62d980152
 
-05 Research\Research Index.md
+05 Research/Research Index.md
 SHA256: 7dbec6413c04af2f6e27e4dada4c0c3902fda8890fddf6c46b6037cf71d3b088
 
-06 Development\Day 35.md
+06 Development/Day 35.md
 SHA256: c3584d68d23ab1ac20b0ec76021d73da0262cd0a54df9c47e7c0d8b38fb56eeb
 
-06 Development\Day 39.md
+06 Development/Day 39.md
 SHA256: 599488ce10911fbe29394774115af12d0258d462f10111cbbaa5f334834663af
 
-06 Development\Day 41.md
+06 Development/Day 41.md
 SHA256: 1adc14ddfe30399cedf34e6fceecdb1675955bf3bdc5e0349c9839c3b94103ea
 
-06 Development\Phase Tracker.md
+06 Development/Phase Tracker.md
 SHA256: 5fd92a2475c3a4a0de06e76fe67a4d440b78f23e2eadb0a808939c48c38776d9
 
-07 AI & Agents\Agent Rules.md
+07 AI & Agents/Agent Rules.md
 SHA256: 4b84a3dd90eeefb316f7ff7ac68de052e0e29f13061537b9412c875775788284
 
-07 AI & Agents\AI Context.md
+07 AI & Agents/AI Context.md
 SHA256: cf0e8d12726155566e150f25311ee068a93fb30e9074611bd29e08866832db38
 
-07 AI & Agents\Current Handoff.md
+07 AI & Agents/Current Handoff.md
 SHA256: 7abfa709ec0e4aa23e1d698be749eb6a874814f150d150eceb083a0835a99e45
 
-07 AI & Agents\DeepSeek Harness.md
-SHA256: 0f8e234fa5483d73af3505372937f692a1abf7c2c528bb24b462f7ad5263c275
+07 AI & Agents/DeepSeek Harness.md
+SHA256: 8cc10338b3a673f4242695430e207f0e3fa3b37f3a8280a61cae29353577e3e6
 
-07 AI & Agents\FreeBuff.md
+07 AI & Agents/FreeBuff.md
 SHA256: 9bc0379d1827597230706da751514a0e0fbbf34e6ef0a43fc6ac24df4370af65
 
-08 Business\Business Model.md
+08 Business/Business Model.md
 SHA256: 2ef19a5f7aeb4bf2b9345ae53eb0c4e520888366a4e9c95874fb87e0bc7061d9
 
-08 Business\Future Products.md
+08 Business/Future Products.md
 SHA256: 9af11270c87f4cf9689704bef9f45a2590406ad396b55b165b7d30e7b83e6e97
 
-08 Business\Pricing & Growth.md
+08 Business/Pricing & Growth.md
 SHA256: 859f7710a2437699e7804c6ece49c4e6ea58a2d361a593c877bb90ff6c406ede
 
-Templates\Agent Handoff.md
+Templates/Agent Handoff.md
 SHA256: e5da3e411c805e7556306dfe3e3f490b068fd2d6f37e0a85e7f6f959263b7232
 
-Templates\Audit.md
+Templates/Audit.md
 SHA256: 4d011e52f0e5fed43a0c3318beab15c5b9a8ebc801abd5e739b98bb18ffbbf6f
 
-Templates\Concept.md
+Templates/Concept.md
 SHA256: 323c2eef2fbbd157d7762c3a2c1754b5505e8e81f19b1574929fff78120d0920
 
-Templates\Decision.md
+Templates/Decision.md
 SHA256: 7fbf54c0d809118245dec0bb6026136282508af874c09e671e4509912da76ea6
 
-Templates\Development Day.md
+Templates/Development Day.md
 SHA256: d981922826a669a3943da1f2b11c5ba868af226717bfa7636a0ba68f9b75f926
 
-Templates\Experiment.md
+Templates/Experiment.md
 SHA256: afe9b5c40fa3723b14b327400a8c3b4944fe43d1cadef0cc9c61254301462f7a
 
-Templates\Research.md
+Templates/Research.md
 SHA256: 39c1a72458d2de8c313abfd202316ccc0e20d77e4356dc93d5ceab9ae6ff40fe
 
 Welcome.md
