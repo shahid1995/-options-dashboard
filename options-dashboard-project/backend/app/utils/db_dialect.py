@@ -24,7 +24,7 @@ def dialect_insert(engine: Engine, table: Table):
     """
     dialect_name = engine.dialect.name
 
-    if dialect_name == "postgresql":
+    if dialect_name in ("postgresql", "cockroachdb"):
         from sqlalchemy.dialects.postgresql import insert
         return insert(table)
     elif dialect_name == "sqlite":

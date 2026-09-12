@@ -554,7 +554,7 @@ def _upsert_trade_fill(
         observed_count=1,
     )
     bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
+    if bind is not None and bind.dialect.name in ("postgresql", "cockroachdb"):
         stmt = pg_insert(BrokerFillLedgerFill).values(**values)
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["tenant_id", "provider_order_id", "fill_eq_key"]
@@ -755,7 +755,7 @@ def _upsert_composite_fill_stmt(db: Session, *, tenant_id: str, provider_order_i
         observed_count=0,
     )
     bind = db.get_bind()
-    if bind is not None and bind.dialect.name == "postgresql":
+    if bind is not None and bind.dialect.name in ("postgresql", "cockroachdb"):
         stmt = pg_insert(BrokerFillLedgerFill).values(**values)
         stmt = stmt.on_conflict_do_nothing(
             index_elements=["tenant_id", "provider_order_id", "fill_eq_key"]
