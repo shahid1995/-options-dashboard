@@ -1,7 +1,7 @@
 # Specification Quality Checklist: StrikeNova Public Home — Evidence & Trust Section
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
-**Created**: 2026-09-12
+**Created**: 2026-09-12 (Corrected)
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -28,6 +28,14 @@
 - [x] User scenarios cover primary flows
 - [x] Feature meets measurable outcomes defined in Success Criteria
 - [x] No implementation details leak into specification
+
+## Corrections Applied
+
+- [x] SC-001 placement clarified: refers to overall Home page, not section itself
+- [x] FR-006 semantics corrected: "separated from presentation logic"
+- [x] CTA destination confirmed: /about (contains philosophy + principles)
+- [x] Homepage duplication check: trust clarification, not workflow duplication
+- [x] Content claims verified: no guaranteed accuracy, no live trading, no prediction claims
 
 ## Notes
 

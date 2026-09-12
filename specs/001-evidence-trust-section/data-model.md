@@ -37,3 +37,5 @@
 - Content must NOT include technical jargon in trust messaging
 - Content must reinforce paper-trading boundary
 - Content must acknowledge uncertainty/risk in options markets
+- Content must NOT duplicate existing homepage workflow messaging
+- Content must provide trust clarification and transparency

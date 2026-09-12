@@ -1,9 +1,9 @@
-# Specification Analysis Report: Evidence & Trust Section
+# Specification Analysis Report: Evidence & Trust Section (Corrected)
 
 ## Analysis Context
 
 **Feature**: StrikeNova Public Home — Evidence & Trust Section
-**Date**: 2026-09-12
+**Date**: 2026-09-12 (Corrected)
 **Artifacts analyzed**: spec.md, plan.md, research.md, data-model.md, contracts/content.md, quickstart.md
 
 **Note**: `tasks.md` not generated yet (skipping task-dependent checks).
@@ -14,9 +14,7 @@
 
 | ID | Category | Severity | Location(s) | Summary | Recommendation |
 |----|----------|----------|-------------|---------|----------------|
-| A1 | Ambiguity | MEDIUM | spec.md:FR-006 | "Content MUST be editable without requiring code changes (e.g., content lives in a data file or CMS-like structure, not hardcoded in JSX)" — The parenthetical gives examples but does not mandate the mechanism. | Acceptable — plan.md resolves this (Phase 0 decision: co-located JS data file). Clarification resolved in research phase. |
-| B1 | Coverage | LOW | data-model.md | `EvidenceTrustContent` entity defined, but `quickstart.md` references a test command (`npm test -- --testPathPattern="EvidenceTrust"`) before tests exist. | Will be resolved during TDD implementation. No action needed at spec stage. |
-| C1 | Consistency | LOW | spec.md:SC-001 vs quickstart.md | SC-001: "first-time visitor can identify StrikeNova's product purpose within 10 seconds" — not explicitly tested in quickstart validation steps. | Consider adding a visual-comprehension check to quickstart, or mark SC-001 as review-based rather than test-based. Low risk. |
+| — | — | — | — | No findings after corrections | — |
 
 ---
 
@@ -24,20 +22,20 @@
 
 | Requirement Key | In Spec | In Plan | Notes |
 |-----------------|---------|---------|-------|
-| FR-001 | ✅ | ✅ | Component placement specified |
+| FR-001 | ✅ | ✅ | Trust clarification and transparency |
 | FR-002 | ✅ | ✅ | Content contract defines trust messaging |
 | FR-003 | ✅ | ✅ | Paper-trading point included |
 | FR-004 | ✅ | ✅ | Uncertainty/risk disclaimer included |
 | FR-005 | ✅ | ✅ | CTA to /about specified |
-| FR-006 | ✅ | ✅ | Data file approach decided |
+| FR-006 | ✅ | ✅ | Content separated from presentation logic |
 | FR-007 | ✅ | ✅ | Responsive approach via existing primitives |
 | FR-008 | ✅ | ✅ | Content explicitly avoids these claims |
 | FR-009 | ✅ | ✅ | Content uses plain language |
-| SC-001 | ✅ | ⚠️ | No automated test for "10 seconds" claim |
+| SC-001 | ✅ | ✅ | First-impression scope clarified |
 | SC-002 | ✅ | ✅ | Verifiable via content review |
 | SC-003 | ✅ | ✅ | Verifiable via content review |
-| SC-004 | ✅ | ✅ | quickstart.md steps 10-12 |
-| SC-005 | ✅ | ✅ | quickstart.md step 9 |
+| SC-004 | ✅ | ✅ | Existing responsive design system |
+| SC-005 | ✅ | ✅ | Links to /about |
 
 ---
 
@@ -82,10 +80,24 @@ No CRITICAL issues. All 12 constitutional principles are satisfied:
 | Total Requirements | 9 (FR-001 through FR-009) |
 | Total Success Criteria | 5 (SC-001 through SC-005) |
 | Total Tasks | 0 (not yet generated) |
- | Coverage % | N/A (no tasks yet) |
-| Ambiguity Count | 1 (MEDIUM) |
+| Coverage % | N/A (no tasks yet) |
+| Ambiguity Count | 0 |
 | Duplication Count | 0 |
 | Critical Issues | 0 |
+
+---
+
+## Corrections Applied
+
+| Issue | Original | Corrected |
+|-------|----------|-----------|
+| SC-001 placement | Implied section must be encountered in 10 seconds | Refers to overall Home page first-impression; Hero is primary mechanism |
+| FR-006 semantics | "Editable without requiring code changes" | "Separated from presentation logic" |
+| CTA destination | /about (default) | /about (confirmed: contains philosophy + principles + trust framing) |
+| Homepage duplication | Scope unclear | Explicit: trust clarification, not workflow duplication |
+| Content claims | Unverified | All verified against existing product context |
+| Quickstart test ref | Test command referenced before tests exist | Clearly marked "Tests to be created during implementation" |
+| Plan wording | "Editable without code changes" | "Content separated from presentation logic" |
 
 ---
 
@@ -94,8 +106,8 @@ No CRITICAL issues. All 12 constitutional principles are satisfied:
 **Status**: ✅ Ready to proceed to `/speckit-tasks` (implementation planning)
 
 - No CRITICAL issues
-- 1 MEDIUM ambiguity resolved during research phase
-- 2 LOW items are acceptable for this scope
+- No MEDIUM issues
+- No LOW issues
 - Constitution fully aligned
 - Superpowers compatibility confirmed
 

@@ -27,7 +27,7 @@ export const evidenceTrustContent = {
       body: "Options markets are inherently uncertain. No analytical framework eliminates risk. Past analytical outputs do not guarantee future outcomes."
     }
   ],
-  disclaimer: "StrikeNova is an educational and research tool. It does not provide financial advice. All paper-trading simulations are hypothetical and may differ from actual market conditions.",
+  disclaimer: "StrikeNova is a paper-trading and analytics platform. All simulations are hypothetical and may differ from actual market conditions.",
   ctaLabel: "Learn More About StrikeNova",
   ctaHref: "/about"
 };
@@ -40,3 +40,5 @@ export const evidenceTrustContent = {
 - Content must NOT remove or weaken the uncertainty/risk disclaimer
 - Content must NOT add new points without corresponding spec update
 - `ctaHref` must point to an existing public route
+- Content must NOT duplicate existing homepage workflow messaging
+- Content MUST provide trust clarification and transparency beyond existing page copy

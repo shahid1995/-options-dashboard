@@ -6,9 +6,9 @@
 
 ## Summary
 
-Add a concise "Evidence & Trust" section to the existing public Home page (`frontend/app/(public)/page.js`) that clearly communicates StrikeNova's purpose (options intelligence + paper trading for Indian index options), evidence/decision-support orientation, paper-trading boundary, and uncertainty/risk awareness. Includes a "Learn More" CTA.
+Add a concise "Evidence & Trust" section to the existing public Home page (`frontend/app/(public)/page.js`) that provides explicit trust clarification and transparency about StrikeNova's evidence-orientation, decision-support boundaries, paper-trading mode, and inherent uncertainty in options markets. Includes a "Learn More" CTA linking to `/about`.
 
-This is a purely presentational, frontend-only feature using the existing public design system. No backend changes, no new API endpoints, no database schema changes.
+This is a purely presentational, frontend-only feature using the existing public design system. No backend changes, no new API endpoints, no database schema changes. Content is separated from presentation logic via a dedicated content file.
 
 ---
 
@@ -18,7 +18,7 @@ This is a purely presentational, frontend-only feature using the existing public
 
 **Primary Dependencies**: React, Next.js 14, existing public design system (`@/components/public/*`)
 
-**Storage**: N/A (content is static, co-located with component or in a data file)
+**Storage**: N/A (content is static, in a separate content data file)
 
 **Testing**: Vitest (existing frontend test framework, `vitest.config.js`)
 
@@ -33,6 +33,7 @@ This is a purely presentational, frontend-only feature using the existing public
 - Must use existing layout primitives (`Section`, `Container` from `@/components/public/layout`)
 - Must not exceed existing Home page render budget
 - Must not introduce new npm dependencies for v1
+- Content MUST be separated from presentation logic
 
 **Scale/Scope**: One new component, one content data file, one section added to existing Home page. Approximately 3-5 files changed.
 
@@ -65,10 +66,11 @@ This is a purely presentational, frontend-only feature using the existing public
 
 | Unknown | Decision | Rationale | Alternatives Considered |
 |---------|----------|-----------|------------------------|
-| Where should section content live? | Co-located content data file in `frontend/components/public/` (e.g., `EvidenceTrustContent.js`) | Keeps content editable without code changes to component logic; matches existing pattern of co-located content in public components (e.g., `WorkflowTabs` receives tab data as props) | CMS (overkill v1), database (no backend requirement), inline in component (less maintainable) |
+| Where should section content live? | Co-located content data file in `frontend/components/public/` (e.g., `EvidenceTrustContent.js`) | Content separated from presentation logic; copy can be updated without modifying component's structural/rendering logic; matches existing pattern of co-located content in public components | CMS (overkill v1), database (no backend requirement), inline in component (content not separated from logic) |
 | What component name? | `EvidenceTrustSection` | Matches existing `Section`, `Container`, `CTASection` naming convention in public components | `TrustBadge`, `EvidenceBanner` (less aligned with layout primitives) |
 | Where to place section in Home page? | After `MarketIntelligenceGrid` (Section 04) and before `StrategyLab` (Section 05) | Logical flow: market context → evidence/trust → strategy lab. Visitor understands the market, then understands the platform's relationship to it, then explores strategy | Before hero (too early, no context), after CTA (too late, trust should precede engagement) |
 | Mobile rendering approach? | Use existing `isMobile` hook + `Section`/`Container` primitives (already responsive) | Consistent with all other sections on the page | Custom breakpoint logic (duplicates existing infrastructure) |
+| CTA destination | `/about` | About page contains product philosophy, principles, and explicit "NOT A GUARANTEED-PROFIT SYSTEM" positioning. Better supports trust clarification and transparency goals than `/how-it-works` which focuses on workflow steps | `/how-it-works` (focuses on workflow steps, not philosophy/boundary clarification) |
 
 ### Phase 0 Output
 
@@ -124,7 +126,7 @@ EvidenceTrustSection
 4. Verify headline communicates evidence/decision-support orientation
 5. Verify paper-trading boundary is stated
 6. Verify risk/uncertainty disclaimer is present
-7. Verify "Learn More" link is visible and links to `/about`
+7. Verify "Learn More About StrikeNova" link is visible and links to `/about`
 8. Resize browser to 320px, 768px, 1280px — verify no layout breakage
 9. Verify no claims of guaranteed accuracy or live trading
 
@@ -157,7 +159,7 @@ frontend/
 └── components/
     └── public/
         ├── EvidenceTrustSection.js   # NEW: presentational component
-        └── EvidenceTrustContent.js   # NEW: static content data
+        └── EvidenceTrustContent.js   # NEW: static content separated from logic
 ```
 
 **Files changed**: 1 (`page.js`)
