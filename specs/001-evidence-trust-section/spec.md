@@ -14,21 +14,20 @@
 
 ### User Story 1 — First-Time Visitor Understands StrikeNova's Purpose (Priority: P1)
 
-A visitor lands on the public Home page. Within seconds, they understand:
-- StrikeNova is an options intelligence and paper-trading platform
-- It is designed for Indian index options (NIFTY)
-- Its outputs are decision-support, not guaranteed trading outcomes
+A visitor lands on the public Home page. Within seconds, they understand StrikeNova is an options-intelligence platform for structured decisions. As they scroll, they find explicit trust clarification:
 - The current product mode is paper trading only
+- Outputs are decision-support, not guaranteed trading outcomes
+- StrikeNova is designed for Indian index options (NIFTY)
 
-**Why this priority**: First impressions shape trust. A visitor who misunderstands the product as a guaranteed-profit tool will make bad decisions. Clear product positioning is foundational. The existing Hero section is the primary first-impression mechanism.
+**Why this priority**: First impressions shape trust. The existing Hero provides initial product identity. The Evidence & Trust section adds explicit paper-trading boundary and trust framing that the Hero does not currently state.
 
-**Independent Test**: Can be fully tested by viewing the Home page and verifying the presence of concise, accurate product-positioning text that communicates purpose, evidence-orientation, and paper-trading boundary.
+**Independent Test**: Can be fully tested by viewing the Home page and verifying the Hero communicates product identity (SC-001) and the Evidence & Trust section communicates paper-trust boundary (SC-002).
 
 **Acceptance Scenarios**:
 
-1. **Given** a first-time visitor on the Home page, **When** they scan the hero or primary content area, **Then** they see a concise statement that StrikeNova is an options intelligence and paper-trading platform for Indian index options.
-2. **Given** a first-time visitor, **When** they look for product-mode clarity, **Then** they can identify within one section that the platform is paper-trading only (no live execution inferred unless explicitly authorized).
-3. **Given** a first-time visitor, **When** they seek evidence/decision context, **Then** they see language indicating the platform supports structured decision-making rather than guaranteed prediction accuracy.
+1. **Given** a first-time visitor on the Home page, **When** they scan the hero or primary content area, **Then** they see a concise statement identifying StrikeNova as an options-intelligence platform for structured decisions.
+2. **Given** a first-time visitor, **When** they read the Evidence & Trust section, **Then** they can identify that the platform is paper-trading only (no live execution inferred unless explicitly authorized).
+3. **Given** a first-time visitor, **When** they read the Evidence & Trust section, **Then** they see language indicating the platform supports structured decision-making rather than guaranteed prediction accuracy.
 
 ---
 
@@ -92,7 +91,7 @@ A visitor who wants to understand StrikeNova's philosophy and principles more de
 
 ### Measurable Outcomes
 
-- **SC-001**: Within the first 10 seconds of viewing the public Home page, a first-time visitor can identify what StrikeNova is and that the current product mode is paper trading.
+- **SC-001**: Within the first 10 seconds of viewing the public Home page, a first-time visitor can identify StrikeNova as an options-intelligence platform for structured decisions.
 - **SC-002**: A reviewer confirms the paper-trading boundary is explicitly stated in the evidence/trust section.
 - **SC-003**: A reviewer confirms no claims of guaranteed accuracy or live-trading capability exist in the section.
 - **SC-004**: The section renders without layout breakage at 320px, 768px, and 1280px viewport widths using the existing responsive design system.

@@ -91,7 +91,7 @@ No CRITICAL issues. All 12 constitutional principles are satisfied:
 
 | Issue | Original | Corrected |
 |-------|----------|-----------|
-| SC-001 placement | Implied section must be encountered in 10 seconds | Refers to overall Home page first-impression; Hero is primary mechanism |
+| SC-001 placement | Implied section must be encountered in 10 seconds | SC-001 applies to overall homepage first-impression (product identity only). Evidence & Trust section handles paper-trading boundary (SC-002). |
 | FR-006 semantics | "Editable without requiring code changes" | "Separated from presentation logic" |
 | CTA destination | /about (default) | /about (confirmed: contains philosophy + principles + trust framing) |
 | Homepage duplication | Scope unclear | Explicit: trust clarification, not workflow duplication |

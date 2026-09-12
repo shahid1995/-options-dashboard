@@ -31,7 +31,7 @@
 
 ## Corrections Applied
 
-- [x] SC-001 placement clarified: refers to overall Home page, not section itself
+- [x] SC-001 placement clarified: applies to overall homepage first-impression (product identity only). Evidence & Trust section handles paper-trading boundary (SC-002).
 - [x] FR-006 semantics corrected: "separated from presentation logic"
 - [x] CTA destination confirmed: /about (contains philosophy + principles)
 - [x] Homepage duplication check: trust clarification, not workflow duplication
