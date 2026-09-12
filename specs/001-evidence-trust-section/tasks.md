@@ -38,10 +38,10 @@
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T004 [P] Define content contract data file at `frontend/components/public/EvidenceTrustContent.js` with all required fields: `eyebrow`, `title`, `description`, `points` (array of `{title, body}`), `disclaimer`, `ctaLabel`, `ctaHref`. Content MUST NOT claim guaranteed accuracy, live trading, or prediction capability. CTA MUST link to `/about`. Per `specs/001-evidence-trust-section/contracts/content.md`.
-- [ ] T005 [P] Create component test file at `frontend/components/public/EvidenceTrustSection.test.js` with initial test stubs that will fail before implementation (TDD RED phase readiness).
+- [ ] T004 Define content contract data file at `frontend/components/public/EvidenceTrustContent.js` with all required fields: `eyebrow`, `title`, `description`, `points` (array of `{title, body}`), `disclaimer`, `ctaLabel`, `ctaHref`. Content MUST NOT claim guaranteed accuracy, live trading, or prediction capability. CTA MUST link to `/about`. Per `specs/001-evidence-trust-section/contracts/content.md`.
+- [ ] T005 Create component test file at `frontend/components/public/EvidenceTrustSection.test.js` with initial test stubs that will fail before implementation (TDD RED phase readiness).
 
-**Checkpoint**: Foundation ready - user story implementation can now begin in parallel
+**Checkpoint**: Foundation ready - user story implementation can now begin
 
 ---
 
@@ -53,21 +53,21 @@
 
 ### Tests for User Story 1 (TDD RED Phase)
 
-> **NOTE**: Write these tests FIRST, ensure they FAIL before implementation
+> **NOTE**: Write these tests FIRST, ensure they FAIL before implementation. All tests go into the same file and must be written sequentially.
 
-- [ ] T006 [P] [US1] Add component test: renders "EVIDENCE & TRUST" eyebrow text in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T007 [P] [US1] Add component test: renders paper-trading boundary statement in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T008 [P] [US1] Add component test: renders uncertainty/risk disclaimer in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T009 [P] [US1] Add component test: renders CTA link to `/about` in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T010 [P] [US1] Add component test: does NOT render claims of guaranteed accuracy or live trading in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T011 [P] [US1] Add component test: renders without errors at mobile (320px) viewport in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T006 [US1] Add component test: renders "EVIDENCE & TRUST" eyebrow text in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T007 [US1] Add component test: renders paper-trading boundary statement in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T008 [US1] Add component test: renders uncertainty/risk disclaimer in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T009 [US1] Add component test: renders CTA link to `/about` in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T010 [US1] Add component test: does NOT render claims of guaranteed accuracy or live trading in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T011 [US1] Add component test: renders without errors at mobile (320px) viewport in `frontend/components/public/EvidenceTrustSection.test.js`
 
 ### Implementation for User Story 1
 
 - [ ] T012 [US1] Create `EvidenceTrustSection` component in `frontend/components/public/EvidenceTrustSection.js` that imports content from `EvidenceTrustContent.js` and renders using `Section`, `Container`, `SectionTitle` from layout primitives and design tokens. Uses responsive `isMobile` hook for grid layout. Per `specs/001-evidence-trust-section/plan.md`.
 - [ ] T013 [US1] Integrate `EvidenceTrustSection` into `frontend/app/(public)/page.js` after `MarketIntelligenceGrid` (Section 04) and before `WorkflowTabs` (Section 05). Per `specs/001-evidence-trust-section/plan.md` Phase 0 decision.
 
-**Checkpoint**: At this point, User Story 1 should be fully functional and testable independently. Run `npm test -- --testPathPattern="EvidenceTrust"` — tests should pass (GREEN). Then run `npm run dev` and verify in browser.
+**Checkpoint**: At this point, User Story 1 should be fully functional and testable independently. Run `npm test -- EvidenceTrustSection.test.js` from `frontend/` directory — tests should pass (GREEN). Then run `npm run dev` and verify in browser.
 
 ---
 
@@ -79,10 +79,10 @@
 
 ### Tests for User Story 2 (TDD RED Phase)
 
-- [ ] T014 [P] [US2] Add component test: renders "Decision-Support, Not Decision-Making" point in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T015 [P] [US2] Add component test: renders "Uncertainty Is Inherent" point in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T016 [P] [US2] Add component test: renders "Transparency Over Hype" point in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T017 [P] [US2] Add component test: disclaimer explicitly states uncertainty/risk in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T014 [US2] Add component test: renders "Decision-Support, Not Decision-Making" point in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T015 [US2] Add component test: renders "Uncertainty Is Inherent" point in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T016 [US2] Add component test: renders "Transparency Over Hype" point in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T017 [US2] Add component test: disclaimer explicitly states uncertainty/risk in `frontend/components/public/EvidenceTrustSection.test.js`
 
 ### Implementation for User Story 2
 
@@ -100,8 +100,8 @@
 
 ### Tests for User Story 3 (TDD RED Phase)
 
-- [ ] T019 [P] [US3] Add component test: renders CTA with label "Learn More About StrikeNova" in `frontend/components/public/EvidenceTrustSection.test.js`
-- [ ] T020 [P] [US3] Add component test: CTA links to `/about` in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T019 [US3] Add component test: renders CTA with label "Learn More About StrikeNova" in `frontend/components/public/EvidenceTrustSection.test.js`
+- [ ] T020 [US3] Add component test: CTA links to `/about` in `frontend/components/public/EvidenceTrustSection.test.js`
 
 ### Implementation for User Story 3
 
@@ -116,12 +116,12 @@
 
 **Purpose**: Improvements that affect multiple user stories and final verification
 
-- [ ] T023 [P] Run `npm test -- --testPathPattern="EvidenceTrust"` — verify all tests pass (GREEN phase)
-- [ ] T024 [P] Run `npm run dev` and verify in browser at 320px, 768px, 1280px viewports — verify no layout breakage
+- [ ] T023 Run `npm test -- EvidenceTrustSection.test.js` from `frontend/` directory — verify all tests pass (GREEN phase)
+- [ ] T024 Run `npm run dev` and verify in browser at 320px, 768px, 1280px viewports — verify no layout breakage
 - [ ] T025 Verify no claims of guaranteed accuracy or live trading in rendered output
 - [ ] T026 Verify section provides trust clarification rather than duplicating existing homepage messaging
-- [ ] T027 Run existing public page tests to verify no regression: `npm test -- --testPathPattern="public"`
-- [ ] T028 Run quickstart.md validation steps from `specs/001-evidence-trust-section/quickstart.md`
+- [ ] T027 Run existing public page tests to verify no regression: `npm test -- public` from `frontend/` directory
+- [ ] T028 Run quickstart.md validation steps from `specs/001-evidence-trust-section/quickstart.md`. Verify homepage opens, Hero is visible and communicates options-intelligence / structured-decisions identity, Evidence & Trust is a later trust-clarification section, and no requirement exists for the new section to appear within the first 10 seconds.
 
 ---
 
@@ -132,13 +132,13 @@
 - **Setup (Phase 1)**: No dependencies — can start immediately
 - **Foundational (Phase 2)**: Depends on Setup completion — BLOCKS all user stories
 - **User Stories (Phase 3+)**: All depend on Foundational phase completion
-  - User story phases can be combined (all tasks in Phase 3 must complete before Phase 4)
+  - User story phases proceed sequentially (US1 → US2 → US3) because tests for each story are additive and build on the same test file
 - **Polish (Final Phase)**: Depends on all desired user stories being complete
 
 ### User Story Dependencies
 
 - **User Story 1 (P1)**: Can start after Foundational (Phase 2) — No dependencies on other stories
-- **User Story 2 (P2)**: Should follow User Story 1 — depends on content contract and component structure from US1
+- **User Story 2 (P2)**: Should follow User Story 1 — depends on component structure from US1
 - **User Story 3 (P3)**: Should follow User Story 2 — depends on CTA and content from US1/US2
 
 ### Within Each User Story
@@ -151,27 +151,27 @@
 
 ### Parallel Opportunities
 
-- All Setup tasks marked [P] can run in parallel
-- All Foundational tasks marked [P] can run in parallel (within Phase 2)
-- All tests for a user story marked [P] can run in parallel
-- All content contract and test file creation tasks marked [P] can run in parallel
+- All Setup tasks (T001–T003) can run in parallel (different read-only files)
+- T004 (content file) and T005 (test file) can run in parallel (different files)
+- Within each story, tests go into the same file and must be written sequentially (NOT parallel)
+- T021 (content verification) and T022 (route verification) can run in parallel (different files)
 
 ---
 
 ## Parallel Example: User Story 1
 
 ```bash
-# Launch all tests for User Story 1 together (TDD RED):
-Task: "Add component test: renders eyebrow text"
-Task: "Add component test: renders paper-trading boundary"
-Task: "Add component test: renders uncertainty disclaimer"
-Task: "Add component test: renders CTA link"
-Task: "Add component test: does NOT render guaranteed accuracy"
-Task: "Add component test: renders at mobile viewport"
+# Tests go into the same file sequentially (NOT parallel):
+Task T006: "Add test for eyebrow text"
+Task T007: "Add test for paper-trading boundary"
+Task T008: "Add test for uncertainty disclaimer"
+Task T009: "Add test for CTA link"
+Task T010: "Add test for no guaranteed claims"
+Task T011: "Add test for mobile viewport"
 
 # Then implement:
-Task: "Create EvidenceTrustSection component"
-Task: "Integrate into page.js"
+Task T012: "Create EvidenceTrustSection component"
+Task T013: "Integrate into page.js"
 ```
 
 ---
@@ -184,14 +184,14 @@ Task: "Integrate into page.js"
 2. Complete Phase 2: Foundational (CRITICAL — blocks all stories)
 3. Complete Phase 3: User Story 1
 4. **STOP and VALIDATE**: Test User Story 1 independently
-5. Deploy/demo if ready
+5. Validate locally / browser verification
 
 ### Incremental Delivery
 
 1. Complete Setup + Foundational → Foundation ready
-2. Add User Story 1 → Test independently → Deploy/Demo (MVP!)
-3. Add User Story 2 → Test independently → Deploy/Demo
-4. Add User Story 3 → Test independently → Deploy/Demo
+2. Add User Story 1 → Test independently → Validate locally / browser verification (MVP!)
+3. Add User Story 2 → Test independently → Validate locally / browser verification
+4. Add User Story 3 → Test independently → Validate locally / browser verification
 5. Each story adds value without breaking previous stories
 
 ---
@@ -224,7 +224,7 @@ Task: "Integrate into page.js"
 
 | Success Criteria | Task IDs |
 |------------------|----------|
-| SC-001 | T006, T012, T013 |
+| SC-001 | T028 |
 | SC-002 | T007, T012 |
 | SC-003 | T010, T025 |
 | SC-004 | T011, T024 |
