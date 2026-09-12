@@ -2,7 +2,7 @@
 
 **Validation ID:** CRDB-LIVE-VALIDATION-001  
 **Date:** 2026-09-12  
-**Status:** 🔴 ROOT CAUSE CONFIRMED — DDL Visibility Incompatibility  
+**Status:** 🟢 Migration split SUCCESS — NEW BLOCKER FOUND  
 **Baseline commit:** `55ab353e5da1ba1f1a18c7a3c66a845e5d326252`  
 **Validation commit:** `2ee6effacd07ca5b330fc7d8af5b42aca5f52f02`
 
@@ -17,8 +17,8 @@
 | psycopg | 3.3.5 |
 | sqlalchemy-cockroachdb | 2.0.4 |
 | Python | 3.11.16 |
-| Test database | test_ddl (disposable, in-memory) |
-| Connection | `cockroachdb+psycopg://root@localhost:26257/test_ddl?sslmode=disable` |
+| Test database | strikenova_validation (disposable, in-memory) |
+| Connection | `cockroachdb+psycopg://root@localhost:26257/strikenova_validation?sslmode=disable` |
 
 ---
 
@@ -38,40 +38,60 @@ unsupported comparison operator: <bool> = <int>
 
 **Root cause:** Migration used `dialect == "postgresql"` which excluded CockroachDB, falling into the SQLite branch with `WHERE is_default = 1`. CockroachDB rejects integer comparison against BOOL columns.
 
-**Fix applied:** Added `cockroachdb` branch:
-```python
-if dialect in ("postgresql", "cockroachdb"):
-    op.execute("... WHERE is_default = true")
-elif dialect == "sqlite":
-    op.execute("... WHERE is_default = 1")
-else:
-    raise RuntimeError(...)
-```
+**Fix applied:** Added `cockroachdb` branch in commit `2ee6eff`.
 
 **Status:** ✅ Resolved
 
 ---
 
-### Attempt 2 — Migration `f7a3c2d1e94b` (ROOT CAUSE CONFIRMED)
+### Attempt 2 — Migration `f7a3c2d1e94b` (RESOLVED via split)
 
-**Error:**
+**Original Error:**
 ```
 sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedColumn) 
 column "trading_status" does not exist
-
-[SQL: 
-        UPDATE broker_connections
-        SET trading_status = 'active'
-        WHERE status = 'connected'
-        ]
 ```
 
-**Migration:** `f7a3c2d1e94b_add_capability_separation_columns.py`  
-**Failing line:** 55-61
+**Root cause:** CockroachDB does not expose DDL changes to subsequent DML within the same transaction.
+
+**Investigation:** See Section 3 below for full evidence.
+
+**Fix applied:** Split migration `f7a3c2d1e94b` into:
+- `f7a3c2d1e94b` — DDL only (ADD COLUMN operations)
+- `9e4d8c2a1f7b` — DML (backfill UPDATEs) + CREATE INDEX
+- `3f8a2e9c4d5b` — Merge revision to rejoin migration chain
+
+**Verification:** Schema now contains all four new columns:
+- data_status (VARCHAR(20), NOT NULL, DEFAULT 'inactive')
+- data_source (VARCHAR(20), nullable)
+- trading_status (VARCHAR(20), NOT NULL, DEFAULT 'inactive')
+- trading_static_ip (VARCHAR(45), nullable)
+
+**Status:** ✅ Resolved
 
 ---
 
-## 3. Root Cause Investigation
+### Attempt 3 — Migration `b8c9f1d2e34a` (NEW BLOCKER)
+
+**Error:**
+```
+sqlalchemy.exc.NotSupportedError: (psycopg.errors.FeatureNotSupported) 
+cannot create partial index on column "google_sub" (12) which is not public
+
+[SQL: CREATE UNIQUE INDEX ix_users_google_sub ON users (google_sub) 
+      WHERE google_sub IS NOT NULL]
+```
+
+**Migration:** `b8c9f1d2e34a_add_google_sub_to_users.py`  
+**Failing line:** 23-30
+
+**Root cause:** CockroachDB does not support partial indexes on columns that are not yet public (i.e., the column was just added in the same transaction). The `postgresql_where` parameter creates a partial index, which requires the column to be committed first.
+
+**Classification:** 🔴 CONFIRMED BLOCKER
+
+---
+
+## 3. Root Cause Investigation (Attempt 2)
 
 ### 3.1 Migration Sequence
 
@@ -156,51 +176,23 @@ After `ALTER TABLE ADD COLUMN` within a transaction:
 
 CockroachDB genuinely does not expose the new schema version to subsequent DML within the same transaction. This is a fundamental difference from PostgreSQL where DDL is transactional and immediately visible.
 
-**Evidence:**
-- Mode A (same transaction): Column not visible to SHOW COLUMNS or UPDATE
-- Mode B (separate transactions): Column visible and UPDATE succeeds
-- Mode C (SQLAlchemy): Same failure as raw psycopg
-
-This is NOT:
-- A SQLAlchemy dialect issue (raw psycopg also fails)
-- An Alembic configuration issue (same behavior with raw connections)
-- A migration ordering issue (the column simply isn't visible yet)
-
 ---
 
-## 4. Recommended Minimal Fix
-
-The migration must be restructured so that:
-1. All DDL (ADD COLUMN) is committed first
-2. Then DML (UPDATE) runs in a separate transaction
-
-**Option 1: Split into two migrations**
-- Migration 1: Add all 4 columns
-- Migration 2: UPDATE statements + CREATE INDEX
-
-**Option 2: Use `batch_alter_table` with explicit commit**
-- May not work as Alembic still wraps in single transaction
-
-**Option 3: Use `transactional_ddl = False` in env.py**
-- Would affect all migrations globally
-- Not recommended without broader analysis
-
-**Recommended: Option 1 (split migration)**
-
----
-
-## 5. Status Summary
+## 4. Status Summary
 
 | Migration | Status |
 |-----------|--------|
 | `d3eb45a2e046` (baseline) | ✅ Success |
 | `125e1807df8d` (broker connection foundation) | ✅ Success (after fix) |
 | `a0deb75ad22f` (password hash) | ✅ Success |
-| `f7a3c2d1e94b` (capability separation) | 🔴 BLOCKED — DDL visibility |
+| `f7a3c2d1e94b` (capability separation DDL) | ✅ Success (after split) |
+| `9e4d8c2a1f7b` (capability separation DML) | ✅ Success |
+| `3f8a2e9c4d5b` (merge) | ✅ Success |
+| `b8c9f1d2e34a` (google_sub) | 🔴 BLOCKED — Partial index on non-public column |
 
 ---
 
-## 6. Findings
+## 5. Findings
 
 | Area | Status | Notes |
 |------|--------|-------|
@@ -208,22 +200,18 @@ The migration must be restructured so that:
 | Gap B (fill ledger) | 🟢 SAFE | `fill_ledger.py` routes CRDB to PostgreSQL path |
 | Gap C (retry boundary) | 🟡 CAUTION | `retry_on_serialization()` preserved; no broken wrappers remain |
 | Migration `125e1807df8d` | 🟢 FIXED | `cockroachdb` branch added; partial index creates correctly |
-| Migration `f7a3c2d1e94b` | 🔴 BLOCKED | DDL not visible to DML in same transaction |
-| Full migration suite | 🔴 BLOCKED | Cannot proceed past `f7a3c2d1e94b` |
+| Migration `f7a3c2d1e94b` | 🟢 FIXED | Split into DDL-only + DML migrations |
+| Migration `b8c9f1d2e34a` | 🔴 BLOCKED | Partial index on column added in same transaction |
 
 ---
 
-## 7. Final Decision
+## 6. Final Decision
 
-### ROOT CAUSE CONFIRMED — READY FOR TARGETED FIX
+### Migration split SUCCESS — READY TO CONTINUE CRDB VALIDATION
 
-**Root cause:** CockroachDB does not make DDL changes (ALTER TABLE ADD COLUMN) visible to subsequent DML statements within the same transaction. The migration `f7a3c2d1e94b` adds columns and then immediately updates them in the same transaction, which works in PostgreSQL but fails in CockroachDB.
+The targeted fix for migration `f7a3c2d1e94b` has been implemented and verified. The DDL/DML split approach works correctly on CockroachDB.
 
-**Recommended fix:** Split migration `f7a3c2d1e94b` into two separate migrations:
-1. First migration: Add all 4 columns (data_status, data_source, trading_status, trading_static_ip)
-2. Second migration: UPDATE statements + CREATE INDEX statements
-
-This is a validation checkpoint. No code changes were made to the failing migration.
+**Next blocker:** Migration `b8c9f1d2e34a` (add google_sub) fails because CockroachDB does not support partial indexes (`postgresql_where`) on columns that were added in the same transaction. This requires a similar split approach.
 
 ---
 

@@ -1,4 +1,4 @@
-"""Add capability separation columns to broker_connections
+"""Add capability separation columns to broker_connections (DDL only)
 
 Phase 10.2B-6: Separate market data and trading capabilities.
 
@@ -6,6 +6,10 @@ Phase 10.2B-6: Separate market data and trading capabilities.
 - trading_status: tracks whether trading capability is active
 - trading_static_ip: per-user static IP for trading
 - data_source: how the data token was obtained (analytics_token / oauth_token)
+
+NOTE: This migration contains ONLY DDL (ADD COLUMN).
+The corresponding DML (backfill UPDATEs) and index creation are in the next revision
+to ensure CockroachDB compatibility (DDL must be committed before DML can see new columns).
 
 Revision ID: f7a3c2d1e94b
 Revises: a0deb75ad22f
@@ -15,7 +19,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-# revision identifiers
+# revision identifiers, used by Alembic.
 revision = "f7a3c2d1e94b"
 down_revision = "a0deb75ad22f"
 branch_labels = None
@@ -23,6 +27,7 @@ depends_on = None
 
 
 def upgrade() -> None:
+    """Add capability separation columns (DDL only)."""
     # data_status: "inactive" | "active" | "expired"
     # Defaults to "inactive" for existing rows (no data capability yet)
     op.add_column(
@@ -50,45 +55,9 @@ def upgrade() -> None:
         sa.Column("trading_static_ip", sa.String(45), nullable=True),
     )
 
-    # Backfill: existing "connected" rows should have trading_status = "active"
-    # and data_status = "active" if they have an analytics token
-    op.execute(
-        """
-        UPDATE broker_connections
-        SET trading_status = 'active'
-        WHERE status = 'connected'
-        """
-    )
-    op.execute(
-        """
-        UPDATE broker_connections
-        SET data_status = 'active',
-            data_source = CASE
-                WHEN broker_analytics_token_encrypted IS NOT NULL THEN 'analytics_token'
-                ELSE 'oauth_token'
-            END
-        WHERE status = 'connected'
-          AND (broker_analytics_token_encrypted IS NOT NULL
-               OR broker_api_key_encrypted IS NOT NULL)
-        """
-    )
-
-    # Create index for efficient data capability lookups
-    op.create_index(
-        "ix_broker_connections_data_status",
-        "broker_connections",
-        ["data_status"],
-    )
-    op.create_index(
-        "ix_broker_connections_trading_status",
-        "broker_connections",
-        ["trading_status"],
-    )
-
 
 def downgrade() -> None:
-    op.drop_index("ix_broker_connections_trading_status", table_name="broker_connections")
-    op.drop_index("ix_broker_connections_data_status", table_name="broker_connections")
+    """Drop capability separation columns."""
     op.drop_column("broker_connections", "trading_static_ip")
     op.drop_column("broker_connections", "trading_status")
     op.drop_column("broker_connections", "data_source")
