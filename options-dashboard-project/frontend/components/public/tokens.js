@@ -1,12 +1,11 @@
 // =============================================================================
-// StrikeNova Public Design System — Tokens
+// StrikeNova Design System — Canonical Tokens
 // =============================================================================
-// Semantic tokens for the V1.2 public workstream.
+// This file is the single source of truth for design tokens in the StrikeNova
+// frontend. It is consumed by BOTH the public marketing site and the
+// authenticated application (via the `C` compatibility bridge in lib/ui.js).
 //
-// ARCHITECTURE SAFETY:
-// This file is PUBLIC-ONLY. It does not modify or re-export any token used by
-// the authenticated application (lib/ui.js `C` object). Public components must
-// import from this module, not from `@/lib/ui`, to avoid coupling.
+// Do not introduce a second token system. Extend these exports instead.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
