@@ -13,6 +13,7 @@ import PlatformPreview from "@/components/public/PlatformPreview";
 import AnalyticalLayerGrid from "@/components/public/AnalyticalLayerGrid";
 import SignalMetricOverview from "@/components/public/SignalMetricOverview";
 import MarketIntelligenceGrid from "@/components/public/MarketIntelligenceGrid";
+import EvidenceTrustSection from "@/components/public/EvidenceTrustSection";
 import WorkflowTabs from "@/components/public/WorkflowTabs";
 import PayoffMiniChart from "@/components/public/PayoffMiniChart";
 
@@ -274,6 +275,9 @@ export default function HomePage() {
           </div>
         </Container>
       </Section>
+
+      {/* SECTION 04.5 — EVIDENCE & TRUST */}
+      <EvidenceTrustSection />
 
       {/* SECTION 05 — STRATEGY LAB (INTERACTIVE) */}
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
