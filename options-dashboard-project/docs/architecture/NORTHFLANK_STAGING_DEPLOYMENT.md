@@ -266,3 +266,59 @@ by this session.
 Railway / Railway PostgreSQL / Vercel / production data: NOT TOUCHED.
 Northflank service: NOT CREATED. No deploy performed. Session ends at
 **DEPLOYMENT PRECONDITIONS VERIFIED**.
+
+---
+
+## 14. Retry Using User-Created Northflank Project (2026-09-13)
+
+**Context.** The user manually created/uses the existing Northflank project
+`strikenova` (https://app.northflank.com/t/shahid2024s-team/project/strikenova) and has
+decided NOT to add a payment card. Deployment baseline moved to the fixed commit.
+
+### Git verification before deploy
+
+* Current remote HEAD of `feat/strikenova-day35-portfolio-intelligence`:
+  **`2139097f2f11bba77dd2c79c9815333306d74fe7`** (no commits beyond it; local HEAD identical)
+* `backend/alembic/versions/merge_day38_gex.py`: **COMMITTED** ✅
+* `backend/requirements.txt` contains `sqlalchemy-cockroachdb==2.0.3`: **YES** ✅
+* `b847e58` correctly excluded as deployable.
+
+### Project verification (authenticated CLI, team context `shahid2024s-team-17…`)
+
+* Project `strikenova`: exists, accessible, region `europe-west`, cluster `nf-europe-west`
+* Resources: 0 services, 0 jobs, 0 addons (empty; nothing pre-existing affected)
+* No production infrastructure exists on the account; no environment separation needed
+  (single-project free tier)
+
+### Service creation attempt
+
+```text
+northflank create service combined --project strikenova  (strikenova-api-staging,
+buildpack buildContext /options-dashboard-project/backend, branch
+feat/strikenova-day35-portfolio-intelligence @ 2139097, 1 instance,
+nf-compute-20, public HTTPS 443 → 8000, health check /health)
+```
+
+Result: **`409 Please complete your account by adding a default payment method`**
+
+Classification (Phase 17): **account/billing gate**. The gate is account-level and
+applies regardless of project ownership, compute plan, or project emptiness. Per the
+user's explicit decision not to add a card, creation was attempted exactly once this
+session; no retry loop, no paid resources, no workarounds.
+
+### Deployable state summary (ready when hosting is resolved)
+
+* Deployable commit: `2139097` (both CRDB prerequisites fixed and verified)
+* CRDB staging: cluster `strikenova-staging` (Basic, asia-south1), database
+  `strikenova_staging`, user `strikenova_staging_app`, migration head `5e2a7b9c3f4d`
+  (37 tables) — migration + startup + health/readiness + smoke proofs in §13
+* Not executed this session: service creation (blocked), therefore build/runtime/health/
+  smoke checks against Northflank remain pending
+
+### Final result
+
+**BLOCKED — NORTHFLANK ACCOUNT REQUIRES PAYMENT METHOD**
+
+Northflank viability must be re-decided by the user: add a payment method in the
+Northflank console, or evaluate an alternative staging host. No further Northflank
+attempts will be made without new instructions.
