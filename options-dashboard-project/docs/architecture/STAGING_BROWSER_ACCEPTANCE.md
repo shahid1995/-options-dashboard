@@ -1,0 +1,196 @@
+# StrikeNova — STAGING Browser Acceptance Report
+
+Date: 2026-09-13
+Status: **STAGING BROWSER ACCEPTANCE PASSED WITH FOLLOW-UPS**
+Scope: full browser acceptance of the live staging stack. Acceptance run only — no application code was modified.
+
+---
+
+## 1. Environment
+
+| Layer | Service | Plan/Tier |
+|---|---|---|
+| Frontend | Vercel project `strikenova-frontend-staging` | free/hobby tier |
+| Backend | Render service `strikenova-api-staging` (`srv-daj4vetg1s2s739ecvfg`) | Free (sleeps after ~15 min idle) |
+| Database | CockroachDB Cloud Basic `strikenova-staging` / `strikenova_staging` | serverless Basic |
+
+## 2. URLs
+
+* Frontend: https://strikenova-frontend-staging.vercel.app
+* Backend: https://strikenova-api-staging.onrender.com
+* WebSocket: `wss://strikenova-api-staging.onrender.com/chains/ws/{symbol}?expiry_date=…`
+
+## 3. Git baseline
+
+* Remote HEAD at test time: `02f4728` (`docs: add Vercel staging deployment report`).
+* **Deployed frontend source:** `2b38180` (docs-only commit; identical app code to `2139097`).
+* **Deployed backend commit:** `2b38180` (live deploy `dep-daj7br1594qs73b3j8vg`; docs-only
+  successor of `2139097` — application code identical; recorded as the operative baseline).
+* CRDB migration head: `5e2a7b9c3f4d` (verified directly during this session).
+
+## 4. Browser/device context
+
+* Automation: thread preview browser (Chromium-based).
+* Note on origin: the preview tool only attaches to loopback URLs, so the staging frontend
+  was served to the browser through a **local dev proxy** (`http://localhost:3000`, script
+  outside the repo, not committed) that forwards `/` to the Vercel staging URL and passes
+  API/WS traffic straight through to Render. The frontend bundle still called Render
+  **directly** (its baked `NEXT_PUBLIC_API_URL`), so all API/CORS/WS evidence below reflects
+  the real staging origin behavior; the localhost origin was verified against the Render
+  CORS config (`ADDITIONAL_CORS_ORIGINS`) which currently lists only the Vercel staging
+  origin — hence the one CORS-shaped console error on the Google button (§11) is from the
+  proxy origin, not the real staging origin.
+* Viewport: 673×888 (narrow-desktop profile used for responsive smoke).
+
+## 5. Authentication results
+
+Full loop, all via the real UI against the real backend (synthetic account
+`browser.accept.*@example.com`, created during this test):
+
+| Step | Route | Result |
+|---|---|---|
+| Open login modal | `/` → AuthModal (Sign In / Create Account tabs) | PASS |
+| Switch to registration | AuthModal → "Create your account" (Display Name/Email/Password) | PASS |
+| Register | `POST /auth/register` → 200 | PASS |
+| Auto-login after register | `POST /auth/login-email` → 200 (`session_id` in body) | PASS |
+| Redirect to app | `/dashboard` with authenticated shell (user chip "staging-acceptance", Sign Out, PAPER badge) | PASS |
+| Session survives navigation | `/paper`, `/gex`, `/portfolio`, `/positions` all stayed authenticated (session persisted across `navigate` + reload) | PASS |
+| Authenticated API call | `GET /auth/me` 200; `GET /auth/status` `{"logged_in":true}` | PASS |
+| Logout | UI "Sign Out" → `POST /auth/logout` → cleared `options_dashboard_session_id` from localStorage → redirected to `/` | PASS |
+| Post-logout rejection | `/settings` and `/positions` bounce back to public page; API returns 401 | PASS |
+| Invalid credentials | `POST /auth/login-email` (wrong password) → 401 `{"detail":"Invalid email or password"}` — clean JSON, no stack trace (verified browser-side via fetch) | PASS |
+
+Session storage: namespaced localStorage key `options_dashboard_session_id` + `X-Session-Id`
+request header; **no** session token in cookies, page HTML, or console logs.
+
+## 6. Page-by-page results
+
+| Route | Result | Notes |
+|---|---|---|
+| `/` (landing) | 🟢 PASS | Full render, charts, evidence/trust section; console has one cosmetic `<svg> attribute height: "auto"` warning (static marketing SVG — non-blocking) |
+| `/about`, `/features`, `/market-intelligence`, `/how-it-works`, `/strategy-lab` | 🟢 PASS | Public marketing pages render; correct titles; only the same cosmetic SVG warning |
+| `/dashboard` (auth) | 🟢 PASS | Correct **broker-gated empty state**: "No Broker Connected — market data requires a broker connection" — the right behavior with no broker |
+| `/paper` (auth) | 🟢 PASS | Full DB-backed portfolio: ₹5,00,000 starting capital/available cash, P&L zeros, equity/analytics panels, journal empty state, "MARKET CLOSED — Orders Disabled", broker diagnostics "UPSTOX DISCONNECTED" with reason |
+| `/gex` (auth) | 🟢 PASS | All 5 analytics calls 200; graceful "INSUFFICIENT data · Score 0/100" empty state (no synthetic market data — expected) |
+| `/portfolio` (auth) | 🟢 PASS | Capital panel + graceful broker-unavailable states |
+| `/positions`, `/orders`, `/brokers` | 🟢 PASS | Reachable from nav; consistent shells (spot-checked via nav + API logs) |
+| `/strategies` (auth) | 🟢 PASS | Notice page: strategy building relocated to Strategy Builder — intended |
+| `/settings` (auth) | 🟢 PASS | Auth guard confirmed (redirects to `/` when logged out) |
+
+## 7. API/network results
+
+* Every API request observed went to `https://strikenova-api-staging.onrender.com` —
+  **zero** requests to Railway, production APIs, or localhost backends.
+* Sample of successful DB-backed calls through the UI: `/auth/me`, `/auth/status`,
+  `/paper/templates`, `/paper/positions`, `/paper/journal`, `/paper/capital`,
+  `/paper/market-status`, `/paper/portfolio`, `/paper/analytics`,
+  `/gex/history`, `/gex/regime`, `/gex/flip`, `/gex/walls`, `/gex/data-quality` — all 200.
+* Expected non-200s: `GET /chains/NIFTY/expiries` → **403** (broker connection required —
+  correct server-side gate), broker fields inside `/paper/capital` degrade to
+  `BROKER_TOKEN_EXPIRED`/unavailable (by design; never fabricates broker data).
+* No 5xx on any application endpoint except the known `/auth/google/state` defect (§11).
+
+## 8. DB-backed flow
+
+`POST /paper/portfolio/reset` exercised from the UI (Settings → Reset Paper Portfolio):
+preflight 200 → POST 200 → UI refreshed → **persistence confirmed after reload**
+(starting capital/available cash still ₹5,00,000 from CRDB via the API). Full chain
+browser → Vercel → Render → CockroachDB → response → UI update verified.
+
+## 9. CORS
+
+* From the real staging origin (Vercel): all UI API calls succeeded — preflights 200,
+  responses carry `access-control-allow-origin: <staging>` with credentials (verified via
+  curl earlier the same day and implicitly by every successful UI XHR).
+* No wildcard: `access-control-allow-origin` always echoes the exact allowed origin.
+* Unrelated origins remain rejected (400) — verified server-side this session.
+* Production frontend origin (`options-dashboard-sigma-coral.vercel.app`) remains rejected
+  against staging. `FRONTEND_URL` untouched (first-entry OAuth semantics preserved).
+* Console CORS error seen during Google-button test came from the local proxy origin
+  (not in `ADDITIONAL_CORS_ORIGINS`) — artifact of the browser harness, not a staging defect.
+
+## 10. WebSocket
+
+**Connected.** Real browser handshake from page JS:
+
+* URL: `wss://strikenova-api-staging.onrender.com/chains/ws/NIFTY?expiry_date=2026-10-29`
+* Handshake: **101 → OPEN** (`readyState 1`), subprotocol session-id path exercised.
+* No `onerror`, no close, no console errors during the hold.
+* No data frames received while held (~seconds): consistent with no broker/market feed in
+  staging — connection layer verified, streaming data layer is
+  `WEBSOCKET NOT FULLY EXERCISABLE IN CURRENT STAGING DATA STATE` (no synthetic feed
+  mechanism exists; none was invented).
+
+## 11. Google OAuth
+
+🔴 **Defect found (backend configuration, not frontend):**
+
+* Repro: login modal → "Continue with Google" → in-page banner
+  "Failed to initialize Google Sign-In. Please try again."
+* Browser console: the `POST /auth/google/state` XHR fails (CORS-shaped message because
+  the endpoint 500s without CORS headers).
+* Server-side confirmation: `POST /auth/google/state` returns **HTTP 500 from every
+  origin** (staging origin included). Root cause: the handler signs OAuth state via
+  `token_store.create_google_oauth_state()` → `_get_state_hmac_key()`, which raises
+  `ValueError: TOKEN_ENCRYPTION_KEY must be set…` when the env var is missing — the Render
+  service does not define `TOKEN_ENCRYPTION_KEY` (only `DATABASE_URL` and
+  `ADDITIONAL_CORS_ORIGINS` are set).
+* Severity: 🟡/🔴 boundary — blocks Google OAuth on staging; email/password auth unaffected.
+* Remediation (separate task, not done in this acceptance run): set a generated
+  `TOKEN_ENCRYPTION_KEY` on the Render staging service (manual redeploy) and separately
+  register the staging origin in the Google OAuth client. Until then:
+  `GOOGLE OAUTH STAGING — PENDING EXTERNAL PROVIDER CONFIGURATION`.
+
+## 12. Session/security
+
+* Authenticated request works; logout invalidates; unauthorized requests rejected (401).
+* No session token in page HTML (regex scan), none in cookies, none logged to console.
+* No Railway/production URL anywhere in the DOM.
+* `NEXT_PUBLIC_*` discipline respected: only the public API URL and Google client ID are
+  client-visible; no secrets appear in served bundles (chunk inspected in the deploy phase).
+
+## 13. Cold-start behavior
+
+Render free tier sleeps after ~15 min idle. During this session the backend was already
+warm; earlier the same day, first-request-after-idle latency of tens of seconds was
+observed and documented in the Render deployment report. Accepted; not worked around.
+
+## 14. Screenshots/evidence references
+
+Captured in-session (preview browser, this transcript): landing page (full render),
+registration modal, authenticated dashboard with "No Broker Connected" state, paper
+portfolio (₹5,00,000 panels), Google failure banner. No screenshots contain credentials
+(synthetic password visible only transiently in a form field during registration; not
+included in any stored evidence).
+
+## 15. Defects
+
+| # | Area | Finding | Severity | Remediation owner |
+|---|---|---|---|---|
+| 1 | Google OAuth | `POST /auth/google/state` → 500 on staging; `TOKEN_ENCRYPTION_KEY` unset on Render service | 🔴 blocks Google login on staging | Backend config (separate task) |
+| 2 | Landing page | Console warning `<svg> attribute height: "auto"` (cosmetic, static marketing SVG) | 🟢 trivial | Frontend (optional) |
+| 3 | Harness note | Preview browser cannot attach to non-loopback origins; local proxy used (documented in §4) | 🟡 tooling note | n/a |
+
+No application-code defects requiring immediate source changes were found.
+
+## 16. Pending external configuration
+
+* `TOKEN_ENCRYPTION_KEY` on Render staging (defect #1).
+* Staging origin in Google Cloud Console OAuth "Authorized JavaScript origins".
+* Broker/market-feed infrastructure for full WS/chain data exercises (expected staging
+  condition — no synthetic feed mechanism exists in the app).
+
+## 17. Production-safety confirmation
+
+```text
+Vercel production changed:   NO (options-dashboard untouched: no deploys, no env/domain changes by this session)
+Railway changed:             NO
+Production DB changed:       NO
+Production DNS changed:      NO
+Render production changed:   NO (staging service only; auto-deploy remains OFF)
+Real broker used:            NO (all broker paths show DISCONNECTED/expired — synthetic only)
+Real order submitted:        NO (MARKET CLOSED + no broker; paper reset only)
+Real money used:             NO
+Automatic deployments:       NOT ENABLED (Render OFF; Vercel staging has no Git integration)
+Secrets committed:           NO
+```
