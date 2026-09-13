@@ -315,3 +315,47 @@ Client secret committed:                 NO
 TOKEN_ENCRYPTION_KEY exposed:            NO (unchanged in Render secret store)
 OAuth token logged:                      NO
 ```
+
+## 21. Final verification — full Google login completed (2026-09-13)
+
+The account owner completed the interactive Google consent in a normal browser. The deployed
+backend's request logs (Render staging, service `strikenova-api-staging`) provide direct,
+server-side evidence of the complete flow from the user's browser (IP `103.168.94.203`):
+
+```text
+15:08:18Z  POST /auth/logout                200   (prior email session cleanly ended first)
+15:08:21Z  POST /auth/google/state          200   (backend issued HMAC state + nonce)
+           --- 11 s: Google consent (accounts.google.com) ---
+15:08:32Z  POST /auth/google                200   (ID token validated against staging client;
+                                                    state+nonce verified; session created)
+15:08:32Z  GET  /auth/me                    200   (immediately after Google login)
+15:08:33Z  GET  /auth/status                200
+15:08:41Z  GET  /paper/capital              200   (DB-backed, CRDB, under Google session)
+15:08:41Z  GET  /paper/market-status        200
+15:09:06Z  GET  /paper/positions|portfolio  200
+15:09:12Z  GET  /gex/history|regime|flip…   200
+15:09:16Z  POST /auth/logout                200   (user ended the Google-created session)
+```
+
+* **Return origin confirmed:** `POST /auth/google` validates the signed `state`, which only
+  succeeds if Google redirected back to the staging frontend origin (the registered
+  redirect URI) and `lib/session.js` parsed the URL fragment there.
+* **Zero OAuth errors in the logs:** no `invalid_client`, no `redirect_uri_mismatch`, no
+  state errors, no CORS failures (cross-origin `OPTIONS` preflights all 200), and no
+  `TOKEN_ENCRYPTION_KEY` error.
+* **Post-logout invalidation:** server-side round-trip on the same session machinery —
+  login → `/auth/me` 200 → `/paper/capital` 200 (CRDB) → logout 200 → post-logout
+  `/auth/me` **401**.
+* **Client-ID parity re-verified after login:** the served Vercel staging bundle and the
+  Render `GOOGLE_CLIENT_ID` both equal the staging Client ID; Render env is exactly
+  `[ADDITIONAL_CORS_ORIGINS, DATABASE_URL, GOOGLE_CLIENT_ID, TOKEN_ENCRYPTION_KEY]`.
+* **Freshness at verification time:** `/health` 200, `/readiness` 200,
+  `POST /auth/google/state` 200.
+* **Production safety:** Vercel production has no new production deployments (recent
+  options-dashboard entries are the owner's own pre-existing Preview stream); Railway,
+  production DB, and the production Google OAuth client were not touched.
+
+**Verdict: `GOOGLE OAUTH STAGING FULLY VERIFIED`** — end-to-end:
+`Vercel staging → Google authorization → staging-frontend fragment callback →
+Render staging /auth/google → state/nonce validation → authenticated session →
+DB-backed usage → logout → 401`.

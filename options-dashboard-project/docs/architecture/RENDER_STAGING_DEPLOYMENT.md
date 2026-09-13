@@ -248,6 +248,37 @@ Google Cloud project and Web OAuth client (production OAuth client untouched):
   Google account in a normal browser; no remaining external configuration is known to be
   required. Production cutover was NOT performed.
 
+## 21. Final verification — full Google login completed (2026-09-13)
+
+The account owner completed the interactive Google consent in a normal browser. The
+staging backend's request logs provide direct server-side evidence of the complete flow
+(user browser IP `103.168.94.203`):
+
+```text
+15:08:21Z  POST /auth/google/state   200   (state + nonce issued)
+           --- 11 s Google consent ---
+15:08:32Z  POST /auth/google         200   (ID token aud-validated against the staging client;
+                                           signed state + nonce verified; session created)
+15:08:32Z  GET  /auth/me             200
+15:08:33Z  GET  /auth/status         200
+15:08:41Z  GET  /paper/capital       200   (DB-backed, CRDB, under the Google session)
+15:09:16Z  POST /auth/logout         200
+```
+
+* Post-logout invalidation re-verified server-side (fresh round-trip: login → me 200 →
+  `/paper/capital` 200 → logout 200 → me **401**).
+* Zero OAuth errors in the log window: no `invalid_client`, no `redirect_uri_mismatch`,
+  no state errors, no CORS failures (preflights 200), no `TOKEN_ENCRYPTION_KEY` error.
+* Client-ID parity re-verified after login: served frontend bundle and Render
+  `GOOGLE_CLIENT_ID` both equal the staging Client ID; env set remains exactly
+  `[ADDITIONAL_CORS_ORIGINS, DATABASE_URL, GOOGLE_CLIENT_ID, TOKEN_ENCRYPTION_KEY]`.
+* Freshness: `/health` 200, `/readiness` 200, `POST /auth/google/state` 200.
+* This service was NOT redeployed or reconfigured for the login itself — it already ran
+  the verified configuration. Production (Vercel `options-dashboard`, Railway, production
+  DB, production Google OAuth client) untouched.
+
+**Verdict: `GOOGLE OAUTH STAGING FULLY VERIFIED`.**
+
 ## 19. Post-publication configuration change #2 — TOKEN_ENCRYPTION_KEY (2026-09-13)
 
 Follow-up to §18, resolving the Google OAuth 500 found during staging browser acceptance
