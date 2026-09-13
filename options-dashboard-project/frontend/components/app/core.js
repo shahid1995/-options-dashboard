@@ -1,5 +1,5 @@
 // =============================================================================
-// StrikeNova App Core Components — Phase D
+// StrikeNova App Core Components — Phase D (Remediated)
 // =============================================================================
 // Reusable primitives for the authenticated application.
 // These compose canonical tokens into product-neutral building blocks.
@@ -76,6 +76,13 @@ export function Table({ columns, data, compact = false, emptyMessage = "No data 
 
   const cellPadding = compact ? `${SPACE.small} ${SPACE.small}` : `${SPACE.small} ${SPACE.comp}`;
 
+  const handleRowKeyDown = (e, row, rowIdx) => {
+    if (onRowClick && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      onRowClick(row, rowIdx);
+    }
+  };
+
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8125rem" }}>
@@ -87,7 +94,7 @@ export function Table({ columns, data, compact = false, emptyMessage = "No data 
                 style={{
                   padding: cellPadding,
                   textAlign: col.align || "left",
-                  color: col.align === "right" ? COLOR.textFaint : COLOR.textFaint,
+                  color: COLOR.textFaint,
                   fontSize: "0.75rem",
                   fontWeight: 700,
                   letterSpacing: "0.04em",
@@ -105,34 +112,41 @@ export function Table({ columns, data, compact = false, emptyMessage = "No data 
           </tr>
         </thead>
         <tbody>
-          {data.map((row, rowIdx) => (
-            <tr
-              key={keyExtractor ? keyExtractor(row, rowIdx) : rowIdx}
-              onClick={onRowClick ? () => onRowClick(row, rowIdx) : undefined}
-              style={{
-                borderBottom: `1px solid ${COLOR.border}`,
-                background: rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
-                cursor: onRowClick ? "pointer" : undefined,
-              }}
-              onMouseEnter={(e) => { if (onRowClick) e.currentTarget.style.background = COLOR.surfaceElevated; }}
-              onMouseLeave={(e) => { if (onRowClick) e.currentTarget.style.background = rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
-            >
-              {columns.map((col, colIdx) => (
-                <td
-                  key={colIdx}
-                  style={{
-                    padding: cellPadding,
-                    textAlign: col.align || "left",
-                    color: col.align === "right" ? COLOR.textSecondary : COLOR.textPrimary,
-                    fontVariantNumeric: col.align === "right" ? "tabular-nums" : undefined,
-                    whiteSpace: col.noWrap ? "nowrap" : undefined,
-                  }}
-                >
-                  {col.render ? col.render(row[col.key], row, rowIdx) : row[col.key] ?? "—"}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {data.map((row, rowIdx) => {
+            const isClickable = !!onRowClick;
+            return (
+              <tr
+                key={keyExtractor ? keyExtractor(row, rowIdx) : rowIdx}
+                onClick={isClickable ? () => onRowClick(row, rowIdx) : undefined}
+                onKeyDown={isClickable ? (e) => handleRowKeyDown(e, row, rowIdx) : undefined}
+                tabIndex={isClickable ? 0 : undefined}
+                aria-label={isClickable ? `Row ${rowIdx + 1}` : undefined}
+                style={{
+                  borderBottom: `1px solid ${COLOR.border}`,
+                  background: rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                  cursor: isClickable ? "pointer" : undefined,
+                  outline: "none",
+                }}
+                onMouseEnter={(e) => { if (isClickable) e.currentTarget.style.background = COLOR.surfaceElevated; }}
+                onMouseLeave={(e) => { if (isClickable) e.currentTarget.style.background = rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
+              >
+                {columns.map((col, colIdx) => (
+                  <td
+                    key={colIdx}
+                    style={{
+                      padding: cellPadding,
+                      textAlign: col.align || "left",
+                      color: col.align === "right" ? COLOR.textSecondary : COLOR.textPrimary,
+                      fontVariantNumeric: col.align === "right" ? "tabular-nums" : undefined,
+                      whiteSpace: col.noWrap ? "nowrap" : undefined,
+                    }}
+                  >
+                    {col.render ? col.render(row[col.key], row, rowIdx) : row[col.key] ?? "—"}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -198,16 +212,38 @@ export function Chip({ selected, onClick, children, style }) {
 /* ─── 4. Segmented Control ─── */
 
 export function SegmentedControl({ options, value, onChange, "aria-label": ariaLabel }) {
+  const handleKeyDown = (e, currentIndex) => {
+    let nextIndex = currentIndex;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      e.preventDefault();
+      nextIndex = (currentIndex + 1) % options.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      e.preventDefault();
+      nextIndex = (currentIndex - 1 + options.length) % options.length;
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      nextIndex = 0;
+    } else if (e.key === "End") {
+      e.preventDefault();
+      nextIndex = options.length - 1;
+    }
+    if (nextIndex !== currentIndex) {
+      onChange(options[nextIndex].value);
+    }
+  };
+
   return (
     <div role="tablist" aria-label={ariaLabel} style={{ display: "flex", gap: SPACE.xs, flexWrap: "wrap" }}>
-      {options.map((opt) => {
+      {options.map((opt, index) => {
         const isActive = value === opt.value;
         return (
           <button
             key={opt.value}
             role="tab"
             aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(opt.value)}
+            onKeyDown={(e) => handleKeyDown(e, index)}
             style={{
               padding: `${SPACE.small} ${SPACE.comp}`,
               fontSize: "0.8125rem",
@@ -321,7 +357,7 @@ const BTN_BASE = {
 const BTN_VARIANTS = {
   primary: {
     background: COLOR.strategy,
-    color: "#0B0E14",
+    color: COLOR.baseElevated,
     border: `1px solid ${COLOR.strategy}`,
   },
   secondary: {

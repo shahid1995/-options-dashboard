@@ -137,6 +137,21 @@ describe("App Core Components", () => {
       );
       expect(html).toContain("**Test**");
     });
+
+    it("clickable row has tabindex and aria-label", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(Table, { columns, data, onRowClick: () => {} })
+      );
+      expect(html).toContain('tabindex="0"');
+      expect(html).toContain('aria-label="Row 1"');
+    });
+
+    it("non-clickable row has no tabindex", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(Table, { columns, data })
+      );
+      expect(html).not.toContain('tabindex="0"');
+    });
   });
 
   describe("Badge", () => {
@@ -223,6 +238,33 @@ describe("App Core Components", () => {
         })
       );
       expect(html).toContain('aria-selected="true"');
+    });
+
+    it("selected tab has tabIndex 0, others -1", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(SegmentedControl, {
+          options,
+          value: "open",
+          onChange: () => {},
+          "aria-label": "Filter",
+        })
+      );
+      expect(html).toContain('tabindex="0"');
+      expect(html).toContain('tabindex="-1"');
+    });
+
+    it("all buttons are keyboard-focusable", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(SegmentedControl, {
+          options,
+          value: "all",
+          onChange: () => {},
+          "aria-label": "Filter",
+        })
+      );
+      // Every button should be a real <button> element
+      const buttonCount = (html.match(/<button/g) || []).length;
+      expect(buttonCount).toBe(3);
     });
   });
 
