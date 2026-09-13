@@ -26,7 +26,7 @@ CockroachDB Cloud (strikenova-staging / strikenova_staging)
 | Region | `singapore` |
 | Runtime | python (buildpack-style; no Dockerfile in repo) |
 | URL | https://strikenova-api-staging.onrender.com |
-| Auto-deploy | on (branch push) |
+| Auto-deploy | **OFF** (manual deploys only — corrected post-publication, see §18) |
 | Instances | 1 |
 
 Authentication: Render CLI v2.28.0 (`render-oss/cli`), device-authorization browser login;
@@ -141,9 +141,22 @@ AssertionError/ModuleNotFound lines across the deploy window.
 * Free instances have limited CPU/RAM; the first full-DB boot path (empty database, 17
   migrations over WAN) took minutes in the §13 pre-deploy proof — on an already-migrated
   database, boot is fast (observed: startup complete in ~3 s).
-* Auto-deploy is ON: pushes to the branch trigger rebuilds; deploys of broken commits
-  would replace the live service until rolled back (Render keeps the last healthy deploy
-  available for rollback).
+* Auto-deploy is **OFF** (changed 2026-09-13, after this report was first published —
+  see §18): a Git push does **not** trigger a Render deployment. Deployments are manual
+  and controlled, per StrikeNova standing policy:
+
+  ```text
+  Git push
+     ↓
+  NO automatic Render deployment
+
+  Manual deployment
+     ↓
+  Render staging
+  ```
+
+* Because deploys are manual, a broken commit can never auto-replace the live staging
+  service; Render keeps the last healthy deploy available for rollback.
 * **This is staging only** — it is not the intended final production hosting tier.
 
 ## 13. Security verification
@@ -181,6 +194,9 @@ Production traffic:      NO CHANGE
   `access-control-allow-origin: http://localhost:3000` echoed.
 * No wildcard CORS; no broadening performed. To connect a real staging frontend later, set
   `FRONTEND_URL`/`ADDITIONAL_CORS_ORIGINS` on the Render service (follow-up, not done here).
+* **CORS update required after Vercel staging URL is known** — the Vercel staging frontend
+  does not exist yet, so its origin cannot be defined; do not pre-broaden CORS to guessed
+  origins (planning session of 2026-09-13).
 
 ## 17. Known follow-ups
 
@@ -191,3 +207,22 @@ Production traffic:      NO CHANGE
    Northflank report).
 4. `c7d3e5f8a9b2` raw-string `postgresql_where` remains a latent SQLite-path defect
    (non-blocking for CRDB; documented in the Northflank report §13).
+5. CORS: set `FRONTEND_URL`/`ADDITIONAL_CORS_ORIGINS` on Render once the Vercel staging
+   URL exists (§16 — update required after Vercel staging URL is known).
+
+## 18. Post-publication configuration change (2026-09-13)
+
+After this report was first published, Render auto-deploy was disabled to enforce the
+StrikeNova standing deployment policy (deployments are manual and controlled; a Git push
+must NOT automatically deploy the backend).
+
+* **Change:** service `srv-daj4vetg1s2s739ecvfg` `autoDeploy: on → off`
+  (`autoDeployTrigger: commit → off`).
+* **Method:** Render CLI v2.28.0 `services update <id> --auto-deploy=false --confirm`.
+* **Verification (explicit, not assumed):** fresh `services get` shows
+  `autoDeploy: no`, `autoDeployTrigger: off`; the subsequent documentation push
+  (`2139097..390cdfe`) created **zero** new deploys (deploy list unchanged at 2 entries);
+  live deploy `dep-daj57j3m8hqs73evpme0` remained `live` at commit `2139097` with
+  `/health` and `/readiness` both 200 and `database: ok`.
+* No other service configuration was altered; no redeploy was triggered by the change.
+* This section records the delta; §1 reflects the current state.
