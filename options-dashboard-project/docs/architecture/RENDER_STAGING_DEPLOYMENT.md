@@ -252,7 +252,7 @@ Google Cloud project and Web OAuth client (production OAuth client untouched):
 
 The account owner completed the interactive Google consent in a normal browser. The
 staging backend's request logs provide direct server-side evidence of the complete flow
-(user browser IP `103.168.94.203`):
+(requests originated from the authenticated staging browser session):
 
 ```text
 15:08:21Z  POST /auth/google/state   200   (state + nonce issued)

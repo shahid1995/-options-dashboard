@@ -320,7 +320,7 @@ OAuth token logged:                      NO
 
 The account owner completed the interactive Google consent in a normal browser. The deployed
 backend's request logs (Render staging, service `strikenova-api-staging`) provide direct,
-server-side evidence of the complete flow from the user's browser (IP `103.168.94.203`):
+server-side evidence of the complete flow from the authenticated staging browser session:
 
 ```text
 15:08:18Z  POST /auth/logout                200   (prior email session cleanly ended first)
@@ -359,3 +359,18 @@ server-side evidence of the complete flow from the user's browser (IP `103.168.9
 `Vercel staging → Google authorization → staging-frontend fragment callback →
 Render staging /auth/google → state/nonce validation → authenticated session →
 DB-backed usage → logout → 401`.
+
+## 22. Automated smoke validation (2026-09-13)
+
+The manual acceptance flows in this report are now also covered by a
+repeatable automated suite: `backend/tests/staging_smoke/` (opt-in via
+`STAGING_SMOKE=1`), documented in `STAGING_SMOKE_TEST.md`.
+
+It re-verifies health, readiness, the full email/password lifecycle
+(register → login → identity → status → DB-backed `/paper/capital` → logout
+→ post-logout 401), the Google-state handshake, CORS behavior, and the
+WebSocket connection layer against the live staging stack. First live run:
+**14 passed, 3 skipped (direct-CRDB tests require a full DSN), 0 failed**.
+The WebSocket check asserts the same connection-layer OPEN verified manually
+in §10/§21 and records (as a finding, not auto-fixed) that the server sends
+no close frame within the observation window.
