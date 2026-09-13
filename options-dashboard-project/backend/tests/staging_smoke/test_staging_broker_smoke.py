@@ -23,10 +23,18 @@ OAuth/token-store path; each run creates one synthetic data-only connection
 row for its synthetic user, which the DELETE step deactivates.
 """
 
+import os
 import secrets
 
 import httpx
 import pytest
+
+# Second opt-in gate on top of the suite-wide STAGING_SMOKE gate: the broker
+# tests run only when BOTH flags are set (documented contract).
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("STAGING_BROKER_SMOKE"),
+    reason="broker suite; run with STAGING_BROKER_SMOKE=1 (plus STAGING_SMOKE=1)",
+)
 
 from tests.staging_smoke.conftest import (
     BASE_URL,

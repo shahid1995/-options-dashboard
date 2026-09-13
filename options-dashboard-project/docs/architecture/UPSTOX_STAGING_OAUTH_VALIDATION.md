@@ -236,3 +236,70 @@ app and hand it to the user for browser consent, (5) verify callback →
 server-side exchange → encrypted storage → connection state → profile →
 funds → disconnect semantics, then (6) update §7–§13 of this report with
 results.
+
+## §19 — Live staging OAuth attempt and identity-merge blocker (2026-09-13, late evening)
+
+### 19.1 App identification (read-only)
+
+The Upstox developer portal contains exactly **ONE** app:
+
+* name: `My Options Dashboard`
+* registered redirect: `https://strikenova-api-staging.onrender.com/auth/callback`
+
+Classification: **STAGING (Case C)** — the redirect is exactly the intended
+staging URL. Its API key is the pair already deployed on Render staging and
+verified byte-identical to the secured intake file. The earlier assumption of
+a separate "StrikeNova Staging" app was wrong: the single existing app **is**
+the staging app. The old `backend/.env` dev credentials were never reused.
+
+### 19.2 UDAPI100068 incident
+
+The first consent attempt failed at Upstox's dialog with
+`UDAPI100068 — Check your 'client_id' and 'redirect_uri'` even though the
+deployed pair was correct — because the redirect-URI registration change had
+not yet taken effect on Upstox's side at that moment. Later attempts passed
+the dialog, confirming the registration had propagated. No client-side change
+was ever needed.
+
+### 19.3 Authorization URL verification
+
+Fresh URL generated from the application (`GET /auth/login?broker=UPSTOX`,
+307): `response_type=code`, staging client ID, exact registered redirect,
+145-char HMAC-signed state. Documented constraint: the signed OAuth state is
+in-memory with a **10-minute TTL** — consent must complete within that window
+and before any service restart/redeploy.
+
+### 19.4 Consent → callback → exchange → profile (all verified live)
+
+The user completed Upstox authorization (2026-09-13T17:39:07Z, from deployed
+app logs): `GET /auth/callback` fired, the single-use authorization code was
+exchanged **server-side** (secret never left the backend, no token values in
+logs), and the Upstox user profile was fetched successfully (broker user id
+`3CCJPA`).
+
+### 19.5 Identity provisioning FAILED — recorded defect, not fixed here
+
+The callback's final provisioning step raised
+`sqlalchemy.exc.IntegrityError: UniqueViolation ix_users_email`:
+`get_or_create_user_from_upstox` (`backend/app/identity.py`, "Map the
+authenticated Upstox identity to one durable StrikeNova user") matches users
+only by `(broker_provider, broker_user_id)`; a first-time Upstox login INSERTs
+a new user with the Upstox profile email, which collides with the
+pre-existing platform account of the same email. The callback's catch-all
+rolled back (the freshly exchanged Upstox token was discarded — nothing was
+persisted) and redirected to `?login_error=account_setup_failed`.
+
+**Owner decision required (not implemented in this session):** identity-merge
+policy when a first-time broker login presents an email that already belongs
+to a platform account — link identities, require re-verification, or reject.
+Until decided, the staging OAuth chain stops at this step by design.
+
+### 19.6 Session hygiene
+
+No Render writes were needed this session (credential parity pre-verified);
+no new deployment was triggered; the intake file was deleted after
+verification and confirmed absent; the protected five env vars were never
+modified; production Upstox app, Vercel production, Railway, production DB
+and DNS untouched; no orders placed; no secrets printed, logged, or committed.
+(Render's log query backend was intermittently unavailable — Loki 502 —
+during the evidence window; the quoted log lines come from the app-log stream.)
