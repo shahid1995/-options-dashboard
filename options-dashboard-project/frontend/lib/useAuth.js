@@ -29,8 +29,9 @@ export function useAuth() {
     // Handle Google OAuth redirect callback
     const googleResult = captureGoogleIdTokenFromUrl();
     if (googleResult) {
-      // Send the Google id_token to our backend
-      loginWithGoogle(googleResult.idToken).catch(() => {
+      // Send the Google id_token to our backend (state is MANDATORY — the
+      // backend validates the HMAC state and its nonce binding).
+      loginWithGoogle(googleResult.idToken, googleResult.state).catch(() => {
         // Error is already handled by loginWithGoogle
       });
     }
