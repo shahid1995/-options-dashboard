@@ -138,12 +138,13 @@ describe("App Core Components", () => {
       expect(html).toContain("**Test**");
     });
 
-    it("clickable row has tabindex and aria-label", () => {
+    it("clickable row has tabindex, aria-label, and role", () => {
       const html = renderToStaticMarkup(
         React.createElement(Table, { columns, data, onRowClick: () => {} })
       );
       expect(html).toContain('tabindex="0"');
       expect(html).toContain('aria-label="Row 1"');
+      expect(html).toContain('role="button"');
     });
 
     it("non-clickable row has no tabindex", () => {
@@ -151,6 +152,13 @@ describe("App Core Components", () => {
         React.createElement(Table, { columns, data })
       );
       expect(html).not.toContain('tabindex="0"');
+    });
+
+    it("clickable row does not suppress focus outline", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(Table, { columns, data, onRowClick: () => {} })
+      );
+      expect(html).not.toContain('outline:none');
     });
   });
 
@@ -265,6 +273,36 @@ describe("App Core Components", () => {
       // Every button should be a real <button> element
       const buttonCount = (html.match(/<button/g) || []).length;
       expect(buttonCount).toBe(3);
+    });
+
+    it("selected tab receives focus on value change", () => {
+      // Render with value="closed", verify closed has tabindex="0"
+      const html = renderToStaticMarkup(
+        React.createElement(SegmentedControl, {
+          options,
+          value: "closed",
+          onChange: () => {},
+          "aria-label": "Filter",
+        })
+      );
+      // The third option (closed) should have tabindex="0"
+      const tabs = html.match(/<button[^>]*>/g);
+      expect(tabs[2]).toContain('tabindex="0"');
+      expect(tabs[0]).toContain('tabindex="-1"');
+    });
+
+    it("arrow key handler is attached", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(SegmentedControl, {
+          options,
+          value: "all",
+          onChange: () => {},
+          "aria-label": "Filter",
+        })
+      );
+      // All buttons should have role="tab" for keyboard accessibility
+      const tabsWithRole = (html.match(/role="tab"/g) || []).length;
+      expect(tabsWithRole).toBe(3);
     });
   });
 

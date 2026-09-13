@@ -1,11 +1,11 @@
 // =============================================================================
-// StrikeNova App Core Components — Phase D (Remediated)
+// StrikeNova App Core Components — Phase D (Final Remediation)
 // =============================================================================
 // Reusable primitives for the authenticated application.
 // These compose canonical tokens into product-neutral building blocks.
 // =============================================================================
 
-import React from "react";
+import React, { useRef, useEffect, useCallback } from "react";
 import { COLOR, SPACE, RADIUS, TYPE } from "@/components/public/tokens";
 
 /* ─── helpers ─── */
@@ -121,11 +121,11 @@ export function Table({ columns, data, compact = false, emptyMessage = "No data 
                 onKeyDown={isClickable ? (e) => handleRowKeyDown(e, row, rowIdx) : undefined}
                 tabIndex={isClickable ? 0 : undefined}
                 aria-label={isClickable ? `Row ${rowIdx + 1}` : undefined}
+                role={isClickable ? "button" : undefined}
                 style={{
                   borderBottom: `1px solid ${COLOR.border}`,
                   background: rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
                   cursor: isClickable ? "pointer" : undefined,
-                  outline: "none",
                 }}
                 onMouseEnter={(e) => { if (isClickable) e.currentTarget.style.background = COLOR.surfaceElevated; }}
                 onMouseLeave={(e) => { if (isClickable) e.currentTarget.style.background = rowIdx % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)"; }}
@@ -212,6 +212,16 @@ export function Chip({ selected, onClick, children, style }) {
 /* ─── 4. Segmented Control ─── */
 
 export function SegmentedControl({ options, value, onChange, "aria-label": ariaLabel }) {
+  const buttonRefs = useRef([]);
+
+  // Focus the selected option when value changes
+  useEffect(() => {
+    const selectedIndex = options.findIndex((opt) => opt.value === value);
+    if (selectedIndex >= 0 && buttonRefs.current[selectedIndex]) {
+      buttonRefs.current[selectedIndex].focus();
+    }
+  }, [value, options]);
+
   const handleKeyDown = (e, currentIndex) => {
     let nextIndex = currentIndex;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
@@ -239,6 +249,7 @@ export function SegmentedControl({ options, value, onChange, "aria-label": ariaL
         return (
           <button
             key={opt.value}
+            ref={(el) => { buttonRefs.current[index] = el; }}
             role="tab"
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
