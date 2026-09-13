@@ -90,6 +90,7 @@ suite never contacts the live staging service.
 | 12 | CORS: staging-origin preflight allowed with credentials; unrelated origin rejected; no wildcard | CORS contract |
 | 13 | raw RFC 6455 handshake to `/chains/ws/NIFTY?expiry_date=…` | WebSocket connection layer |
 | — | `test_00_targets_are_staging` | guard: all targets are staging URLs |
+| B | `test_staging_broker_smoke.py` (opt-in `STAGING_BROKER_SMOKE=1`) | broker-path gates, analytics-token lifecycle, two-user isolation — see `UPSTOX_SANDBOX_STAGING_VALIDATION.md` §13 |
 
 ---
 
