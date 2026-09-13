@@ -2,10 +2,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { C, useIsMobile } from "@/lib/ui";
+import { COLOR, SPACE, RADIUS, LAYER } from "@/components/public/tokens";
 
 /**
- * Phase 2.1 — Restructured navigation
- * 4 workflow-aligned sections, 7 primary routes, 3 legacy redirects
+ * Phase C — Application shell
+ * 4 workflow-aligned sections, canonical token surfaces, improved navigation hierarchy.
  */
 const NAV_SECTIONS = [
   {
@@ -38,10 +39,6 @@ const NAV_SECTIONS = [
   },
 ];
 
-/**
- * Legacy route mapping — maps old paths to active nav keys.
- * Old routes still resolve (no broken links) but highlight the correct nav item.
- */
 const ROUTE_KEY_MAP = {
   "/dashboard": "dashboard",
   "/gex": "gex",
@@ -51,7 +48,6 @@ const ROUTE_KEY_MAP = {
   "/orders": "orders",
   "/brokers": "brokers",
   "/settings": "settings",
-  // Legacy redirects
   "/market": "dashboard",
   "/strategies": "paper",
   "/activity": "orders",
@@ -66,37 +62,39 @@ function getActiveKey(pathname) {
   return "dashboard";
 }
 
+const SIDEBAR_WIDTH = 220;
+const TOP_BAR_HEIGHT = 52;
+
 /* ---------- Top Bar ---------- */
 
 function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, authUser, onLogout }) {
   return (
-    <div
+    <header
       style={{
         position: "fixed",
         top: 0,
         left: 0,
         right: 0,
-        height: 48,
-        background: C.surface,
-        borderBottom: `1px solid ${C.border}`,
+        height: TOP_BAR_HEIGHT,
+        background: COLOR.surface,
+        borderBottom: `1px solid ${COLOR.border}`,
         display: "flex",
         alignItems: "center",
-        padding: "0 16px",
-        zIndex: 100,
-        gap: 12,
+        padding: `0 ${SPACE.comp}`,
+        zIndex: LAYER.sticky,
+        gap: SPACE.comp,
       }}
     >
-      {/* Hamburger (mobile) */}
       <button
         onClick={onToggleSidebar}
         style={{
           display: "none",
           background: "none",
           border: "none",
-          color: C.muted,
+          color: COLOR.textMuted,
           fontSize: 18,
           cursor: "pointer",
-          padding: 4,
+          padding: SPACE.xs,
         }}
         className="shell-hamburger"
         aria-label="Toggle navigation"
@@ -104,46 +102,34 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
         {sidebarOpen ? "✕" : "☰"}
       </button>
 
-      {/* App title */}
       <div
         style={{
           fontSize: 14,
-          fontWeight: 700,
-          color: C.gold,
-          letterSpacing: 0.5,
+          fontWeight: 800,
+          color: COLOR.strategy,
+          letterSpacing: 0.8,
           whiteSpace: "nowrap",
         }}
       >
-        Options Dashboard
+        STRIKENOVA
       </div>
 
-      {/* Execution mode badge */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          marginLeft: 8,
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", gap: SPACE.small, marginLeft: SPACE.small }}>
         <span
           style={{
             fontSize: 10,
             fontWeight: 700,
             letterSpacing: 1,
-            padding: "3px 8px",
-            borderRadius: 4,
-            background:
-              executionMode === "PAPER"
-                ? "rgba(201,161,90,0.15)"
-                : "rgba(76,175,125,0.15)",
-            color: executionMode === "PAPER" ? C.gold : C.green,
+            padding: `${SPACE.xs} ${SPACE.small}`,
+            borderRadius: RADIUS.sm,
+            background: executionMode === "PAPER" ? "rgba(201,161,90,0.15)" : "rgba(76,175,125,0.15)",
+            color: executionMode === "PAPER" ? COLOR.strategy : COLOR.positive,
             border: `1px solid ${executionMode === "PAPER" ? "rgba(201,161,90,0.3)" : "rgba(76,175,125,0.3)"}`,
           }}
         >
           {executionMode}
         </span>
-        <span style={{ fontSize: 10, color: C.faint }}>
+        <span style={{ fontSize: 10, color: COLOR.textFaint }}>
           {executionMode === "PAPER"
             ? "Simulated — no broker orders"
             : executionMode === "LIVE"
@@ -152,32 +138,24 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
         </span>
       </div>
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Market status indicator */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", gap: SPACE.small }}>
         <span
           style={{
             display: "inline-block",
             width: 6,
             height: 6,
-            borderRadius: 3,
+            borderRadius: "50%",
             background:
               marketStatus === "open"
-                ? C.green
+                ? COLOR.positive
                 : marketStatus === "closed"
-                  ? C.red
-                  : C.faint,
+                  ? COLOR.negative
+                  : COLOR.textFaint,
           }}
         />
-        <span style={{ fontSize: 11, color: C.muted, letterSpacing: 0.5 }}>
+        <span style={{ fontSize: 11, color: COLOR.textMuted, letterSpacing: 0.5 }}>
           {marketStatus === "open"
             ? "MARKET OPEN"
             : marketStatus === "closed"
@@ -186,8 +164,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
         </span>
       </div>
 
-      {/* Auth indicator */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: SPACE.small }}>
         {authUser ? (
           <>
             <a
@@ -195,29 +172,21 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
               style={{
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
+                gap: SPACE.small,
                 fontSize: 11,
                 fontWeight: 600,
-                color: C.muted,
+                color: COLOR.textMuted,
                 textDecoration: "none",
-                padding: "3px 10px",
-                borderRadius: 6,
-                border: `1px solid ${C.border}`,
+                padding: `${SPACE.xs} ${SPACE.small}`,
+                borderRadius: RADIUS.md,
+                border: `1px solid ${COLOR.border}`,
                 background: "rgba(76,175,125,0.06)",
                 transition: "border-color 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.green; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = C.border; }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = COLOR.positive; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = COLOR.border; }}
             >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 3,
-                  background: C.green,
-                  flexShrink: 0,
-                }}
-              />
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: COLOR.positive, flexShrink: 0 }} />
               {authUser.display_name || authUser.email || "Account"}
             </a>
             <button
@@ -225,17 +194,17 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
               style={{
                 fontSize: 10,
                 fontWeight: 700,
-                color: C.muted,
+                color: COLOR.textMuted,
                 background: "none",
-                border: `1px solid ${C.border}`,
-                borderRadius: 6,
-                padding: "4px 10px",
+                border: `1px solid ${COLOR.border}`,
+                borderRadius: RADIUS.md,
+                padding: `${SPACE.xs} ${SPACE.small}`,
                 cursor: "pointer",
                 fontFamily: "inherit",
                 transition: "color 0.15s, border-color 0.15s",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = C.red; e.currentTarget.style.borderColor = C.red; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = C.muted; e.currentTarget.style.borderColor = C.border; }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = COLOR.negative; e.currentTarget.style.borderColor = COLOR.negative; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = COLOR.textMuted; e.currentTarget.style.borderColor = COLOR.border; }}
             >
               Sign Out
             </button>
@@ -246,21 +215,21 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
             style={{
               fontSize: 11,
               fontWeight: 700,
-              color: C.gold,
+              color: COLOR.strategy,
               textDecoration: "none",
-              padding: "3px 10px",
-              borderRadius: 6,
-              border: `1px solid ${C.gold}44`,
+              padding: `${SPACE.xs} ${SPACE.small}`,
+              borderRadius: RADIUS.md,
+              border: `1px solid ${COLOR.strategy}44`,
               transition: "border-color 0.15s",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.gold; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${C.gold}44`; }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = COLOR.strategy; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = `${COLOR.strategy}44`; }}
           >
             Sign In
           </a>
         )}
       </div>
-    </div>
+    </header>
   );
 }
 
@@ -272,27 +241,28 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
       className={`shell-sidebar${isOpen ? " shell-open" : ""}`}
       style={{
         position: "fixed",
-        top: 48,
+        top: TOP_BAR_HEIGHT,
         left: 0,
         bottom: 0,
-        width: isOpen ? 220 : 0,
-        minWidth: isOpen ? 220 : 0,
-        background: C.surface,
-        borderRight: isOpen ? `1px solid ${C.border}` : "none",
+        width: isOpen ? SIDEBAR_WIDTH : 0,
+        minWidth: isOpen ? SIDEBAR_WIDTH : 0,
+        background: COLOR.surface,
+        borderRight: isOpen ? `1px solid ${COLOR.border}` : "none",
         overflow: "hidden",
         transition: "width 0.2s ease, min-width 0.2s ease",
-        zIndex: 90,
+        zIndex: LAYER.overlay - 10,
         display: "flex",
         flexDirection: "column",
       }}
     >
       <div
         style={{
-          padding: isOpen ? "12px 0" : 0,
+          padding: isOpen ? `${SPACE.comp} 0` : 0,
           display: "flex",
           flexDirection: "column",
-          gap: 2,
-          minWidth: 220,
+          gap: SPACE.xs,
+          minWidth: SIDEBAR_WIDTH,
+          overflowY: "auto",
         }}
       >
         {NAV_SECTIONS.map((section) => (
@@ -302,8 +272,8 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
                 fontSize: 9,
                 fontWeight: 700,
                 letterSpacing: 1.5,
-                color: C.faint,
-                padding: "12px 16px 4px",
+                color: COLOR.textFaint,
+                padding: `${SPACE.comp} ${SPACE.comp} ${SPACE.xs}`,
                 textTransform: "uppercase",
               }}
             >
@@ -316,20 +286,31 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
                   key={item.key}
                   href={item.href}
                   onClick={isMobile ? onClose : undefined}
+                  className={isActive ? "shell-nav-active" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 10,
-                    padding: "8px 16px",
+                    gap: SPACE.small,
+                    padding: `${SPACE.small} ${SPACE.comp}`,
                     fontSize: 13,
                     fontWeight: isActive ? 600 : 400,
-                    color: isActive ? C.gold : C.muted,
+                    color: isActive ? COLOR.strategy : COLOR.textMuted,
                     textDecoration: "none",
                     background: isActive ? "rgba(201,161,90,0.08)" : "transparent",
                     borderLeft: isActive
-                      ? `2px solid ${C.gold}`
+                      ? `2px solid ${COLOR.strategy}`
                       : "2px solid transparent",
                     transition: "background 0.15s, color 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.background = COLOR.surfaceElevated;
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.background = "transparent";
+                    }
                   }}
                 >
                   <span style={{ fontSize: 14, width: 20, textAlign: "center" }}>
@@ -354,7 +335,6 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [authUser, setAuthUser] = useState(null);
 
-  // Lightweight auth check — reads session from localStorage and checks status
   useEffect(() => {
     (async () => {
       try {
@@ -367,9 +347,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
           const me = await getMe();
           setAuthUser(me);
         }
-      } catch {
-        // Not logged in or session expired — silently ignore
-      }
+      } catch {}
     })();
   }, []);
 
@@ -381,27 +359,23 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
       const { clearSessionId } = await import("@/lib/session");
       await logoutUser();
       clearSessionId();
-    } catch {
-      // Ignore
-    }
+    } catch {}
     setAuthUser(null);
     router.replace("/");
   }, [router]);
 
   const activeKey = getActiveKey(pathname);
 
-  // Close sidebar on mobile by default
   useEffect(() => {
     if (isMobile) setSidebarOpen(false);
     else setSidebarOpen(true);
   }, [isMobile]);
 
-  // Close sidebar on navigation on mobile
   useEffect(() => {
     if (isMobile) setSidebarOpen(false);
   }, [pathname, isMobile]);
 
-  const contentMarginLeft = isMobile ? 0 : sidebarOpen ? 220 : 0;
+  const contentMarginLeft = isMobile ? 0 : sidebarOpen ? SIDEBAR_WIDTH : 0;
 
   return (
     <>
@@ -409,7 +383,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
         @media (max-width: 900px) {
           .shell-hamburger { display: block !important; }
           .shell-sidebar { width: 0 !important; min-width: 0 !important; }
-          .shell-sidebar.shell-open { width: 220px !important; min-width: 220px !important; }
+          .shell-sidebar.shell-open { width: ${SIDEBAR_WIDTH}px !important; min-width: ${SIDEBAR_WIDTH}px !important; }
         }
       `}</style>
 
@@ -429,30 +403,27 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
         onClose={() => setSidebarOpen(false)}
       />
 
-      {/* Mobile overlay */}
       {isMobile && sidebarOpen && (
         <div
           style={{
             position: "fixed",
-            top: 48,
+            top: TOP_BAR_HEIGHT,
             left: 0,
             right: 0,
             bottom: 0,
             background: "rgba(0,0,0,0.5)",
-            zIndex: 80,
+            zIndex: LAYER.overlay - 20,
           }}
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Main content */}
       <main
         style={{
-          marginTop: 48,
+          marginTop: TOP_BAR_HEIGHT,
           marginLeft: contentMarginLeft,
-          minHeight: "calc(100vh - 48px)",
+          minHeight: `calc(100vh - ${TOP_BAR_HEIGHT}px)`,
           transition: "margin-left 0.2s ease",
-          padding: 16,
         }}
       >
         {children}
