@@ -195,3 +195,44 @@ API secret exposed:              NO (none exists yet; never printed)
 Access token exposed:            NO (none exists yet; never printed)
 Secrets committed:               NO
 ```
+
+---
+
+## 18. Credential intake status (2026-09-13, staging app created)
+
+The user created the dedicated staging Developer App:
+
+```text
+App:          StrikeNova Staging
+Redirect URI: https://strikenova-api-staging.onrender.com/auth/callback  (matches derivation)
+```
+
+Configuration re-verified after app creation: Render staging env is exactly
+`[ADDITIONAL_CORS_ORIGINS, BACKEND_URL, DATABASE_URL, GOOGLE_CLIENT_ID,
+TOKEN_ENCRYPTION_KEY]`, `BACKEND_URL` correct, health/readiness 200.
+`UPSTOX_*` service vars intentionally not set yet.
+
+**Credential channel (no chat paste, per the task rules):** a local-only
+intake file `~/.strikenova_upstox_staging.txt` has been created with two
+placeholder lines (`UPSTOX_API_KEY=`, `UPSTOX_API_SECRET=`). The user fills
+the two values from the "StrikeNova Staging" app page; the agent then, in a
+single in-process step, writes them to Render staging's secret store
+(`UPSTOX_API_KEY` / `UPSTOX_API_SECRET`) and **deletes the file**. The secret
+never appears in chat, Git, logs, or test output.
+
+**Important discovery:** the repo-local `backend/.env` (mtime 2026-08-23)
+contains Upstox credentials whose registered redirect URI is
+`http://localhost:8000/auth/callback` — a **dev-app** registration, not the
+new staging app. Upstox enforces redirect-URI matching on live apps, so those
+credentials **cannot** be used for the staging flow and were NOT copied
+anywhere. The staging app's own credentials must come through the intake
+file.
+
+Once the intake file is filled, the remaining execution order is: (1) write
+both values to Render staging + verify by name, (2) exactly one manual deploy,
+(3) health/readiness + smoke suites (`STAGING_SMOKE=1`, broker suite with
+`STAGING_BROKER_SMOKE=1`), (4) generate the real authorization URL from the
+app and hand it to the user for browser consent, (5) verify callback →
+server-side exchange → encrypted storage → connection state → profile →
+funds → disconnect semantics, then (6) update §7–§13 of this report with
+results.
