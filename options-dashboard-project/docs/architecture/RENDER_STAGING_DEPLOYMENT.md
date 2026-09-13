@@ -209,6 +209,28 @@ Production traffic:      NO CHANGE
    (non-blocking for CRDB; documented in the Northflank report §13).
 5. CORS: set `FRONTEND_URL`/`ADDITIONAL_CORS_ORIGINS` on Render once the Vercel staging
    URL exists (§16 — update required after Vercel staging URL is known).
+6. ~~Google OAuth needs `TOKEN_ENCRYPTION_KEY` on the service~~ — **DONE 2026-09-13**, see §19.
+
+## 19. Post-publication configuration change #2 — TOKEN_ENCRYPTION_KEY (2026-09-13)
+
+Follow-up to §18, resolving the Google OAuth 500 found during staging browser acceptance
+(`STAGING_BROWSER_ACCEPTANCE.md` §11/§18):
+
+* `TOKEN_ENCRYPTION_KEY` **configured: YES** — value **NEVER RECORDED** (generated
+  cryptographically random in-process, piped directly into the Render API write; never
+  printed, logged, or committed). It exists only in Render's secret store.
+* Safety: staging DB verified to contain **zero** encrypted broker-credential rows before
+  the key was introduced (setting a key is lossless on an empty credential store).
+* `DATABASE_URL` and `ADDITIONAL_CORS_ORIGINS` preserved byte-for-byte (verified after write).
+* **Manual deployment** (auto-deploy remains OFF): deploy `dep-daj7qtgae00c738tspo0`,
+  commit `e97d692` (docs-only HEAD; app code identical to the validated baseline),
+  status **live**.
+* **Resulting health:** `/health` 200, `/readiness` 200 with `database: ok`.
+* **Google-state endpoint result:** `POST /auth/google/state` → **200** with correct CORS
+  headers and the expected `{state, nonce}` shape — the previous 500 is resolved.
+* Remaining (external, not this service): register the Vercel staging origin in the Google
+  OAuth client's Authorized JavaScript origins (account-owner action; shared-with-production
+  client left untouched by this session).
 
 ## 18. Post-publication configuration change (2026-09-13)
 

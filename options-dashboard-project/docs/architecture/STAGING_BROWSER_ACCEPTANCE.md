@@ -167,9 +167,48 @@ included in any stored evidence).
 
 | # | Area | Finding | Severity | Remediation owner |
 |---|---|---|---|---|
-| 1 | Google OAuth | `POST /auth/google/state` → 500 on staging; `TOKEN_ENCRYPTION_KEY` unset on Render service | 🔴 blocks Google login on staging | Backend config (separate task) |
+| 1 | Google OAuth | `POST /auth/google/state` → 500 on staging; `TOKEN_ENCRYPTION_KEY` unset on Render service | ✅ **RESOLVED** (see §18) | Backend config (done 2026-09-13) |
 | 2 | Landing page | Console warning `<svg> attribute height: "auto"` (cosmetic, static marketing SVG) | 🟢 trivial | Frontend (optional) |
 | 3 | Harness note | Preview browser cannot attach to non-loopback origins; local proxy used (documented in §4) | 🟡 tooling note | n/a |
+
+## 18. Google OAuth staging remediation (chronological, 2026-09-13)
+
+1. **Original finding (this report, §11/§15):** `POST /auth/google/state` returned HTTP 500
+   from every origin; browser showed "Failed to initialize Google Sign-In".
+2. **Root cause:** Render staging service had no `TOKEN_ENCRYPTION_KEY`; the OAuth-state
+   signer (`_get_state_hmac_key()`) raises `ValueError` when it is unset, and the unhandled
+   error surfaced as a 500 (which also suppressed CORS headers).
+3. **Pre-change safety check:** staging database scanned for encrypted material before
+   introducing a key — `broker_tokens.broker_token_encrypted` non-null: **0**;
+   `broker_connections` rows: **0**; all encrypted/secret columns across the schema NULL.
+   Setting a fresh key was therefore lossless (no pre-existing ciphertext depends on an old key).
+4. **Key generation:** cryptographically random (`secrets.token_urlsafe(32)`-equivalent,
+   43-char URL-safe), generated **in-process** and piped directly into the Render API write —
+   never printed, logged, or stored in any file. Key exists only in Render's secret store.
+5. **Render configuration:** `TOKEN_ENCRYPTION_KEY` added via the Render API env-vars PUT
+   (bare-array body); `DATABASE_URL` and `ADDITIONAL_CORS_ORIGINS` preserved and re-verified
+   (names only; CORS value still exactly the staging origin).
+6. **Manual deployment:** Render auto-deploy is OFF, so a manual deploy was triggered
+   (API): `dep-daj7qtgae00c738tspo0`, commit `e97d692` (docs-only HEAD; app code identical
+   to the validated baseline), status **live**.
+7. **Endpoint result:** `POST /auth/google/state` → **HTTP 200** with CORS headers, returning
+   the expected `{"state": …, "nonce": …}` shape (lengths 129 / 43; values not recorded).
+8. **Log verification:** the `ValueError: TOKEN_ENCRYPTION_KEY must be set…` line appears only
+   in **historical** (pre-fix) log entries; post-deploy log window is clean (startup complete,
+   health 200s, no 500s, no tracebacks).
+9. **Browser result:** clicking "Continue with Google" on the staging frontend now succeeds in
+   initializing — the frontend receives state+nonce (200) and proceeds toward Google
+   authorization. The previous failure banner no longer appears. Full flow stops at the
+   Google consent boundary (§11/§16 — external configuration).
+10. **External configuration status:** `GOOGLE OAUTH STAGING — EXTERNAL GOOGLE CLOUD
+   CONFIGURATION REQUIRED`. The coding environment has no authorized Google Cloud access
+   (no `gcloud` CLI or credentials), and the OAuth client is shared with production, so
+   this session did NOT modify it. **User must add
+   `https://strikenova-frontend-staging.vercel.app` to the Google OAuth Authorized
+   JavaScript origins.**
+11. **Regression check after the fix:** register → login → `/auth/me` → `/paper/capital`
+    (DB-backed, CRDB) → logout all pass; `/health` and `/readiness` 200;
+    email/password authentication unaffected.
 
 No application-code defects requiring immediate source changes were found.
 
