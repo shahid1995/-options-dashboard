@@ -210,6 +210,43 @@ Production traffic:      NO CHANGE
 5. CORS: set `FRONTEND_URL`/`ADDITIONAL_CORS_ORIGINS` on Render once the Vercel staging
    URL exists (§16 — update required after Vercel staging URL is known).
 6. ~~Google OAuth needs `TOKEN_ENCRYPTION_KEY` on the service~~ — **DONE 2026-09-13**, see §19.
+7. ~~Google OAuth needs `GOOGLE_CLIENT_ID` on the service~~ — **DONE 2026-09-13**, see §20.
+8. Frontend OAuth-state defect fixed upstream in the same commit this service now runs
+   (`4a3d31e`); no backend change was required.
+
+## 20. Post-publication configuration change #3 — GOOGLE_CLIENT_ID + staging OAuth client (2026-09-13)
+
+Follow-up to §19, completing the staging Google OAuth chain with a **separate** staging
+Google Cloud project and Web OAuth client (production OAuth client untouched):
+
+* **`GOOGLE_CLIENT_ID` configured: YES** — set to the new **staging** Client ID via the
+  Render API env-vars PUT (bare-array). No client secret exists or is used: the flow is a
+  public-client `response_type=id_token` browser flow, and the backend verifies the ID
+  token's `aud` against this same Client ID (`jwt_decode(..., audience=client_id)`).
+* **Environment set after the change** (names verified via API):
+  `[ADDITIONAL_CORS_ORIGINS, DATABASE_URL, GOOGLE_CLIENT_ID, TOKEN_ENCRYPTION_KEY]` —
+  the three pre-existing variables preserved byte-for-byte (re-verified after the write).
+* **Same-Client-ID proof:** the Render value equals the staging Client ID baked into the
+  served Vercel staging bundle — frontend and backend verified to share one staging client.
+* **Manual deployment** (auto-deploy remains OFF): deploy `dep-dajb7ruk1f9s73cv940g`,
+  commit `4a3d31e` — `fix(auth): pass mandatory OAuth state on Google callback login` —
+  status **live**. `/health` 200, `/readiness` 200 (database ok).
+* **Google-state endpoint result:** `POST /auth/google/state` → **HTTP 200** with CORS
+  headers and the expected `{state, nonce}` shape (lengths 129/43; values never recorded).
+* **Browser result:** "Continue with Google" on the staging frontend completes the backend
+  handshake (200) with no CORS failure, no 500, no missing-state error; the redirect toward
+  Google's authorization UI is stopped only by the local loopback-preview harness boundary.
+* **Google-side acceptance:** a server-rendered preflight of the exact auth URL built by the
+  frontend bundle (staging Client ID + staging origin as both JavaScript origin and redirect
+  URI) returned the real **"Sign in – Google Accounts"** page with **no** `invalid_client`,
+  **no** `redirect_uri_mismatch`, and no other OAuth error — Google accepts the staging
+  client and origin configuration.
+* **Email/password regression sweep:** register → login → `/auth/me` 200 →
+  `/auth/status` `logged_in:true` → `/paper/capital` 200 (CRDB-backed) → logout 200 →
+  post-logout `/auth/me` **401**. Unaffected.
+* **Full Google login:** PENDING — the final consent step requires an interactive human
+  Google account in a normal browser; no remaining external configuration is known to be
+  required. Production cutover was NOT performed.
 
 ## 19. Post-publication configuration change #2 — TOKEN_ENCRYPTION_KEY (2026-09-13)
 

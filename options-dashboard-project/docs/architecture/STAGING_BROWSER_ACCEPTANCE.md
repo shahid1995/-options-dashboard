@@ -170,6 +170,7 @@ included in any stored evidence).
 | 1 | Google OAuth | `POST /auth/google/state` → 500 on staging; `TOKEN_ENCRYPTION_KEY` unset on Render service | ✅ **RESOLVED** (see §18) | Backend config (done 2026-09-13) |
 | 2 | Landing page | Console warning `<svg> attribute height: "auto"` (cosmetic, static marketing SVG) | 🟢 trivial | Frontend (optional) |
 | 3 | Harness note | Preview browser cannot attach to non-loopback origins; local proxy used (documented in §4) | 🟡 tooling note | n/a |
+| 4 | Google OAuth (frontend) | `loginWithGoogle` dropped the mandatory HMAC-signed OAuth `state` from the Google callback → every Google login would fail with "Google OAuth state is required" once configuration was correct | ✅ **RESOLVED** (commit `4a3d31e`, see §19) | Frontend fix (done 2026-09-13) |
 
 ## 18. Google OAuth staging remediation (chronological, 2026-09-13)
 
@@ -232,4 +233,85 @@ Real order submitted:        NO (MARKET CLOSED + no broker; paper reset only)
 Real money used:             NO
 Automatic deployments:       NOT ENABLED (Render OFF; Vercel staging has no Git integration)
 Secrets committed:           NO
+```
+
+## 19. Google OAuth final remediation — separate staging client (2026-09-13)
+
+Chronological follow-up to §18. This phase completed the staging Google OAuth chain:
+
+1. **Frontend defect found and fixed (code inspection during flow verification):**
+   `lib/useAuth.js` dropped the mandatory state parameter when handling Google's URL-fragment
+   callback — `loginWithGoogle(googleResult.idToken)` did not forward the signed `state`, so
+   every Google login would have failed backend validation with "Google OAuth state is
+   required" even with perfect configuration. Fixed in commit `4a3d31e`
+   (`fix(auth): pass mandatory OAuth state on Google callback login`, one file, +3/−2;
+   `lib/useAuth.test.js` 7/7 pass; pushed to the branch). This defect also exists in the
+   production frontend tree — noted for the owner; production was NOT touched.
+2. **Architecture decision (user):** a **separate** Google Cloud project + Web OAuth client
+   was created for staging. The production OAuth client was NOT modified — no staging origins
+   were added to it, and no production origins were removed.
+3. **Required configuration derived from code (not invented):** the backend verifies the ID
+   token's `aud` against its own `GOOGLE_CLIENT_ID` (`_verify_google_token` →
+   `jwt_decode(..., audience=client_id)`), so frontend and backend must share the **same**
+   staging Client ID. The frontend's `AuthModal.js` builds
+   `https://accounts.google.com/o/oauth2/v2/auth` with `response_type=id_token`, `nonce`,
+   `state`, `prompt=select_account`, and **`redirect_uri` set explicitly** to the runtime
+   origin — therefore an Authorized Redirect URI is required, not optional.
+4. **Google Cloud configuration (user-created staging client):** Authorized JavaScript origin
+   and Authorized Redirect URI both `https://strikenova-frontend-staging.vercel.app` — the
+   same origin twice, no wildcard.
+5. **Vercel staging:** `NEXT_PUBLIC_GOOGLE_CLIENT_ID` set to the new staging Client ID
+   (replacing the previously baked production ID). Client IDs are public identifiers; no
+   OAuth client secret exists or is used anywhere in this flow.
+6. **Render staging:** `GOOGLE_CLIENT_ID` added via the Render API env-vars PUT (bare-array).
+   Env set is now exactly `[ADDITIONAL_CORS_ORIGINS, DATABASE_URL, GOOGLE_CLIENT_ID,
+   TOKEN_ENCRYPTION_KEY]`; the three pre-existing variables verified byte-for-byte preserved.
+   **Same-Client-ID proof:** the Render value equals the staging ID baked into the served
+   frontend bundle.
+7. **Manual deployments (auto-deploy OFF everywhere; Vercel staging has no Git integration):**
+   Render deploy `dep-dajb7ruk1f9s73cv940g` → **live** at commit `4a3d31e` (includes the
+   state fix); Vercel staging redeployed from the same commit — served bundle verified to
+   contain the staging Client ID and staging API URL with **zero** Railway references.
+8. **Deployment incident (transparency):** the first Vercel deploy was run from a temporary
+   worktree and auto-linked to the legacy `frontend` project instead of the staging project.
+   Its production alias was rolled back to the prior (2-day-old) deployment within minutes,
+   and verified not to serve staging content (0 staging-Client-ID occurrences). The corrected
+   staging deploy then aliased to `strikenova-frontend-staging.vercel.app`. No production
+   `options-dashboard` project was involved at any point.
+9. **Backend result:** `/health` 200, `/readiness` 200 (database ok);
+   `POST /auth/google/state` → **HTTP 200** with CORS headers and the expected
+   `{state, nonce}` shape (lengths 129/43; values never recorded).
+10. **Browser initialization result:** loading the staging frontend and clicking
+    "Continue with Google" issues `POST /auth/google/state` → **200** from the real frontend
+    code path — no CORS failure, no 500, no `TOKEN_ENCRYPTION_KEY` error, no missing-state
+    error. The subsequent redirect to Google's authorization UI was aborted only by the local
+    loopback-preview harness boundary (§4/§15 #3), which cannot leave localhost origins.
+11. **Google-side acceptance (server-rendered preflight):** the exact auth URL constructed by
+    the served bundle was requested server-side with the staging Client ID, redirect URI,
+    `response_type=id_token`, nonce and state — Google returned the real
+    **"Sign in – Google Accounts"** page (HTTP 200) with **no** `invalid_client`, **no**
+    `redirect_uri_mismatch`, and no other OAuth error. The staging client and origin are
+    accepted by Google.
+12. **Session/logout validation (platform-level):** full email/password round-trip against
+    the same backend and session machinery — register → login → `/auth/me` 200 →
+    `/auth/status` `logged_in:true` → `/paper/capital` 200 (CRDB-backed) → logout 200 →
+    post-logout `/auth/me` **401**. Google login creates sessions through this identical
+    mechanism.
+13. **Full Google login:** `PENDING` — requires an interactive human Google consent with an
+    authorized test account in a normal browser, which this environment cannot perform.
+    All automatable prerequisites are verified green; **no remaining external configuration
+    is known to be required**.
+
+## 20. Production-safety confirmation (this phase)
+
+```text
+Production Google OAuth client changed:  NO (separate staging client created instead)
+Vercel production changed:               NO (options-dashboard untouched)
+Railway changed:                         NO
+Production DB changed:                   NO
+Production DNS changed:                  NO
+Client secret in frontend:               NO (flow uses no client secret)
+Client secret committed:                 NO
+TOKEN_ENCRYPTION_KEY exposed:            NO (unchanged in Render secret store)
+OAuth token logged:                      NO
 ```
