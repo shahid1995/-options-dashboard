@@ -279,6 +279,31 @@ staging backend's request logs provide direct server-side evidence of the comple
 
 **Verdict: `GOOGLE OAUTH STAGING FULLY VERIFIED`.**
 
+## 22. Post-publication configuration change #4 — BACKEND_URL (2026-09-13)
+
+Preparation for real Upstox OAuth staging validation
+(`UPSTOX_STAGING_OAUTH_VALIDATION.md`):
+
+* **`BACKEND_URL` configured: YES** — `https://strikenova-api-staging.onrender.com`,
+  added via the Render API env-vars PUT (bare-array). All five variables
+  verified after write:
+  `[ADDITIONAL_CORS_ORIGINS, BACKEND_URL, DATABASE_URL, GOOGLE_CLIENT_ID,
+  TOKEN_ENCRYPTION_KEY]` — the four pre-existing variables preserved
+  byte-for-byte.
+* The application derives `UPSTOX_REDIRECT_URI = {BACKEND_URL}/auth/callback`
+  when unset (verified against the committed `config.py`), yielding exactly
+  `https://strikenova-api-staging.onrender.com/auth/callback` — the URI the
+  staging Upstox Developer App must be registered with.
+* **Manual deployment** (auto-deploy remains OFF; exactly one deploy):
+  deploy `dep-dajco2fqj5pc73d3uhe0`, commit `f1dea0a`, status **live**.
+* **Resulting health:** `/health` 200, `/readiness` 200 (`database: ok`,
+  `token_store: ok`). Post-deploy regression sweep green (register → login →
+  `/auth/me` → `/paper/capital` → `/auth/google/state` → logout → 401).
+* `UPSTOX_API_KEY` / `UPSTOX_API_SECRET` / `UPSTOX_REDIRECT_URI` are
+  deliberately NOT set — the BYOB per-user flow stores user credentials
+  encrypted per connection; service-level Upstox vars are a documented
+  fallback pending the user's staging Developer App.
+
 ## 19. Post-publication configuration change #2 — TOKEN_ENCRYPTION_KEY (2026-09-13)
 
 Follow-up to §18, resolving the Google OAuth 500 found during staging browser acceptance
