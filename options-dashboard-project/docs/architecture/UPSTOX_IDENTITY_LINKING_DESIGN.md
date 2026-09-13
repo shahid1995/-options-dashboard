@@ -1,7 +1,9 @@
 # StrikeNova — Upstox Identity Linking Design
 
 Date: 2026-09-13
-Status: **DESIGN — NOT IMPLEMENTED** (implementation requires explicit authorization)
+Status: **DESIGN — IMPLEMENTATION AUTHORIZED AFTER RECONCILIATION**
+(§17 resolves every reconciliation item; code implementation still
+requires its own explicit authorization gate)
 Scope: broker OAuth callback identity resolution, broker-identity ownership, transaction/concurrency design
 Companion evidence: `UPSTOX_STAGING_OAUTH_VALIDATION.md` §19 (live staging failure record)
 
@@ -328,11 +330,15 @@ written at all.
 The callback stops creating users, so a person whose *only* platform
 identity is an existing `(UPSTOX, broker_user_id)` user keeps signing in by
 lookup-only: if the profile identity maps to an existing user, that user is
-authenticated (token + fresh session minted exactly as today); if not, the
-flow is a *connection* attempt and requires the authenticated session that
+authenticated (token + fresh session minted exactly as today);if not, the flow is a *connection* attempt and requires the authenticated session that
 `/auth/login` already enforces. "Lookup-only sign-in, never create" is the
 complete replacement for the create-path. (Open decision 1 covers whether
 lookup-only sign-in ships in the same change.)
+
+> **Superseded by §17.1:** the owner has **RETIRED** anonymous Upstox
+> sign-in — broker OAuth is strictly a Connect-Broker operation for an
+> already-authenticated user. Lookup-only sign-in will not ship; legacy
+> Upstox-only users move to a separate workstream.
 
 ## 8. Identity invariants
 
@@ -429,9 +435,8 @@ Scenario: users A and B both connect Upstox identity X simultaneously.
 * Result: exactly one owner; the loser sees
   `login_error=broker_identity_in_use`; no duplicate ownership; no partial
   state (Invariant 6 holds under concurrency).
-* Same-user idempotent reconnect (Case 2) is race-free: both transactions
-  target the same existing rows; unique constraints are satisfied; the
-  second commit merely refreshes timestamps/status.
+*Same-user idempotent reconnect (Case 2) requires an explicit arbitration
+mechanism — the original "race-free" claim is corrected in §17.3.
 
 Current-constraint verdict: **not sufficient** — the per-user
 `uq_broker_connection` cannot express global broker-identity ownership;
@@ -543,6 +548,10 @@ downgrade:
 
 ## 16. Open decisions
 
+*(Resolution status as of §17: item 1 DECIDED — RETIRED; item 2 remains an
+implementation-time hygiene choice, not a design blocker; items 3–5
+unchanged.)*
+
 1. **Legacy lookup-only Upstox sign-in** — should the callback retain
    "authenticate an existing `(UPSTOX, broker_user_id)` user" (no
    creation) so historical Upstox-only accounts keep their sign-in path,
@@ -565,9 +574,166 @@ downgrade:
 
 ---
 
+## 17. Final Design Reconciliation
+
+Added 2026-09-13 after owner approval of Option A. This section is
+authoritative where it contradicts earlier sections; earlier text is
+retained for the audit trail with superseded markers.
+
+### 17.1 Legacy sign-in decision — RETIRED
+
+**NO NEW ANONYMOUS UPSTOX SIGN-IN.** Broker OAuth is strictly a
+"Connect Broker" operation for an already-authenticated StrikeNova
+platform user. `/auth/login`'s Day-3 authenticated-session requirement is
+confirmed as the intended permanent posture; no lookup-only sign-in path
+ships with the implementation.
+
+Legacy Upstox-only users (platform accounts whose only identity is
+`(UPSTOX, broker_user_id)`, created by the old callback create-path): if
+any exist in production, they are a **separate migration/authentication
+workstream** — out of scope here and explicitly NOT investigated by
+production-data access during this design task. The implementation's
+stamping of `users.broker_*` on connect is an ownership annotation, not a
+sign-in mechanism, and does not reintroduce one.
+
+### 17.2 Broker identifier proof — `broker_user_id` ≡ `broker_account_id` for Upstox
+
+Code-verified (read-only inspection of the committed adapter layer and the
+parallel dirty diff — the dirty diff does not touch any identifier
+function):
+
+* `app/brokers/adapters/upstox/profile.py::extract_account_id(profile)` —
+  returns exactly `profile["data"]["user_id"]` (docstring: "the broker's
+  account identifier (Upstox user_id / UCC)"); `adapter.py::extract_account_id`
+  delegates to it (AD-6).
+* `app/identity.py::get_or_create_user_from_upstox` — reads
+  `data.get("user_id")` from the same profile payload for
+  `users.broker_user_id`.
+* `app/brokers/adapters/upstox/mapper.py` — contains no user/account
+  identifier logic (it maps instruments/orders only).
+
+Conclusion: for Upstox, `broker_user_id` (user-table stamping) and
+`broker_account_id` (connection row) are the **same provider identifier** —
+the Upstox user_id / UCC, globally unique per Upstox account. The global
+uniqueness constraint therefore stays on `(broker, broker_account_id)`
+(WHERE `broker_account_id <> 'pending'`) as proposed in §14 — it indexes
+the authoritative identity, not a proxy.
+
+### 17.3 Concurrency correction — same-user reconnect race
+
+The earlier claim that same-user reconnect is "race-free" is **retracted**;
+two concurrent callbacks from the same user targeting identity X are a real
+race (both may miss the SELECT and both INSERT). The implementation MUST
+arbitrate in the database via an atomic mechanism, in this order of
+preference:
+
+1. **Atomic upsert**: `INSERT … ON CONFLICT (user_id, broker,
+   broker_account_id) DO UPDATE SET status/connected_at/…` (PostgreSQL;
+   SQLite equivalent via its upsert syntax), or
+2. **Deterministic IntegrityError → re-read/recover**: catch the unique
+   violation from `uq_broker_connection`, re-read the row in the same
+   transaction, apply the reconnect updates, commit.
+
+Required result (contract):
+
+```text
+two concurrent callbacks, same user, same broker identity X:
+  → exactly ONE BrokerConnection row
+  → no duplicate ownership
+  → NO uncaught IntegrityError escaping the callback
+  → both callbacks resolve per reconnect semantics
+    (each mints its own session + broker-token row;
+     uq_broker_token_per_session is per-session, so both token rows are legal)
+```
+
+New explicit concurrency test (added to §13's list as 9b, Postgres
+harness): two threads, same user, same identity, simultaneously — assert
+exactly one connection row, both callbacks return success, zero uncaught
+IntegrityErrors, and two independent (connection_id, session_hash) token
+rows.
+
+Cross-user concurrency is unchanged from §11: the global partial unique
+index arbitrates; the loser's transaction rolls back and surfaces
+`broker_identity_in_use`.
+
+### 17.4 Atomic token persistence — binding requirement
+
+The implementation must collapse persistence into **ONE DB transaction**:
+
+```text
+resolve user (from bound session)
+→ ownership checks
+→ BrokerConnection upsert
+→ UserSession row (broker session)
+→ BrokerToken row (references that connection)
+→ COMMIT
+```
+
+The token row MUST reference the connection inside the same transaction;
+the callback's use of `_persist_token_to_db` on a separate DB session is
+retired for this flow (the in-memory cache is populated post-commit and
+remains the fast path; DB remains the restart-recovery copy). No
+"non-critical" persistence failure may be swallowed in this path.
+
+Invariant:
+
+```text
+connection persisted AND token row persisted AND session row persisted
+OR none of them persisted
+```
+
+New forced-failure test (extends §13 item 8): inject a failure **after**
+connection creation (e.g., violate the token-row constraint) and verify
+rollback removes all three artifacts — connection, session row, token row
+— and the Upstox token is never persisted anywhere.
+
+### 17.5 Final identity invariant
+
+For Upstox the authoritative uniqueness identity is:
+
+```text
+(provider="UPSTOX", broker_identity=profile["data"]["user_id"])
+```
+
+i.e. the Upstox user_id / UCC (§17.2). It appears in two places:
+
+* `broker_connections (broker, broker_account_id)` — the **ownership
+  ledger of record**, globally unique per connected identity via the new
+  partial index;
+* `users (broker_provider, broker_user_id)` — a legacy, denormalized
+  sign-in-aid stamp, unique per stamped identity via
+  `uq_users_broker_identity`.
+
+Consistency between the two while both exist:
+
+* the stamp is written ONLY inside the same transaction as the connection
+  upsert, ONLY when the column pair is NULL or already equal (never
+  overwritten to a different identity);
+* the two unique constraints jointly guarantee at most one stamped user
+  row and at most one connected connection row per broker identity, and
+  the callback's ownership checks keep them pointing at the same user;
+* the connections table remains authoritative; with anonymous broker
+  sign-in retired (§17.1), the user-table stamp exists only for historical
+  rows and is never read for authorization by the new flow.
+
+### 17.6 Owner decisions recorded
+
+1. Primary architecture: **Option A — session-bound broker linking** (approved).
+2. Anonymous Upstox sign-in: **RETIRED**; Connect-Broker only (§17.1).
+3. Legacy Upstox-only users: separate workstream; no production data
+   accessed in this design task.
+4. Email linking: **PROHIBITED** as authorization; mismatch allowed;
+   profile email is metadata only (unchanged from §6/§7).
+5. Broker identity identifiers: proven identical for Upstox (§17.2);
+   §14 index confirmed unchanged.
+6. Token persistence: atomic single-transaction requirement (§17.4).
+
+---
+
 ## Approval gate
 
-This document is a design baseline. Implementation is **NOT authorized**
-by this document. Implementation requires: (1) owner approval of §7 and
-the open decisions above, (2) an explicit implementation authorization,
-then (3) the TDD plan in §13 as the acceptance contract.
+Option A is **owner-approved** and §17 resolves every reconciliation item.
+This document is the implementation-ready design baseline. Code
+implementation, migrations, and deployment still require a separate,
+explicit implementation authorization, with the TDD plan in §13 as amended
+by §17.3/§17.4 as the acceptance contract.
