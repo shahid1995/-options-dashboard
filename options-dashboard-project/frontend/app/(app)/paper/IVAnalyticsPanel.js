@@ -20,6 +20,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { C, fmtIN } from "@/lib/ui";
+import { Metric, ChartContainer } from "@/components/app/core";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -37,11 +38,14 @@ const STATUS_NOTE = {
 
 function MetricBox({ label, value, sub, color }) {
   return (
-    <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-      <div style={{ fontSize: 9, letterSpacing: 0.8, color: C.faint, fontWeight: 700 }}>{label.toUpperCase()}</div>
-      <div style={{ fontSize: 13, fontWeight: 800, color: color || C.text, marginTop: 2, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      {sub && <div style={{ fontSize: 9.5, color: C.faint, marginTop: 1 }}>{sub}</div>}
-    </div>
+    <Metric
+      label={label}
+      value={value}
+      sub={sub}
+      color={color}
+      size="md"
+      style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}
+    />
   );
 }
 
@@ -144,11 +148,12 @@ export default function IVAnalyticsPanel({ chainCache, spot, expiry, isMobile })
       </div>
 
       {/* IV vs strike curve */}
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.6, color: C.text, marginBottom: 6 }}>
-          IV CURVE · {expiry ?? "selected expiry"}
-          <span style={{ color: C.faint, fontWeight: 400 }}> · IV vs strike (call / put, separate lines)</span>
-        </div>
+      <ChartContainer
+        title={`IV CURVE · ${expiry ?? "selected expiry"}`}
+        caption="IV vs strike (call / put, separate lines)"
+        source="LIVE · broker IV"
+        style={{ marginBottom: 12 }}
+      >
         {curveData.length === 0 ? (
           <div style={{ fontSize: 11, color: C.faint, padding: "24px 0", textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 8 }}>
             No chain data for this expiry.
@@ -175,14 +180,14 @@ export default function IVAnalyticsPanel({ chainCache, spot, expiry, isMobile })
         <div style={{ fontSize: 9.5, color: C.faint, marginTop: 5 }}>
           <span style={{ color: C.green }}>■</span> Call IV · <span style={{ color: C.red }}>■</span> Put IV — broker IV normalized to %.
         </div>
-      </div>
+      </ChartContainer>
 
       {/* Term structure */}
-      <div>
-        <div style={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.6, color: C.text, marginBottom: 6 }}>
-          IV TERM STRUCTURE · ATM IV vs days to expiry
-          <span style={{ color: C.faint, fontWeight: 400 }}> · each expiry uses its own chain</span>
-        </div>
+      <ChartContainer
+        title="IV TERM STRUCTURE · ATM IV vs days to expiry"
+        caption="each expiry uses its own chain"
+        source="LIVE · broker IV"
+      >
         {termData.length < 2 ? (
           <div style={{ fontSize: 11, color: C.faint, padding: "24px 0", textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 8 }}>
             {termData.length === 1
@@ -213,7 +218,7 @@ export default function IVAnalyticsPanel({ chainCache, spot, expiry, isMobile })
             not a signal.
           </div>
         )}
-      </div>
+      </ChartContainer>
 
       {/* Warnings from the calculation layer */}
       {analytics.warnings.length > 0 && (

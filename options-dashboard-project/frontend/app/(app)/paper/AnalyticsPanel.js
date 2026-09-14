@@ -23,6 +23,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { C, fmtIN } from "@/lib/ui";
+import { Metric, ChartContainer } from "@/components/app/core";
 import { nearestStrike } from "@/lib/calculations/ivAnalytics";
 import {
   calculateMarketAnalytics,
