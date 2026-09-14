@@ -72,7 +72,7 @@ useEffect(() => {
 
 1. **Phase E implementation** (`aa51cd6`): Removed existing auto-refresh during component migration
 2. **First remediation** (`743fb54`): Restored refresh but placed interval inside `fetchData()` (incorrect lifecycle)
-3. **Final remediation** (`0f5b2a7`): Moved interval ownership to `useEffect` (correct lifecycle)
+3. **Final remediation** (`c9c54786f8c0c08ff7b0f2fdf6a9d2f546b98cd6`): Moved interval ownership to `useEffect` (correct lifecycle)
 
 ---
 
@@ -162,7 +162,7 @@ Confirmed:
 | --- | ------- | ---------- |
 | `aa51cd6` | `refactor(ui): refine StrikeNova market intelligence surface` | https://github.com/shahid1995/-options-dashboard/commit/aa51cd6cf77f1d48231735e443b0afaa396b7e9a |
 | `743fb54` | `fix(ui): restore GEX refresh behavior and close phase E gate` | https://github.com/shahid1995/-options-dashboard/commit/743fb540a1de023b09c397107042a4109537120a |
-| `0f5b2a7` | `fix(ui): correct GEX refresh timer lifecycle` | https://github.com/shahid1995/-options-dashboard/commit/0f5b2a7 |
+| `c9c5478` | `fix(ui): correct GEX refresh timer lifecycle` | https://github.com/shahid1995/-options-dashboard/commit/c9c54786f8c0c08ff7b0f2fdf6a9d2f546b98cd6 |
 
 Pushed to `feat/strikenova-day35-portfolio-intelligence`. Not merged. Not deployed.
 
