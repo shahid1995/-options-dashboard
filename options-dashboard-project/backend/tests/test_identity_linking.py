@@ -590,7 +590,8 @@ def test_global_partial_index_blocks_cross_user_duplicate_and_allows_pending():
             text(
                 "CREATE UNIQUE INDEX uq_broker_identity_global "
                 "ON broker_connections (broker, broker_account_id) "
-                "WHERE broker_account_id <> 'pending'"
+                "WHERE broker_account_id <> 'pending' "
+                "AND broker_account_id <> 'data-only'"
             )
         )
         u1, u2 = "u1-" + str(uuid4()), "u2-" + str(uuid4())
@@ -607,6 +608,8 @@ def test_global_partial_index_blocks_cross_user_duplicate_and_allows_pending():
             ("c2", u2, "UCC-9"),  # cross-user duplicate -> must be rejected
             ("p1", u1, "pending"),
             ("p2", u2, "pending"),  # pending sentinel rows stay legal
+            ("d1", u1, "data-only"),
+            ("d2", u2, "data-only"),  # data-only sentinel rows stay legal
         ):
             stmt = text(
                 "INSERT INTO broker_connections (id, user_id, broker, broker_account_id, "
@@ -622,9 +625,12 @@ def test_global_partial_index_blocks_cross_user_duplicate_and_allows_pending():
                     cx.execute(stmt, {"c": cid, "u": uid, "a": acct})
             else:
                 cx.execute(stmt, {"c": cid, "u": uid, "a": acct})
-        # both pending rows committed -> sentinel semantics preserved
+        # both sentinel kinds committed -> per-user sentinel semantics preserved
         assert cx.execute(
             text("SELECT COUNT(*) FROM broker_connections WHERE broker_account_id = 'pending'")
+        ).scalar() == 2
+        assert cx.execute(
+            text("SELECT COUNT(*) FROM broker_connections WHERE broker_account_id = 'data-only'")
         ).scalar() == 2
 
 
@@ -651,7 +657,8 @@ def test_migration_predicate_allows_both_sentinels_per_user():
             text(
                 "CREATE UNIQUE INDEX uq_broker_identity_global "
                 "ON broker_connections (broker, broker_account_id) "
-                "WHERE broker_account_id NOT IN ('pending', 'data-only')"
+                "WHERE broker_account_id <> 'pending' "
+                "AND broker_account_id <> 'data-only'"
             )
         )
         u1, u2 = "u1-" + str(uuid4()), "u2-" + str(uuid4())
