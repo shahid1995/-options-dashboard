@@ -142,7 +142,7 @@ export default function JournalPanel({
   const closedTrades = stats.closed_trades ?? "—";
 
   return (
-    <div style={{ marginTop: 14, ...panel }}>
+    <div style={{ marginTop: 14, ...panel }} role="region" aria-label="Transaction log and historical journal">
       {/* Header */}
       <div
         style={{
@@ -167,7 +167,7 @@ export default function JournalPanel({
             </ActionButton>
           )}
           {logRows.length > JOURNAL_PAGE_SIZE && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <nav aria-label="Journal pagination" style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <ActionButton
                 variant="secondary"
                 size="sm"
@@ -189,7 +189,7 @@ export default function JournalPanel({
               >
                 Next →
               </ActionButton>
-            </div>
+            </nav>
           )}
         </div>
       </div>

@@ -285,4 +285,38 @@ describe("JournalPanel — Task 8: responsive & keyboard behavior", () => {
     const html = renderJournal({ journal: { trades: sampleTrades } });
     expect(html).not.toContain("Win rate");
   });
+
+  it("renders journal panel with ARIA region and label for accessibility", () => {
+    const html = renderJournal({ journal: { trades: sampleTrades, stats: { closed_trades: 1 } } });
+    expect(html).toContain('role="region"');
+    expect(html).toContain('aria-label="Transaction log and historical journal"');
+  });
+
+  it("renders pagination inside nav element with aria-label", () => {
+    const manyTrades = Array.from({ length: 15 }, (_, i) => ({
+      ...sampleTrades[0],
+      id: `t-${i}`,
+    }));
+    const html = renderJournal({
+      journal: { trades: manyTrades, stats: { closed_trades: 15 } },
+    });
+    expect(html).toContain("<nav");
+    expect(html).toContain('aria-label="Journal pagination"');
+  });
+
+  it("does not render nav when no pagination needed", () => {
+    const html = renderJournal({ journal: { trades: sampleTrades, stats: { closed_trades: 1 } } });
+    expect(html).not.toContain("<nav");
+  });
+
+  it("renders focus-visible outline on ActionButton pagination (no outline:none)", () => {
+    const manyTrades = Array.from({ length: 15 }, (_, i) => ({
+      ...sampleTrades[0],
+      id: `t-${i}`,
+    }));
+    const html = renderJournal({
+      journal: { trades: manyTrades, stats: { closed_trades: 15 } },
+    });
+    expect(html).not.toContain("outline:none");
+  });
 });
