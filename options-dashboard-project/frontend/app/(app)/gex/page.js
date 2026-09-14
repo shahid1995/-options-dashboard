@@ -105,17 +105,18 @@ export default function GexPage() {
       setQuality(results.quality || null);
       setLastFetchTime(Date.now());
       setLoading(false);
-
-      // Auto-refresh every 60 seconds if page is visible
-      const refreshTimer = setInterval(() => {
-        if (!document.hidden) {
-          fetchData();
-        }
-      }, 60000);
-      return () => clearInterval(refreshTimer);
     };
 
     fetchData();
+
+    // Auto-refresh every 60 seconds if page is visible
+    const refreshTimer = setInterval(() => {
+      if (!document.hidden) {
+        fetchData();
+      }
+    }, 60000);
+
+    return () => clearInterval(refreshTimer);
   }, [loggedIn]);
 
   if (loggedIn === null) {
