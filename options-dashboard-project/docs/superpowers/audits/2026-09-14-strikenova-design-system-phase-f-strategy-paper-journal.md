@@ -14,7 +14,9 @@
 | Branch | `feat/strikenova-day35-portfolio-intelligence` |
 | HEAD SHA (start) | `127959bb1825b82cd309accc0f1566495f274ca3` |
 | Baseline tests | 1754/1754 passing |
-| Baseline build | 17 routes compiled |
+| Baseline build | 19 routes compiled (18 page.js + `/_not-found`) |
+
+> **Note on baseline route count:** The Phase E audit stated "17 routes" but repository evidence shows 18 page.js files at baseline (`127959bb`), producing 19 routes with Next.js's internal `/_not-found`. Phase F added **0 routes** — all changes were modifications to existing files under `frontend/app/(app)/paper/`. |
 
 ---
 
@@ -104,7 +106,33 @@ Route (app)                              Size     First Load JS
 ○  (Static)  prerendered as static content
 ```
 
-**Build passes.** All 17 routes compiled successfully.
+**Build passes.** All 19 routes compiled successfully (18 page.js + Next.js internal `/_not-found`).
+
+### Route Inventory (Post-Phase F)
+
+| Route | Source File | Origin |
+| --- | --- | --- |
+| `/` | `frontend/app/(public)/page.js` | Pre-existing (marketing site) |
+| `/_not-found` | Next.js internal | Framework |
+| `/about` | `frontend/app/(public)/about/page.js` | Pre-existing |
+| `/activity` | `frontend/app/(app)/activity/page.js` | Pre-existing |
+| `/brokers` | `frontend/app/(app)/brokers/page.js` | Pre-existing |
+| `/dashboard` | `frontend/app/(app)/dashboard/page.js` | Pre-existing |
+| `/features` | `frontend/app/(public)/features/page.js` | Pre-existing |
+| `/gex` | `frontend/app/(app)/gex/page.js` | Pre-existing |
+| `/how-it-works` | `frontend/app/(public)/how-it-works/page.js` | Pre-existing |
+| `/market` | `frontend/app/(app)/market/page.js` | Pre-existing |
+| `/market-intelligence` | `frontend/app/(public)/market-intelligence/page.js` | Pre-existing |
+| `/orders` | `frontend/app/(app)/orders/page.js` | Pre-existing |
+| `/paper` | `frontend/app/(app)/paper/page.js` | **Phase F modified** |
+| `/paper-trading` | `frontend/app/(public)/paper-trading/page.js` | Pre-existing |
+| `/portfolio` | `frontend/app/(app)/portfolio/page.js` | Pre-existing |
+| `/positions` | `frontend/app/(app)/positions/page.js` | Pre-existing |
+| `/settings` | `frontend/app/(app)/settings/page.js` | Pre-existing |
+| `/strategies` | `frontend/app/(app)/strategies/page.js` | Pre-existing |
+| `/strategy-lab` | `frontend/app/(public)/strategy-lab/page.js` | Pre-existing |
+
+**Phase F route delta: 0.** All Phase F changes were modifications to existing files under `frontend/app/(app)/paper/`. No new routes were added.
 
 ---
 
@@ -219,7 +247,7 @@ Confirmed:
 All Phase F tasks implemented, tested, and verified.
 
 - **Source/test evidence:** 1813/1813 tests pass (59 new tests added across Phase F components)
-- **Build evidence:** 19 routes compiled successfully (17 public + 2 dev verification routes)
+- **Build evidence:** 19 routes compiled successfully (18 page.js + Next.js internal `/_not-found`). Phase F added **0 routes** — all changes were modifications to existing files under `frontend/app/(app)/paper/`.
 - **Browser evidence:** HTTP 200 on all routes; AuthGate correctly redirects unauthenticated users; `desktop_preview` confirms functional authentication flow; `browser_exec` tool non-functional on this Windows host (times out on all URLs including example.com)
 
 See [Section 6](#6-browser-evidence) for the full browser-verification matrix and root-cause analysis.
