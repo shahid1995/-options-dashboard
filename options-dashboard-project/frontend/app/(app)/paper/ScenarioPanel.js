@@ -22,6 +22,7 @@
 
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
+import { Metric, ChartContainer } from "@/components/app/core";
 import { scenarioGreekComparison } from "@/lib/calculations/greekAnalytics";
 
 const chip = (active) => ({
@@ -54,13 +55,19 @@ const fmtGreekValue = (row, v) =>
 const fmtPct = (v) => (v == null ? "—" : `${(v * 100).toFixed(1)}%`);
 const fmtNum = (v, digits = 2) => (v == null ? "—" : v.toFixed(digits));
 
-function Summary({ label, value, color, sub }) {
+// Summary metric — uses the canonical Metric primitive for consistent
+// typography, spacing, and semantic colour handling.
+function SummaryMetric({ label, value, sub, color, semantic }) {
   return (
-    <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-      <div style={{ fontSize: 9, letterSpacing: 0.8, color: C.faint, fontWeight: 700 }}>{label.toUpperCase()}</div>
-      <div style={{ fontSize: 13, fontWeight: 800, color: color || C.text, marginTop: 2, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{value}</div>
-      {sub && <div style={{ fontSize: 9.5, color: C.faint, marginTop: 1 }}>{sub}</div>}
-    </div>
+    <Metric
+      label={label}
+      value={value}
+      sub={sub}
+      color={color}
+      semantic={semantic}
+      size="md"
+      style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px" }}
+    />
   );
 }
 
@@ -165,22 +172,24 @@ export default function ScenarioPanel({
         </div>
       </div>
 
-      {/* Summary */}
+      {/* Summary — uses canonical Metric primitive */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
-        <Summary label="Scenario Spot" value={result.spot != null ? fmtIN(result.spot, 2) : "—"} color={C.gold} sub="modelled underlying" />
-        <Summary label="Scenario IV" value={ivLabel} color={C.gold} sub={`shift ${ivShift === 0 ? "0" : fmtSigned(ivShift * 100, 0)} vol`} />
-        <Summary label="Time to Expiry" value={Number.isFinite(nearestT) ? `${Math.round(nearestT * 365)}D` : "—"} color={C.text} sub="nearest leg (year-fraction model)" />
-        <Summary label="Strategy Value" value={fmtRupee(result.strategyValue)} color={C.text} sub="MODELLED · Black-Scholes" />
-        <Summary
+        <SummaryMetric label="Scenario Spot" value={result.spot != null ? fmtIN(result.spot, 2) : "—"} color={C.gold} sub="modelled underlying" />
+        <SummaryMetric label="Scenario IV" value={ivLabel} color={C.gold} sub={`shift ${ivShift === 0 ? "0" : fmtSigned(ivShift * 100, 0)} vol`} />
+        <SummaryMetric label="Time to Expiry" value={Number.isFinite(nearestT) ? `${Math.round(nearestT * 365)}D` : "—"} sub="nearest leg (year-fraction model)" />
+        <SummaryMetric label="Strategy Value" value={fmtRupee(result.strategyValue)} sub="MODELLED · Black-Scholes" />
+        <SummaryMetric
           label="P&L vs Entry"
           value={fmtRupee(result.scenarioPnl)}
-          color={result.scenarioPnl == null ? C.text : result.scenarioPnl >= 0 ? C.green : C.red}
+          color={result.scenarioPnl == null ? undefined : result.scenarioPnl >= 0 ? C.green : C.red}
+          semantic={result.scenarioPnl == null ? undefined : result.scenarioPnl >= 0 ? "positive" : "negative"}
           sub={result.partial ? "partial (some legs unpriced)" : "vs original entry cost"}
         />
-        <Summary
+        <SummaryMetric
           label="Change vs Current"
           value={fmtRupee(result.scenarioChange)}
-          color={result.scenarioChange == null ? C.text : result.scenarioChange >= 0 ? C.green : C.red}
+          color={result.scenarioChange == null ? undefined : result.scenarioChange >= 0 ? C.green : C.red}
+          semantic={result.scenarioChange == null ? undefined : result.scenarioChange >= 0 ? "positive" : "negative"}
           sub="MODELLED vs live LTP mark"
         />
       </div>
@@ -237,26 +246,27 @@ export default function ScenarioPanel({
           <span style={{ color: C.green, fontWeight: 700 }}>LIVE</span> = broker/chain Greeks (current state) ·{" "}
           <span style={{ color: C.gold, fontWeight: 700 }}>MODELLED</span> = Black-Scholes under the active scenario ·{" "}
           <span style={{ color: C.muted, fontWeight: 700 }}>Δ MODEL</span> = model − live (neutral comparison, not a signal).
-          Theta per calendar day, Vega per 1 vol point; exposure = dir × qty × lot size × multiplier. Missing values stay “—” and are never substituted.
+          Theta per calendar day, Vega per 1 vol point; exposure = dir × qty × lot size × multiplier. Missing values stay "—" and are never substituted.
         </div>
       </div>
 
-      {/* Heatmap */}
+      {/* Heatmap — wrapped in ChartContainer for consistent panel styling */}
       {matrix && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6, color: C.text }}>SCENARIO P&L HEATMAP</div>
-            <div style={{ display: "flex", gap: 5 }}>
-              {[
-                ["spotIv", "Spot × IV"],
-                ["spotTime", "Spot × Time"],
-                ["ivTime", "IV × Time"],
-              ].map(([key, label]) => (
-                <button key={key} onClick={() => onAxisChange(key)} style={chip(axis === key)}>
-                  {label}
-                </button>
-              ))}
-            </div>
+        <ChartContainer
+          title="SCENARIO P&L HEATMAP"
+          caption="cells are strategy P&L vs entry under combined scenario inputs"
+          style={{ marginBottom: 12 }}
+        >
+          <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>
+            {[
+              ["spotIv", "Spot × IV"],
+              ["spotTime", "Spot × Time"],
+              ["ivTime", "IV × Time"],
+            ].map(([key, label]) => (
+              <button key={key} onClick={() => onAxisChange(key)} style={chip(axis === key)}>
+                {label}
+              </button>
+            ))}
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 11 }}>
@@ -291,9 +301,8 @@ export default function ScenarioPanel({
             <span><span style={{ color: C.red }}>■</span> negative P&L</span>
             <span><span style={{ color: C.green }}>■</span> positive P&L</span>
             <span><span style={{ color: C.muted }}>■</span> near zero</span>
-            <span>cells are strategy P&L vs entry under combined scenario inputs</span>
           </div>
-        </div>
+        </ChartContainer>
       )}
 
       {/* Per-leg breakdown: LIVE vs MODELLED */}
