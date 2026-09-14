@@ -31,6 +31,7 @@ export default function PublicHeader() {
   const [expandedGroup, setExpandedGroup] = useState(null);
   const navRef = useRef(null);
   const mobileMenuRef = useRef(null);
+  const mobileToggleRef = useRef(null);
   const { open: openAuth } = useAuthModal();
 
   // Close dropdown on outside click
@@ -45,11 +46,14 @@ export default function PublicHeader() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [expandedGroup]);
 
-  // Close mobile menu on Escape
+  // Close mobile menu on Escape — return focus to toggle button
   useEffect(() => {
     if (!mobileOpen) return;
     const handleKey = (e) => {
-      if (e.key === "Escape") setMobileOpen(false);
+      if (e.key === "Escape") {
+        setMobileOpen(false);
+        mobileToggleRef.current?.focus();
+      }
     };
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
@@ -253,6 +257,7 @@ export default function PublicHeader() {
 
             {/* Mobile hamburger */}
             <button
+              ref={mobileToggleRef}
               className="pub-nav-mobile-toggle ds-focus-ring"
               onClick={() => setMobileOpen((v) => !v)}
               aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
@@ -383,7 +388,6 @@ export default function PublicHeader() {
               </button>
             </div>
           </div>
-        </div>
       </div>
     </>
   );

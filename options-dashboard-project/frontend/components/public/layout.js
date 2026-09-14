@@ -171,6 +171,7 @@ export function CardGrid({
 /**
  * BentoGrid — an asymmetric bento-style layout.
  * Uses CSS grid with configurable row/column spans.
+ * Collapses to single column on mobile.
  */
 export function BentoGrid({
   children,

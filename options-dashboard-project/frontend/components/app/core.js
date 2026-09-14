@@ -187,6 +187,7 @@ export function Chip({ selected, onClick, children, style }) {
   return (
     <button
       onClick={onClick}
+      className="ds-focus-ring"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -255,6 +256,7 @@ export function SegmentedControl({ options, value, onChange, "aria-label": ariaL
             role="tab"
             aria-selected={isActive}
             tabIndex={isActive ? 0 : -1}
+            className="ds-focus-ring"
             onClick={() => onChange(opt.value)}
             onKeyDown={(e) => handleKeyDown(e, index)}
             style={{
@@ -332,6 +334,7 @@ export function ErrorState({ message = "Unable to load data.", onRetry, style })
       {onRetry && (
         <button
           onClick={onRetry}
+          className="ds-focus-ring"
           style={{
             padding: `${SPACE.small} ${SPACE.comp}`,
             fontSize: "0.8125rem",
@@ -390,7 +393,7 @@ const BTN_VARIANTS = {
   },
 };
 
-export function ActionButton({ variant = "primary", size = "md", disabled = false, children, style, ...rest }) {
+export function ActionButton({ variant = "primary", size = "md", disabled = false, children, style, className, ...rest }) {
   const v = BTN_VARIANTS[variant] || BTN_VARIANTS.primary;
   const sizeStyles = {
     sm: { padding: `${SPACE.xs} ${SPACE.small}`, fontSize: "0.8125rem", minHeight: "32px" },
@@ -402,6 +405,7 @@ export function ActionButton({ variant = "primary", size = "md", disabled = fals
   return (
     <button
       disabled={disabled}
+      className={`ds-focus-ring${className ? ` ${className}` : ""}`}
       style={{
         ...BTN_BASE,
         ...v,

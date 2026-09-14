@@ -96,7 +96,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
           cursor: "pointer",
           padding: SPACE.xs,
         }}
-        className="shell-hamburger"
+        className="shell-hamburger ds-focus-ring"
         aria-label="Toggle navigation"
       >
         {sidebarOpen ? "✕" : "☰"}
@@ -140,8 +140,9 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
 
       <div style={{ flex: 1 }} />
 
-      <div style={{ display: "flex", alignItems: "center", gap: SPACE.small }}>
+      <div role="status" aria-live="polite" style={{ display: "flex", alignItems: "center", gap: SPACE.small }}>
         <span
+          aria-hidden="true"
           style={{
             display: "inline-block",
             width: 6,
@@ -169,6 +170,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
           <>
             <a
               href="/settings"
+              className="ds-focus-ring"
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -191,6 +193,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
             </a>
             <button
               onClick={onLogout}
+              className="ds-focus-ring"
               style={{
                 fontSize: 10,
                 fontWeight: 700,
@@ -212,6 +215,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
         ) : (
           <a
             href="/settings"
+            className="ds-focus-ring"
             style={{
               fontSize: 11,
               fontWeight: 700,
@@ -238,6 +242,7 @@ function TopBar({ executionMode, marketStatus, sidebarOpen, onToggleSidebar, aut
 function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
   return (
     <nav
+      aria-label="Application sections"
       className={`shell-sidebar${isOpen ? " shell-open" : ""}`}
       style={{
         position: "fixed",
@@ -286,7 +291,8 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
                   key={item.key}
                   href={item.href}
                   onClick={isMobile ? onClose : undefined}
-                  className={isActive ? "shell-nav-active" : undefined}
+                  className={isActive ? "shell-nav-active ds-focus-ring" : "ds-focus-ring"}
+                  aria-current={isActive ? "page" : undefined}
                   style={{
                     display: "flex",
                     alignItems: "center",

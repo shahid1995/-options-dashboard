@@ -96,6 +96,11 @@ export const PUBLIC_DS_CSS = `
   border-radius: 4px;
 }
 
+/* Ensure buttons with ds-focus-ring but no native focus-visible support get ring */
+button.ds-focus-ring:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* =============================================================================
    Reduced Motion
    ============================================================================= */
@@ -117,6 +122,7 @@ export const PUBLIC_DS_CSS = `
 @media (max-width: 768px) {
   .ds-nav-desktop { display: none !important; }
   .ds-nav-mobile-toggle { display: flex !important; }
+  .sn-bento-grid { grid-template-columns: 1fr !important; }
 }
 @media (min-width: 769px) {
   .ds-nav-mobile-menu { display: none !important; }
