@@ -204,6 +204,8 @@ async def callback(
     session_id = None
     broker_identity: str | None = None
     broker_account_id: str | None = None
+    profile_data = profile.get("data") if isinstance(profile, dict) else {}
+    profile_data = profile_data if isinstance(profile_data, dict) else {}
 
     def _persist_broker_link() -> None:
         """ONE transaction: stamp + connection + UserSession + BrokerToken.
@@ -252,6 +254,13 @@ async def callback(
             connection.id if connection else None,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
+        # FYERS: preserve the refresh token (never silently discarded) —
+        # encrypted at rest on the session's token row. Daily re-auth
+        # remains the baseline (AD-11); this is best-effort persistence,
+        # not a session-persistence strategy.
+        refresh_token = getattr(adapter, "_refresh_token", None)
+        if isinstance(refresh_token, str) and refresh_token:
+            token_store.persist_fyers_refresh_token(db, session_id, refresh_token)
         db.commit()
 
     try:
@@ -260,20 +269,27 @@ async def callback(
             db.rollback()
             raise HTTPException(status_code=403, detail="StrikeNova account is not active")
 
-        # Authoritative Upstox identity (design §17.2/§17.5): the profile's
-        # data.user_id (Upstox user_id / UCC). §17.2 proved
-        # extract_account_id() returns the same value for Upstox.
-        profile_data = profile.get("data") if isinstance(profile, dict) else {}
-        profile_data = profile_data if isinstance(profile_data, dict) else {}
-        broker_identity = str(profile_data.get("user_id") or "").strip()
+        # Broker-neutral identity extraction (AD-6): the ADAPTER owns the
+        # profile-field mapping — Upstox (data.user_id / UCC) today, FYERS
+        # (customer Login ID, fail-closed) now. The API App ID is never an
+        # ownership identity. broker_user_id == broker_account_id == the
+        # extracted customer identity for every broker.
+        adapter_account_id = None
+        extractor = getattr(adapter, "extract_account_id", None)
+        if extractor is not None:
+            try:
+                extracted = extractor(profile)
+            except ValueError as exc:
+                raise ValueError(f"{broker_id} identity extraction failed: {exc}") from exc
+            if extracted:
+                adapter_account_id = str(extracted).strip() or None
+        broker_identity = adapter_account_id
+        if not broker_identity and broker_id == "UPSTOX":
+            # Upstox legacy fallback: the profile's data.user_id (UCC) —
+            # §17.2 proved extract_account_id returns the same value.
+            broker_identity = str(profile_data.get("user_id") or "").strip()
         if not broker_identity:
-            raise ValueError("Upstox profile did not contain a broker user_id")
-        adapter_account_id = adapter.extract_account_id(profile)
-        if adapter_account_id and adapter_account_id != broker_identity:
-            logger.warning(
-                "Upstox adapter account id mismatch: profile=%s adapter=%s",
-                broker_identity, adapter_account_id,
-            )
+            raise ValueError(f"{broker_id} profile did not contain a broker identity")
         broker_account_id = broker_identity
 
         # Ownership arbitration: a broker identity belongs to at most one

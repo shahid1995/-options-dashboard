@@ -171,6 +171,39 @@ def persist_broker_token_row(
     db.flush()
 
 
+def persist_fyers_refresh_token(db, session_id: str, refresh_token: str) -> None:
+    """Store the FYERS refresh token encrypted on the session's token row.
+
+    Additive (AD-11): FYERS is the only broker with a refresh token, and
+    it may be discontinued — daily re-authentication remains the
+    baseline, so this is best-effort persistence (never a session
+    strategy). The ``BrokerToken`` model already carries nullable
+    ``broker_refresh_token_encrypted`` columns, so no shared-interface
+    redesign is required. Runs inside the caller's transaction; the
+    token value is never logged.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.crypto import encrypt
+    from app.identity import BrokerToken, hash_session_id
+
+    bt = (
+        db.query(BrokerToken)
+        .filter(
+            BrokerToken.session_hash == hash_session_id(session_id),
+            BrokerToken.broker_refresh_token_encrypted.is_(None),
+        )
+        .one_or_none()
+    )
+    if bt is None:
+        # The row may not exist yet (persist_broker_token_row order) or may
+        # already hold a refresh token — never overwrite a stored one.
+        return
+    bt.broker_refresh_token_encrypted = encrypt(refresh_token)
+    bt.broker_refresh_token_expires_at = datetime.now(timezone.utc) + timedelta(days=15)
+    db.flush()
+
+
 def cache_broker_session(session_id: str, token: str) -> None:
     """Populate the in-memory cache AFTER the caller's transaction commits."""
     _sessions[session_id] = {

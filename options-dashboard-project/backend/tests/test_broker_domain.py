@@ -157,14 +157,18 @@ def test_registry_register_is_idempotent():
 
 
 def test_gateway_default_requires_exactly_one_broker():
-    single = BrokerGateway()
-    assert len(single.registry.known_brokers()) == 1
-    adapter = single.default(access_token="tok")
-    assert adapter.broker_name == "UPSTOX"
-
+    # Empty registry → BROKER_UNKNOWN (default() only works with one broker).
     empty = BrokerGateway(BrokerRegistry())
     with pytest.raises(BrokerError) as exc:
         empty.default()
+    assert exc.value.code is BrokerErrorCode.BROKER_UNKNOWN
+
+    # With TWO registered brokers (UPSTOX + FYERS) selection must be
+    # explicit — default() refuses to guess.
+    both = BrokerGateway()
+    assert len(both.registry.known_brokers()) >= 1
+    with pytest.raises(BrokerError) as exc:
+        both.default(access_token="tok")
     assert exc.value.code is BrokerErrorCode.BROKER_UNKNOWN
 
 
@@ -487,3 +491,38 @@ def test_capability_states_are_never_booleans():
     for name, state, wired, detail in upstox_capability_matrix():
         assert isinstance(state, CapabilityState)
         assert isinstance(wired, bool)
+
+
+# ---- C. FYERS registration (Adapter #2) ------------------------------------
+
+
+def test_registry_resolves_both_brokers():
+    from app.brokers.adapters.fyers.adapter import FyersAdapter
+    from app.brokers.adapters.upstox.adapter import UpstoxAdapter
+    from app.brokers.domain.enums import BrokerId
+
+    registry = BrokerRegistry()
+    from app.brokers.registry import register_default_brokers
+
+    # A fresh registry mirrors the platform set when defaults are applied.
+    register_default_brokers()  # idempotent; populates the module singleton
+
+    adapter_up = gateway.create("UPSTOX", access_token="tok")
+    assert type(adapter_up) is UpstoxAdapter
+    adapter_fy = gateway.create("FYERS", access_token="tok")
+    assert type(adapter_fy) is FyersAdapter
+
+    # Same behavior through a private registry instance.
+    private = BrokerGateway(BrokerRegistry())
+    private.registry.register(BrokerId.UPSTOX, UpstoxAdapter)
+    private.registry.register(BrokerId.FYERS, FyersAdapter)
+    assert type(private.create(BrokerId.FYERS, access_token="tok")) is FyersAdapter
+    assert type(private.create(BrokerId.UPSTOX, access_token="tok")) is UpstoxAdapter
+
+
+def test_registry_default_brokers_include_fyers():
+    from app.brokers.gateway import gateway as module_gateway
+
+    known = module_gateway.registry.known_brokers()
+    assert "UPSTOX" in known
+    assert "FYERS" in known

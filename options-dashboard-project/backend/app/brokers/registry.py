@@ -71,13 +71,18 @@ BROKER_REGISTRY = BrokerRegistry()
 def register_default_brokers() -> None:
     """Register the platform's adapter set (idempotent, safe to call twice).
 
-    Phase 6.5.0.2 ships exactly one adapter (Upstox). Future brokers add
-    their registration here — application services never change.
+    Upstox (Adapter #1) and FYERS (Adapter #2) are registered; future
+    brokers add their registration here — application services never
+    change. Note: ``BrokerGateway.default()`` intentionally raises once
+    more than one broker is registered — broker selection must then be
+    explicit (``create`` / ``for_connection``).
     """
+    from app.brokers.adapters.fyers.adapter import FyersAdapter
     from app.brokers.adapters.upstox.adapter import UpstoxAdapter
-    from app.brokers.domain.enums import BROKER_ID_UPSTOX
+    from app.brokers.domain.enums import BROKER_ID_UPSTOX, BrokerId
 
     BROKER_REGISTRY.register(BROKER_ID_UPSTOX, UpstoxAdapter)
+    BROKER_REGISTRY.register(BrokerId.FYERS, FyersAdapter)
 
 
 register_default_brokers()
