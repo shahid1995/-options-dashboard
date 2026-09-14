@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { C, fmtIN } from "@/lib/ui";
+import { Metric, Table, Badge, EmptyState } from "@/components/app/core";
 import {
   analyticsDisplay,
   concentration,
@@ -36,7 +37,6 @@ import TradeDetailModal from "./TradeDetailModal";
 
 const panel = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 14, minWidth: 0 };
 const sectionTitle = { fontSize: 12, fontWeight: 800, letterSpacing: 0.8, color: C.muted, marginBottom: 8 };
-const dash = (v) => (v == null || Number.isNaN(v) ? "—" : v);
 
 // Phase 6.4 — data-quality badges are neutral status chips (§20/§37), never
 // traffic-light trading signals; unavailable values render N/A, never 0.
@@ -58,15 +58,7 @@ const ALLOC_BASIS_LABELS = {
   UNAVAILABLE: "Basis unavailable",
 };
 
-function Metric({ label, value, color = C.text, hint }) {
-  return (
-    <div style={{ background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", minWidth: 0 }}>
-      <div style={{ fontSize: 10.5, color: C.faint, letterSpacing: 0.6, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 700, color, marginTop: 2, whiteSpace: "nowrap" }}>{dash(value)}</div>
-      {hint && <div style={{ fontSize: 9.5, color: C.faint, marginTop: 1 }}>{hint}</div>}
-    </div>
-  );
-}
+// Local Metric removed — using canonical Metric from @/components/app/core
 
 const pnlColor = (v) => (v == null ? C.muted : v >= 0 ? C.green : C.red);
 // Phase 5.2.1: financial values always display with two decimals (₹3,169.00).
@@ -283,18 +275,18 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
       {/* Portfolio summary */}
       <div style={sectionTitle}>Portfolio summary</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 14 }}>
-        <Metric label="Starting capital" value={`₹${fmtIN(summary.startingCapital ?? 0, 2)}`} />
-        <Metric label="Available cash" value={summary.availableCash == null ? "—" : `₹${fmtIN(summary.availableCash, 2)}`} />
-        <Metric label="Open exposure" value={`₹${fmtIN(summary.investedValue ?? 0, 2)}`} hint="entry value · not margin" />
-        <Metric label="Realized P&L" value={fmtPnl(summary.realizedPnl)} color={pnlColor(summary.realizedPnl)} />
+        <Metric size="sm" label="Starting capital" value={`₹${fmtIN(summary.startingCapital ?? 0, 2)}`} />
+        <Metric size="sm" label="Available cash" value={summary.availableCash == null ? "—" : `₹${fmtIN(summary.availableCash, 2)}`} />
+        <Metric size="sm" label="Open exposure" value={`₹${fmtIN(summary.investedValue ?? 0, 2)}`} hint="entry value · not margin" />
+        <Metric size="sm" label="Realized P&L" value={fmtPnl(summary.realizedPnl)} semantic={summary.realizedPnl >= 0 ? "positive" : "negative"} />
         <Metric
           label="Unrealized P&L"
           value={summary.unrealizedPnl == null ? "Unavailable" : fmtPnl(summary.unrealizedPnl)}
-          color={summary.unrealizedPnl == null ? C.faint : pnlColor(summary.unrealizedPnl)}
+          semantic={summary.unrealizedPnl == null ? "neutral" : summary.unrealizedPnl >= 0 ? "positive" : "negative"}
           hint={summary.unrealizedPnl == null ? "needs a market mark" : undefined}
         />
-        <Metric label="Total P&L" value={fmtPnl(summary.totalPnl)} color={pnlColor(summary.totalPnl)} />
-        <Metric label="Return" value={summary.returnPct == null ? "—" : fmtPct(summary.returnPct)} color={pnlColor(summary.returnPct)} />
+        <Metric size="sm" label="Total P&L" value={fmtPnl(summary.totalPnl)} semantic={summary.totalPnl >= 0 ? "positive" : "negative"} />
+        <Metric size="sm" label="Return" value={summary.returnPct == null ? "—" : fmtPct(summary.returnPct)} semantic={summary.returnPct >= 0 ? "positive" : "negative"} />
       </div>
 
       {/* Phase 6.3: capital efficiency — denominators explicit, never hidden */}
@@ -303,22 +295,22 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
         <Metric
           label="Premium ROI"
           value={ce.premiumRoi.value == null ? "N/A" : fmtPct(ce.premiumRoi.value)}
-          color={ce.premiumRoi.value == null ? C.faint : pnlColor(ce.premiumRoi.value)}
+          semantic={ce.premiumRoi.value == null ? "neutral" : ce.premiumRoi.value >= 0 ? "positive" : "negative"}
           hint={ce.premiumRoi.value == null ? "N/A — premium outlay unavailable" : `return on premium outlay · ₹${fmtIN(ce.premiumRoi.denominator, 2)}`}
         />
         <Metric
           label="Return on Capital"
           value={ce.returnOnCapital.value == null ? "N/A" : fmtPct(ce.returnOnCapital.value)}
-          color={ce.returnOnCapital.value == null ? C.faint : pnlColor(ce.returnOnCapital.value)}
+          semantic={ce.returnOnCapital.value == null ? "neutral" : ce.returnOnCapital.value >= 0 ? "positive" : "negative"}
           hint={ce.returnOnCapital.value == null ? "N/A — estimated capital unavailable" : `return on estimated capital · ₹${fmtIN(ce.returnOnCapital.denominator, 2)} · ${String(ce.returnOnCapital.basis ?? "").toUpperCase()}`}
         />
         <Metric
           label="Return on Margin"
           value={ce.returnOnMargin.value == null ? "N/A" : fmtPct(ce.returnOnMargin.value)}
-          color={ce.returnOnMargin.value == null ? C.faint : pnlColor(ce.returnOnMargin.value)}
+          semantic={ce.returnOnMargin.value == null ? "neutral" : ce.returnOnMargin.value >= 0 ? "positive" : "negative"}
           hint={ce.returnOnMargin.value == null ? "N/A — broker margin unavailable" : `return on broker-reported margin · ₹${fmtIN(ce.returnOnMargin.denominator, 2)}`}
         />
-        <Metric label="Return on Risk Capital" value="N/A" color={C.faint} hint="per-strategy defined max loss is shown below in CAPITAL ALLOCATION & RISK" />
+        <Metric size="sm" label="Return on Risk Capital" value="N/A" semantic="neutral" hint="per-strategy defined max loss is shown below in CAPITAL ALLOCATION & RISK" />
       </div>
 
       {/* Phase 6.4: capital allocation & risk (monitoring only) */}
@@ -341,22 +333,22 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
         <>
           {/* §20 summary cards */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
-            <Metric label="Paper Capital" value={`₹${fmtIN(allocationView.allocation.paperStartingCapital ?? 0, 2)}`} hint="paper starting capital" />
+            <Metric size="sm" label="Paper Capital" value={`₹${fmtIN(allocationView.allocation.paperStartingCapital ?? 0, 2)}`} hint="paper starting capital" />
             <Metric
               label="Allocated Capital"
               value={allocationView.allocation.totalEstimatedCapital == null ? "N/A" : `₹${fmtIN(allocationView.allocation.totalEstimatedCapital, 2)}`}
               color={allocationView.allocation.totalEstimatedCapital == null ? C.faint : C.gold}
               hint="estimated capital · analytical"
             />
-            <Metric label="Remaining Cash" value={allocationView.allocation.paperAvailableCash == null ? "N/A" : `₹${fmtIN(allocationView.allocation.paperAvailableCash, 2)}`} hint="paper available cash" />
+            <Metric size="sm" label="Remaining Cash" value={allocationView.allocation.paperAvailableCash == null ? "N/A" : `₹${fmtIN(allocationView.allocation.paperAvailableCash, 2)}`} hint="paper available cash" />
             <Metric
               label="Broker Margin"
               value={allocationView.allocation.brokerMargin == null ? "Unavailable" : `₹${fmtIN(allocationView.allocation.brokerMargin, 2)}`}
               color={allocationView.allocation.brokerMargin == null ? C.faint : C.gold}
               hint="broker-reported aggregate · never summed per strategy"
             />
-            <Metric label="Defined Risk" value={allocationView.allocation.totalDefinedRisk == null ? "N/A" : `₹${fmtIN(allocationView.allocation.totalDefinedRisk, 2)}`} hint="finite open risk · same-expiry only" />
-            <Metric label="Unlimited-Risk" value={allocationView.unlimitedRiskStrategyCount ?? 0} hint="open strategies with open-ended risk" />
+            <Metric size="sm" label="Defined Risk" value={allocationView.allocation.totalDefinedRisk == null ? "N/A" : `₹${fmtIN(allocationView.allocation.totalDefinedRisk, 2)}`} hint="finite open risk · same-expiry only" />
+            <Metric size="sm" label="Unlimited-Risk" value={allocationView.unlimitedRiskStrategyCount ?? 0} hint="open strategies with open-ended risk" />
             <Metric
               label="Cap. Concentration"
               value={allocationView.concentration.byStrategy.highest?.concentrationPct == null ? "N/A" : `${allocationView.concentration.byStrategy.highest.concentrationPct.toFixed(1)}%`}
@@ -470,27 +462,27 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
-            <Metric label="Trades" value={performance.totalCompletedTrades} hint={`${performance.winningTrades}W · ${performance.losingTrades}L · ${performance.breakevenTrades}B`} />
-            <Metric label="Win rate" value={performance.winRate == null ? "—" : `${performance.winRate.toFixed(1)}%`} color={C.gold} />
-            <Metric label="Avg winner" value={fmtPnl(performance.averageWinner)} color={C.green} />
-            <Metric label="Avg loser" value={fmtPnl(performance.averageLoser)} color={C.red} />
-            <Metric label="Profit factor" value={performance.profitFactor == null ? "—" : performance.profitFactor.toFixed(2)} />
-            <Metric label="Expectancy" value={fmtPnl(performance.expectancy)} color={pnlColor(performance.expectancy)} />
+            <Metric size="sm" label="Trades" value={performance.totalCompletedTrades} hint={`${performance.winningTrades}W · ${performance.losingTrades}L · ${performance.breakevenTrades}B`} />
+            <Metric size="sm" label="Win rate" value={performance.winRate == null ? "—" : `${performance.winRate.toFixed(1)}%`} semantic="strategy" />
+            <Metric size="sm" label="Avg winner" value={fmtPnl(performance.averageWinner)} semantic="positive" />
+            <Metric size="sm" label="Avg loser" value={fmtPnl(performance.averageLoser)} semantic="negative" />
+            <Metric size="sm" label="Profit factor" value={performance.profitFactor == null ? "—" : performance.profitFactor.toFixed(2)} />
+            <Metric size="sm" label="Expectancy" value={fmtPnl(performance.expectancy)} semantic={performance.expectancy >= 0 ? "positive" : "negative"} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
-            <Metric label="Largest win" value={fmtPnl(performance.largestWinner)} color={C.green} />
-            <Metric label="Largest loss" value={fmtPnl(performance.largestLoser)} color={C.red} />
-            <Metric label="Win streak" value={`${performance.currentWinStreak} now · ${performance.maxWinStreak} max`} />
-            <Metric label="Loss streak" value={`${performance.currentLossStreak} now · ${performance.maxLossStreak} max`} />
-            <Metric label="Avg duration" value={performance.averageHoldingDuration ?? "—"} hint={`median ${performance.medianHoldingDuration ?? "—"}`} />
+            <Metric size="sm" label="Largest win" value={fmtPnl(performance.largestWinner)} semantic="positive" />
+            <Metric size="sm" label="Largest loss" value={fmtPnl(performance.largestLoser)} semantic="negative" />
+            <Metric size="sm" label="Win streak" value={`${performance.currentWinStreak} now · ${performance.maxWinStreak} max`} />
+            <Metric size="sm" label="Loss streak" value={`${performance.currentLossStreak} now · ${performance.maxLossStreak} max`} />
+            <Metric size="sm" label="Avg duration" value={performance.averageHoldingDuration ?? "—"} hint={`median ${performance.medianHoldingDuration ?? "—"}`} />
           </div>
         </>
       )}
 
       {/* Drawdown + realized equity curve */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, marginBottom: 14 }}>
-        <Metric label="Current drawdown" value={fmtPnl(drawdown.currentDrawdown)} color={drawdown.currentDrawdown != null && drawdown.currentDrawdown < 0 ? C.red : C.muted} hint={fmtPct(drawdown.currentDrawdownPct)} />
-        <Metric label="Max drawdown" value={fmtPnl(drawdown.maxDrawdown)} color={drawdown.maxDrawdown != null && drawdown.maxDrawdown < 0 ? C.red : C.muted} hint={fmtPct(drawdown.maxDrawdownPct)} />
+        <Metric size="sm" label="Current drawdown" value={fmtPnl(drawdown.currentDrawdown)} semantic={drawdown.currentDrawdown != null && drawdown.currentDrawdown < 0 ? "negative" : "neutral"} hint={fmtPct(drawdown.currentDrawdownPct)} />
+        <Metric size="sm" label="Max drawdown" value={fmtPnl(drawdown.maxDrawdown)} semantic={drawdown.maxDrawdown != null && drawdown.maxDrawdown < 0 ? "negative" : "neutral"} hint={fmtPct(drawdown.maxDrawdownPct)} />
       </div>
 
       <div style={{ ...sectionTitle, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -573,9 +565,9 @@ export default function PortfolioAnalyticsPanel({ analytics, positionsWithLtp, c
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: 8, marginBottom: 8 }}>
-            <Metric label="Long exposure" value={`₹${fmtIN(exposure.longExposure ?? 0, 2)}`} color={C.green} hint="mark value · not margin" />
-            <Metric label="Short exposure" value={`₹${fmtIN(exposure.shortExposure ?? 0, 2)}`} color={C.red} hint="mark value · not margin" />
-            <Metric label="Total exposure" value={`₹${fmtIN(exposure.totalExposure ?? 0, 2)}`} color={C.gold} />
+            <Metric size="sm" label="Long exposure" value={`₹${fmtIN(exposure.longExposure ?? 0, 2)}`} semantic="positive" hint="mark value · not margin" />
+            <Metric size="sm" label="Short exposure" value={`₹${fmtIN(exposure.shortExposure ?? 0, 2)}`} semantic="negative" hint="mark value · not margin" />
+            <Metric size="sm" label="Total exposure" value={`₹${fmtIN(exposure.totalExposure ?? 0, 2)}`} semantic="strategy" />
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {conc.items.map((i) => (

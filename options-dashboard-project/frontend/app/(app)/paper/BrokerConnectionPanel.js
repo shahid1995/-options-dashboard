@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { C } from "@/lib/ui";
+import { Badge } from "@/components/app/core";
 import { capitalDisplay } from "@/lib/capital";
 import {
   CONNECTION_STATE,
@@ -49,22 +50,21 @@ const fmtVerified = (iso) => {
 function HealthChip({ status, message }) {
   const color = STATUS_COLORS[status] ?? C.faint;
   return (
-    <span
+    <Badge
+      variant={
+        status === DIAGNOSTIC_STATUS.AVAILABLE
+          ? "positive"
+          : status === DIAGNOSTIC_STATUS.PARTIAL
+            ? "warning"
+            : status === DIAGNOSTIC_STATUS.UNAVAILABLE
+              ? "negative"
+              : "neutral"
+      }
       title={message ?? status}
-      style={{
-        fontSize: 9,
-        fontWeight: 700,
-        letterSpacing: 0.6,
-        color,
-        background: "rgba(0,0,0,0.18)",
-        border: `1px solid ${color}55`,
-        borderRadius: 999,
-        padding: "2px 9px",
-        whiteSpace: "nowrap",
-      }}
+      style={{ background: "rgba(0,0,0,0.18)" }}
     >
       {status}
-    </span>
+    </Badge>
   );
 }
 

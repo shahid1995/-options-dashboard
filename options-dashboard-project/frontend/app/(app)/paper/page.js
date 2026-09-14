@@ -91,6 +91,7 @@ import {
   detectResolutionChanges,
 } from "@/lib/templates";
 import { C, TopNav, SymbolTabs, Centered, SessionExpired, Stat, StepButton, ShapeIcon, fmtIN, LOT_SIZES, useIsMobile } from "@/lib/ui";
+import { Metric, Badge, Table, ActionButton, EmptyState, LoadingState, ErrorState } from "@/components/app/core";
 import {
   ComposedChart, Bar, Line, Area, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer,
 } from "recharts";
@@ -1545,37 +1546,23 @@ export default function PaperTradingPage() {
               {spotChg >= 0 ? "▲" : "▼"} {Math.abs(spotChg).toFixed(2)}% <span style={{ color: C.faint, fontWeight: 400 }}>session</span>
             </span>
           )}
-          <span style={badge("SIMULATED MODE", C.gold, "rgba(201,161,90,0.12)", "rgba(201,161,90,0.35)")}>SIMULATED</span>
-          <span
-            title={
-              marketStatus
-                ? `${marketStatus.message}${marketStatus.tradeDate ? ` · ${marketStatus.tradeDate}` : ""} · segment: ${marketStatus.segment ?? "INDEX_DERIVATIVES"} · session: ${marketStatus.session_state ?? "UNKNOWN"} · source: ${marketStatus.source}${marketStatus.status === "closed" ? " · P&L uses last available prices" : ""}`
-                : "Checking market status…"
-            }
-            style={{
-              ...badge(
-                MARKET_STATUS_LABELS[marketStatus?.status ?? "unknown"],
-                marketStatus?.status === "open"
-                  ? C.green
-                  : marketStatus?.status === "closed"
-                    ? C.red
-                    : C.gold,
-                marketStatus?.status === "open"
-                  ? "rgba(68,201,134,0.12)"
-                  : marketStatus?.status === "closed"
-                    ? "rgba(225,82,82,0.12)"
-                    : "rgba(224,163,58,0.12)",
-                marketStatus?.status === "open"
-                  ? "rgba(68,201,134,0.35)"
-                  : marketStatus?.status === "closed"
-                    ? "rgba(225,82,82,0.35)"
-                    : "rgba(224,163,58,0.45)"
-              ),
-              whiteSpace: "nowrap",
-            }}
-          >
-            {marketStatus ? (sessionStateLabel(marketStatus.session_state) ?? MARKET_STATUS_LABELS[marketStatus.status]) : "⏳ Checking market…"}
-          </span>
+          <Badge variant="strategy">SIMULATED</Badge>
+          {marketStatus ? (
+            <Badge
+              variant={
+                marketStatus.status === "open"
+                  ? "positive"
+                  : marketStatus.status === "closed"
+                    ? "negative"
+                    : "warning"
+              }
+              title={`${marketStatus.message}${marketStatus.tradeDate ? ` · ${marketStatus.tradeDate}` : ""} · segment: ${marketStatus.segment ?? "INDEX_DERIVATIVES"} · session: ${marketStatus.session_state ?? "UNKNOWN"} · source: ${marketStatus.source}${marketStatus.status === "closed" ? " · P&L uses last available prices" : ""}`}
+            >
+              {sessionStateLabel(marketStatus.session_state) ?? MARKET_STATUS_LABELS[marketStatus.status]}
+            </Badge>
+          ) : (
+            <Badge variant="neutral">⏳ Checking market…</Badge>
+          )}
         </div>
 
         <div style={{ fontSize: 11.5, color: C.muted, letterSpacing: 1.2, textAlign: "center" }}>
@@ -1592,18 +1579,14 @@ export default function PaperTradingPage() {
               <div style={popover}>
                 <div style={{ fontSize: 10, letterSpacing: 1, color: C.faint, marginBottom: 8 }}>FUNDS &amp; MARGINS (MTM)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px" }}>
-                  <Stat label="Starting capital" value={`₹${fmtIN(paperStartingCapital, 2)}`} fs={12.5} />
-                  <Stat label="Cash" value={`₹${fmtIN(paperCash, 2)}`} fs={12.5} />
-                  <Stat label="Equity (MTM)" value={`₹${fmtIN(equity, 2)}`} fs={12.5} color={C.gold} />
-                  <Stat label="Total P&L" value={`₹${fmtIN(totalPnl, 2)}`} fs={12.5} color={totalPnl >= 0 ? C.green : C.red} />
-                  <Stat label="Unrealized" value={`₹${fmtIN(totalUnrealized, 2)}`} fs={12.5} color={totalUnrealized >= 0 ? C.green : C.red} />
-                  <Stat label="Realized" value={`₹${fmtIN(totalRealized, 2)}`} fs={12.5} color={totalRealized >= 0 ? C.green : C.red} />
-                  <Stat label="Win rate" value={journal?.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"} fs={12.5} />
-                  <Stat
-                    label="Profit factor"
-                    value={journal?.stats.profit_factor != null ? journal.stats.profit_factor.toFixed(2) : "—"}
-                    fs={12.5}
-                  />
+                  <Metric label="Starting capital" value={paperStartingCapital} unit="₹" decimals={2} size="sm" />
+                  <Metric label="Cash" value={paperCash} unit="₹" decimals={2} size="sm" />
+                  <Metric label="Equity (MTM)" value={equity} unit="₹" decimals={2} size="sm" semantic="strategy" />
+                  <Metric label="Total P&L" value={totalPnl} unit="₹" decimals={2} size="sm" semantic={totalPnl >= 0 ? "positive" : "negative"} />
+                  <Metric label="Unrealized" value={totalUnrealized} unit="₹" decimals={2} size="sm" semantic={totalUnrealized >= 0 ? "positive" : "negative"} />
+                  <Metric label="Realized" value={totalRealized} unit="₹" decimals={2} size="sm" semantic={totalRealized >= 0 ? "positive" : "negative"} />
+                  <Metric label="Win rate" value={journal?.stats.closed_trades ? `${(journal.stats.win_rate * 100).toFixed(1)}%` : "—"} size="sm" />
+                  <Metric label="Profit factor" value={journal?.stats.profit_factor != null ? journal.stats.profit_factor.toFixed(2) : "—"} size="sm" />
                 </div>
               </div>
             )}
@@ -2856,19 +2839,9 @@ export default function PaperTradingPage() {
                     </select>
                   )}
                   {positionsWithLtp.length > 0 && (
-                    <span
-                      style={{
-                        fontSize: 10.5,
-                        fontWeight: 700,
-                        color: totalUnrealized >= 0 ? C.green : C.red,
-                        background: totalUnrealized >= 0 ? "rgba(76,175,125,0.1)" : "rgba(225,82,82,0.1)",
-                        border: `1px solid ${totalUnrealized >= 0 ? "rgba(76,175,125,0.35)" : "rgba(225,82,82,0.35)"}`,
-                        borderRadius: 999,
-                        padding: "2px 9px",
-                      }}
-                    >
+                    <Badge variant={totalUnrealized >= 0 ? "positive" : "negative"}>
                       {totalUnrealized >= 0 ? "+" : "−"}₹{fmtIN(Math.abs(totalUnrealized), 2)} unrealized
-                    </span>
+                    </Badge>
                   )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -2877,26 +2850,15 @@ export default function PaperTradingPage() {
                     ? "mark-to-market at live prices · simplified simulator (no margin/brokerage/taxes)"
                     : "mark-to-market at last available (closing) prices · market closed · simplified simulator"}
                   </div>
-                  <button
+                  <ActionButton
+                    variant="destructive"
+                    size="sm"
                     onClick={openExitAll}
                     disabled={positionsWithLtp.length === 0 || orderInFlight || bulkBusy}
                     title={positionsWithLtp.length === 0 ? "No open positions" : marketNotOpen ? MARKET_CLOSED_MSG : "Close ALL open paper positions at the current market price"}
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 800,
-                      letterSpacing: 0.4,
-                      color: positionsWithLtp.length === 0 ? C.faint : C.red,
-                      background: positionsWithLtp.length === 0 ? "none" : "rgba(225,82,82,0.08)",
-                      border: `1px solid ${positionsWithLtp.length === 0 ? C.border : C.red}`,
-                      borderRadius: 6,
-                      padding: "5px 12px",
-                      cursor: positionsWithLtp.length === 0 || orderInFlight || bulkBusy ? "default" : marketNotOpen ? "not-allowed" : "pointer",
-                      opacity: positionsWithLtp.length === 0 || orderInFlight || bulkBusy || marketNotOpen ? 0.5 : 1,
-                      marginTop: 4,
-                    }}
                   >
                     {bulkBusy ? "EXITING…" : positionsWithLtp.length === 0 ? "EXIT ALL · No open positions" : "EXIT ALL"}
-                  </button>
+                  </ActionButton>
                 </div>
               </div>
 
@@ -2946,64 +2908,67 @@ export default function PaperTradingPage() {
                   {portfolioError ? "No position data loaded from the server." : "No open positions."}
                 </div>
               ) : (
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                    <thead>
-                      <tr style={{ color: C.muted, fontSize: 10.5 }}>
-                        <th style={{ padding: 6, textAlign: "left" }}>Ticker</th>
-                        <th style={{ padding: 6, textAlign: "left" }}>Strategy</th>
-                        <th style={{ padding: 6 }}>Qty</th>
-                        <th style={{ padding: 6 }}>Entry Price</th>
-                        <th style={{ padding: 6 }}>{priceLive ? "Current LTP" : "Last Price"}</th>
-                        <th style={{ padding: 6 }}>{priceLive ? "Live P&L" : "P&L (last)"}</th>
-                        <th style={{ padding: 6 }}>Exit</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visiblePositions.map((p) => (
-                        <tr key={p.id} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
-                          <td style={{ padding: 6 }}>
-                            <div>
-                              <span style={{ color: p.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{p.action.toUpperCase()}</span> {p.symbol} {fmtIN(p.strike)} {p.type === "call" ? "CE" : "PE"}
-                            </div>
-                            <div style={{ fontSize: 10, color: C.faint }}>{p.expiry}</div>
-                          </td>
-                          <td style={{ padding: 6, color: C.muted }}>{p.strategyName ?? "Custom"}</td>
-                          <td style={{ padding: 6 }}>{p.qty}</td>
-                          <td style={{ padding: 6 }}>{formatOptionPrice(p.entryPremium)}</td>
-                          <td style={{ padding: 6 }}>{formatOptionPrice(p.currentLtp)}</td>
-                          <td style={{ padding: 6, color: p.unrealizedPnl == null ? C.muted : p.unrealizedPnl >= 0 ? C.green : C.red }}>
-                            {p.unrealizedPnl == null ? "-" : `${p.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(p.unrealizedPnl, 2)}`}
-                          </td>
-                          <td style={{ padding: 6 }}>
-                            <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
-                              <input
-                                type="number"
-                                min={1}
-                                max={p.qty}
-                                value={exitQtyMap[p.positionId] ?? p.qty}
-                                onChange={(e) =>
-                                  setExitQtyMap((prev) => ({ ...prev, [p.positionId]: Math.max(1, Number(e.target.value) || 1) }))
-                                }
-                                disabled={orderInFlight}
-                                title="Exit quantity in lots (partial exits supported)"
-                                style={{ width: 46, fontSize: 11, textAlign: "center", background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px" }}
-                              />
-                              <button
-                                onClick={() => closePosition(p.positionId ?? p.id)}
-                                disabled={orderInFlight}
-                                title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Exit this many lots at the current market price"}
-                                style={{ fontSize: 11, color: C.text, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: orderInFlight ? "progress" : marketNotOpen ? "not-allowed" : "pointer", opacity: orderInFlight || marketNotOpen ? 0.5 : 1 }}
-                              >
-                                Exit
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <Table
+                  compact
+                  columns={[
+                    {
+                      key: "ticker",
+                      header: "Ticker",
+                      render: (_, row) => (
+                        <div>
+                          <span style={{ color: row.action === "buy" ? C.green : C.red, fontWeight: 700 }}>{row.action.toUpperCase()}</span> {row.symbol} {fmtIN(row.strike)} {row.type === "call" ? "CE" : "PE"}
+                          <div style={{ fontSize: 10, color: C.faint }}>{row.expiry}</div>
+                        </div>
+                      ),
+                    },
+                    { key: "strategy", header: "Strategy", render: (v) => v ?? "Custom" },
+                    { key: "qty", header: "Qty", align: "right" },
+                    { key: "entry", header: "Entry Price", align: "right", render: (_, row) => formatOptionPrice(row.entryPremium) },
+                    { key: "ltp", header: priceLive ? "Current LTP" : "Last Price", align: "right", render: (_, row) => formatOptionPrice(row.currentLtp) },
+                    {
+                      key: "pnl",
+                      header: priceLive ? "Live P&L" : "P&L (last)",
+                      align: "right",
+                      render: (_, row) => (
+                        <span style={{ color: row.unrealizedPnl == null ? C.muted : row.unrealizedPnl >= 0 ? C.green : C.red }}>
+                          {row.unrealizedPnl == null ? "-" : `${row.unrealizedPnl >= 0 ? "+" : ""}₹${fmtIN(row.unrealizedPnl, 2)}`}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "exit",
+                      header: "Exit",
+                      align: "right",
+                      render: (_, row) => (
+                        <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "flex-end" }}>
+                          <input
+                            type="number"
+                            min={1}
+                            max={row.qty}
+                            value={exitQtyMap[row.positionId] ?? row.qty}
+                            onChange={(e) =>
+                              setExitQtyMap((prev) => ({ ...prev, [row.positionId]: Math.max(1, Number(e.target.value) || 1) }))
+                            }
+                            disabled={orderInFlight}
+                            title="Exit quantity in lots (partial exits supported)"
+                            style={{ width: 46, fontSize: 11, textAlign: "center", background: C.surface2, color: C.text, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 6px" }}
+                          />
+                          <ActionButton
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => closePosition(row.positionId ?? row.id)}
+                            disabled={orderInFlight || marketNotOpen}
+                            title={orderInFlight ? "Processing…" : marketNotOpen ? MARKET_CLOSED_MSG : "Exit this many lots at the current market price"}
+                          >
+                            Exit
+                          </ActionButton>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  data={visiblePositions.map((p) => ({ ...p, strategy: p.strategyName, qty: p.qty, entry: p.entryPremium, ltp: p.currentLtp, pnl: p.unrealizedPnl }))}
+                  keyExtractor={(row) => row.id}
+                />
               )}
             </div>
           </section>
@@ -3016,18 +2981,7 @@ export default function PaperTradingPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ fontSize: fluid(13, 15), fontWeight: 800, letterSpacing: 0.5, color: C.text }}>📝 TRANSACTION LOG & HISTORICAL JOURNAL</div>
             {logRows.length > 0 && (
-              <span
-                style={{
-                  fontSize: 10.5,
-                  color: C.muted,
-                  background: C.surface2,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 999,
-                  padding: "2px 9px",
-                }}
-              >
-                {logRows.length} records
-              </span>
+              <Badge variant="neutral">{logRows.length} records</Badge>
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>

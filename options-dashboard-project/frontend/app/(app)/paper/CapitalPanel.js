@@ -1,6 +1,7 @@
 "use client";
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
+import { Metric, Badge } from "@/components/app/core";
 import {
   brokerDataCaption,
   brokerVsEstimateDifference,
@@ -54,27 +55,6 @@ function Row({ label, value, source, status, note }) {
   );
 }
 
-function Chip({ label, value, color }) {
-  return (
-    <span
-      title={`${label}: ${value}`}
-      style={{
-        fontSize: 9,
-        fontWeight: 700,
-        letterSpacing: 0.4,
-        color,
-        background: C.surface2,
-        border: `1px solid ${C.border}`,
-        borderRadius: 999,
-        padding: "2px 8px",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label.toUpperCase()} · {String(value).toUpperCase()}
-    </span>
-  );
-}
-
 export default function CapitalPanel({ capital, loading, error }) {
   const d = useMemo(() => capitalDisplay(capital), [capital]);
   const rows = useMemo(() => capitalRows(d), [d]);
@@ -82,8 +62,6 @@ export default function CapitalPanel({ capital, loading, error }) {
   const rocReady = rocInputsAvailable(d.rocInputs);
   const brokerError = useMemo(() => firstBrokerError(d), [d]);
   const brokerCaption = useMemo(() => brokerDataCaption(d), [d]);
-  // Phase 6.2 §18: neutral descriptive difference, ONLY when both numbers are
-  // available. Never labeled Savings/Advantage/Efficiency/Better.
   const brokerVsEstimate = useMemo(
     () => brokerVsEstimateDifference(d.brokerMargin.value, d.estimatedCapital.value),
     [d]
@@ -103,12 +81,12 @@ export default function CapitalPanel({ capital, loading, error }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: 0.8, color: C.text }}>💼 CAPITAL</div>
-          <Chip label="Capital status" value={d.status} color={d.status === "unavailable" ? C.faint : d.status === "partial" ? C.gold : C.green} />
-          <Chip
-            label="Return on Capital"
-            value={rocReady ? "inputs ready · not computed" : "not available"}
-            color={rocReady ? C.gold : C.faint}
-          />
+          <Badge variant={d.status === "unavailable" ? "neutral" : d.status === "partial" ? "warning" : "positive"}>
+            {d.status.toUpperCase()}
+          </Badge>
+          <Badge variant={rocReady ? "warning" : "neutral"}>
+            {rocReady ? "inputs ready · not computed" : "not available"}
+          </Badge>
         </div>
         {error && <div style={{ fontSize: 10.5, color: C.gold }}>⚠️ {error}</div>}
         {brokerError && !error && (
@@ -182,36 +160,37 @@ export default function CapitalPanel({ capital, loading, error }) {
                     <div style={{ fontSize: 9.5, color: C.faint }}>{s.symbol}</div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))", gap: 6, marginTop: 6 }}>
-                    <div>
-                      <div style={{ fontSize: 8.5, color: C.faint, letterSpacing: 0.4 }}>NET ENTRY</div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: s.entryNet >= 0 ? C.text : C.gold }}>{fmtSigned(s.entryNet)}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 8.5, color: C.faint, letterSpacing: 0.4 }}>PREMIUM OUTLAY</div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: C.text }}>{money(s.premiumOutlay)}</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 8.5, color: C.faint, letterSpacing: 0.4 }}>EST. CAPITAL</div>
-                      <div
-                        style={{ fontSize: 11, fontWeight: 700, color: s.estimatedCapital == null ? C.faint : C.text }}
-                        title={s.estimatedCapitalBasis ?? "unavailable — credit strategies have no premium-basis estimate"}
-                      >
-                        {s.estimatedCapital == null ? "—" : money(s.estimatedCapital)}
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 8.5, color: C.faint, letterSpacing: 0.4 }}>BROKER MARGIN</div>
-                      <div
-                        style={{ fontSize: 11, fontWeight: 700, color: s.brokerMargin == null ? C.faint : C.text }}
-                        title={
-                          s.brokerMargin == null
-                            ? `${s.brokerMarginError ?? "unavailable"} — broker-reported only, never estimated`
-                            : `Broker-reported whole-strategy margin · ${s.brokerMarginTimestamp ?? ""}`
-                        }
-                      >
-                        {s.brokerMargin == null ? "—" : money(s.brokerMargin)}
-                      </div>
-                    </div>
+                    <Metric
+                      size="sm"
+                      label="Net Entry"
+                      value={s.entryNet >= 0 ? `₹${fmtIN(s.entryNet, 2)}` : `−₹${fmtIN(Math.abs(s.entryNet), 2)}`}
+                      semantic={s.entryNet >= 0 ? "strategy" : "warning"}
+                    />
+                    <Metric
+                      size="sm"
+                      label="Premium Outlay"
+                      value={s.premiumOutlay}
+                      unit="₹"
+                      decimals={2}
+                    />
+                    <Metric
+                      size="sm"
+                      label="Est. Capital"
+                      value={s.estimatedCapital}
+                      unit="₹"
+                      decimals={2}
+                      sub={s.estimatedCapitalBasis ?? "unavailable"}
+                      semantic={s.estimatedCapital == null ? "neutral" : undefined}
+                    />
+                    <Metric
+                      size="sm"
+                      label="Broker Margin"
+                      value={s.brokerMargin}
+                      unit="₹"
+                      decimals={2}
+                      sub={s.brokerMargin == null ? s.brokerMarginError ?? "unavailable" : s.brokerMarginTimestamp ?? "Broker-reported"}
+                      semantic={s.brokerMargin == null ? "neutral" : undefined}
+                    />
                   </div>
                   <div style={{ fontSize: 8.5, color: C.faint, marginTop: 4 }}>
                     {s.estimatedCapitalBasis ? `${s.estimatedCapitalBasis.toUpperCase()} · ESTIMATED` : "NO CAPITAL ESTIMATE · PREMIUM ≠ MARGIN"}

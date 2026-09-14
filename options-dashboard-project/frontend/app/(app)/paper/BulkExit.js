@@ -6,6 +6,7 @@
 // shown here is informational or a mirror of the server result.
 
 import { C, fmtIN } from "@/lib/ui";
+import { ActionButton, Badge } from "@/components/app/core";
 
 // Phase 5.2.1: financial values always display with two decimals (₹3,169.00).
 const fmtPnl = (v) => (v == null || Number.isNaN(v) ? "—" : `${v >= 0 ? "+" : "−"}₹${fmtIN(Math.abs(v), 2)}`);
@@ -101,20 +102,22 @@ export function BulkExitModal({ kind, target, accountStats, busy, error, onCance
         )}
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <button
+          <ActionButton
+            variant="secondary"
+            size="md"
             onClick={onCancel}
             disabled={busy}
-            style={{ fontSize: 11.5, fontWeight: 700, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 16px", cursor: busy ? "default" : "pointer", opacity: busy ? 0.5 : 1 }}
           >
             Cancel
-          </button>
-          <button
+          </ActionButton>
+          <ActionButton
+            variant="destructive"
+            size="md"
             onClick={onConfirm}
             disabled={busy}
-            style={{ fontSize: 11.5, fontWeight: 800, color: "#fff", background: C.red, border: "1px solid transparent", borderRadius: 8, padding: "8px 16px", cursor: busy ? "progress" : "pointer", opacity: busy ? 0.65 : 1 }}
           >
             {busy ? "EXITING…" : isStrategy ? "EXIT STRATEGY" : "EXIT ALL"}
-          </button>
+          </ActionButton>
         </div>
       </div>
     </div>
