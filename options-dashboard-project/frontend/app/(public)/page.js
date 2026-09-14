@@ -9,7 +9,6 @@ import { COLOR, TYPE, SPACE, RADIUS } from "@/components/public/tokens";
 import { CTASection } from "@/components/public";
 
 import HomeHero from "@/components/public/HomeHero";
-import PlatformPreview from "@/components/public/PlatformPreview";
 import SignalMetricOverview from "@/components/public/SignalMetricOverview";
 import MarketIntelligenceGrid from "@/components/public/MarketIntelligenceGrid";
 import EvidenceTrustSection from "@/components/public/EvidenceTrustSection";
@@ -172,12 +171,6 @@ export default function HomePage() {
     <>
       <HomeHero onGetStarted={openAuth} />
 
-      <Section style={{ paddingTop: 0 }}>
-        <Container maxWidth={1100}>
-          <div style={{ marginTop: `-${SPACE.sectionLg}`, position: "relative" }}><PlatformPreview /></div>
-        </Container>
-      </Section>
-
       <TransitionSection />
 
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
@@ -225,13 +218,20 @@ export default function HomePage() {
 
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
-          <SectionTitle eyebrow="PAPER WORKFLOW" title="Practice the decision process. Not your capital." subtitle="Carry the same workflow into simulation, position management and review." />
+          <SectionTitle eyebrow="PAPER EXECUTION" title="Practice the workflow. Not your capital." subtitle="Decision, simulation, position management, P&L and review in one environment." />
           <WorkflowTabs tabs={paperTabs} defaultTab="decision" ariaLabel="Paper Trading" />
           <div style={{ textAlign: "center", marginTop: SPACE.section }}><LinkButton variant="secondary" size="md" href="/paper-trading" className="ds-focus-ring">Explore Paper Trading <span aria-hidden="true">→</span></LinkButton></div>
         </Container>
       </Section>
 
-      <CTASection headline={<>Turn market data into a structured decision.</>} body="Explore StrikeNova, understand the workflow, and practice your strategies before putting capital at risk." primaryLabel="Explore the Platform" primaryHref="/features" secondaryLabel="See How It Works" secondaryHref="/how-it-works" />
+      <CTASection
+        headline={<><span style={{ color: COLOR.strategy }}>Trade with context.</span> Decide with structure.</>}
+        body="Explore the StrikeNova workflow from market state to strategy, risk and paper execution."
+        primaryLabel="Explore the Platform"
+        primaryHref="/features"
+        secondaryLabel="See How It Works"
+        secondaryHref="/how-it-works"
+      />
     </>
   );
 }
