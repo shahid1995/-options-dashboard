@@ -33,7 +33,7 @@ const WORKFLOW_STAGES = [
   },
   {
     num: "03",
-    title: "BUILD",
+    title: "STRUCTURE",
     desc: "Construct a strategy around the market view.",
     detail: "Turn analysis into a structured multi-leg options strategy.",
     color: COLOR.strategy,
@@ -42,25 +42,17 @@ const WORKFLOW_STAGES = [
   {
     num: "04",
     title: "TEST",
-    desc: "Payoff, risk, Greeks and scenarios.",
-    detail: "Understand the outcome before committing capital.",
+    desc: "Payoff, risk, Greeks and scenarios — before committing capital.",
+    detail: "Understand the outcome and rehearse execution in a paper environment.",
     color: COLOR.warning,
     visual: "PAYOFF",
   },
   {
     num: "05",
-    title: "PAPER TRADE",
-    desc: "Simulate without risking real capital.",
-    detail: "Execute in a paper environment that mirrors market conditions.",
-    color: COLOR.positive,
-    visual: "SIM",
-  },
-  {
-    num: "06",
     title: "REVIEW",
-    desc: "Trade outcome, execution review, journal, learning loop.",
-    detail: "Study results and refine the process over time.",
-    color: COLOR.textSecondary,
+    desc: "Trade outcome, execution quality, journal, learning loop.",
+    detail: "Study results, measure performance, and refine the process over time.",
+    color: COLOR.positive,
     visual: "JOURNAL",
   },
 ];
@@ -76,7 +68,7 @@ function WorkflowRail() {
           top: 56,
           bottom: 56,
           width: 2,
-          background: `linear-gradient(180deg, ${COLOR.info}, ${COLOR.intelligence}, ${COLOR.strategy}, ${COLOR.warning}, ${COLOR.positive}, ${COLOR.textSecondary})`,
+          background: `linear-gradient(180deg, ${COLOR.info}, ${COLOR.intelligence}, ${COLOR.strategy}, ${COLOR.warning}, ${COLOR.positive})`,
           opacity: 0.4,
         }}
         aria-hidden="true"
@@ -245,8 +237,8 @@ export default function HowItWorksClientPage() {
         <Container maxWidth={PAGE_MAX}>
           <SectionTitle
             eyebrow="THE WORKFLOW"
-            title="Six stages from data to decision."
-            subtitle="Each stage builds on the previous one. Together they form a complete workflow from observation to review."
+            title="Five stages from observation to review."
+            subtitle="Each stage builds on the previous one. Together they form a complete workflow from data to decision."
           />
 
           <WorkflowRail />

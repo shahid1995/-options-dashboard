@@ -131,16 +131,15 @@ const DEMO_COCKPIT = {
 };
 
 // =============================================================================
-// WORKFLOW SEQUENCE — DECISION → SIMULATION → ORDERS → POSITIONS → P&L → REVIEW
+// WORKFLOW SEQUENCE — OBSERVE → FORM THESIS → STRUCTURE → TEST → REVIEW
 // =============================================================================
 
 const WORKFLOW_STEPS = [
-  { label: "DECISION", color: COLOR.strategy, desc: "Define your thesis" },
-  { label: "SIMULATION", color: COLOR.intelligence, desc: "Model the outcome" },
-  { label: "ORDERS", color: COLOR.info, desc: "Paper execution" },
-  { label: "POSITIONS", color: COLOR.textPrimary, desc: "Track exposure" },
-  { label: "P&L", color: COLOR.positive, desc: "Measure result" },
-  { label: "REVIEW", color: COLOR.warning, desc: "Journal & learn" },
+  { label: "OBSERVE", color: COLOR.info, desc: "Market data, option chain, OI, IV" },
+  { label: "FORM THESIS", color: COLOR.intelligence, desc: "Define your market view" },
+  { label: "STRUCTURE", color: COLOR.strategy, desc: "Build the multi-leg strategy" },
+  { label: "TEST", color: COLOR.warning, desc: "Paper execution, simulate outcome" },
+  { label: "REVIEW", color: COLOR.positive, desc: "Journal, measure, refine" },
 ];
 
 // =============================================================================
@@ -430,9 +429,9 @@ export default function PaperTradingClientPage() {
                 fontFamily: TYPE.body,
               }}
             >
-              A simulated environment to rehearse options strategies, test execution
-              decisions, and build confidence — without placing real orders or
-              touching real capital.
+              A simulated rehearsal environment: observe the market, form a thesis,
+              structure a strategy, test it on paper, and review the outcome — without
+              placing real orders or touching real capital.
             </p>
 
             {/* CTA row */}
@@ -464,9 +463,9 @@ export default function PaperTradingClientPage() {
       <Section>
         <Container maxWidth={900}>
           <SectionTitle
-            eyebrow="The Rehearsal Pipeline"
-            title="From decision to review — a connected sequence"
-            subtitle="Every step in the cockpit is simulated. No real orders, no real capital, no real risk."
+            eyebrow="Validation Workflow"
+            title="Observe → Form thesis → Structure → Test → Review"
+            subtitle="A connected sequence that mirrors how experienced traders investigate, decide, and learn — without real orders or real capital at risk."
             align="center"
           />
 
@@ -1039,8 +1038,8 @@ export default function PaperTradingClientPage() {
                 margin: 0,
               }}
             >
-              Start a simulated session. Test your strategies. Build confidence.
-              No real money required.
+              Start a simulated rehearsal. Observe, structure, test, and review —
+              no real orders, no real capital required.
             </p>
             <FlexRow gap={SPACE.medium} justify="center" wrap>
               <Button

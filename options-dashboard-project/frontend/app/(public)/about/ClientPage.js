@@ -99,9 +99,9 @@ export default function AboutClientPage() {
               margin: "0 auto",
             }}
           >
-            Option-chain data contains enormous information. Raw information does not
-            automatically create a repeatable decision process. StrikeNova exists to
-            close that gap.
+            Options markets generate vast amounts of data — but data alone does not
+            produce a repeatable decision process. StrikeNova bridges that gap: a
+            structured environment to observe, analyze, structure, test, and review.
           </p>
         </div>
       </header>

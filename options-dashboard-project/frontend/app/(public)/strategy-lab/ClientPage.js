@@ -197,27 +197,142 @@ export default function StrategyLabClientPage() {
               Explore the Platform
             </LinkButton>
           </FlexRow>
+        </Container>
+      </Section>
 
-          {/* Supporting signal hints */}
-          <FlexRow
-            gap={SPACE.compLg}
-            justify="center"
-            wrap={isMobile}
-            style={{ marginTop: SPACE.group, opacity: 0.7 }}
-          >
-            <FlexRow gap={SPACE.xs}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: COLOR.positive, display: "inline-block" }} />
-              <span style={{ fontSize: TYPE.caption.size, color: COLOR.textMuted }}>Max Profit / Loss</span>
-            </FlexRow>
-            <FlexRow gap={SPACE.xs}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: COLOR.strategy, display: "inline-block" }} />
-              <span style={{ fontSize: TYPE.caption.size, color: COLOR.textMuted }}>Breakevens</span>
-            </FlexRow>
-            <FlexRow gap={SPACE.xs}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: COLOR.intelligence, display: "inline-block" }} />
-              <span style={{ fontSize: TYPE.caption.size, color: COLOR.textMuted }}>Greeks & Scenarios</span>
-            </FlexRow>
-          </FlexRow>
+      {/* ============================ MARKET THESIS ============================ */}
+      <Section
+        padding={SPACE.section}
+        style={{
+          background: COLOR.baseElevated,
+          borderBottom: `1px solid ${COLOR.borderSubtle}`,
+        }}
+      >
+        <Container maxWidth={1100} style={{ padding: 0 }}>
+          <SectionTitle
+            eyebrow="MARKET THESIS"
+            title="Start with a view. Structure a strategy around it."
+            subtitle="Every strategy begins with a market observation. The thesis defines what you expect, the structure defines how you express it, and the payoff defines what you risk."
+          />
+
+          <TwoColumn
+            gap={SPACE.group}
+            breakpoint={768}
+            left={
+              <Panel padding={SPACE.cardLg}>
+                <FlexColumn gap={SPACE.comp}>
+                  <span
+                    style={{
+                      fontSize: TYPE.label.size,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      color: COLOR.info,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Illustrative Thesis
+                  </span>
+                  <p
+                    style={{
+                      fontSize: TYPE.body.size,
+                      color: COLOR.textSecondary,
+                      lineHeight: 1.7,
+                      margin: 0,
+                    }}
+                  >
+                    NIFTY has consolidated between 25,300 and 25,700 for two weeks.
+                    Open interest buildup suggests institutional selling above 25,600.
+                    Implied volatility rank is elevated at 78th percentile. The view:
+                    range-bound to mildly bearish with volatility contraction expected.
+                  </p>
+                  <TechnicalDivider label="Thesis → Structure" />
+                  <p
+                    style={{
+                      fontSize: TYPE.bodySmall.size,
+                      color: COLOR.textMuted,
+                      lineHeight: 1.65,
+                      margin: 0,
+                    }}
+                  >
+                    An Iron Condor expresses this view: sell the range, buy protection
+                    beyond it. Defined risk, defined reward, and positive theta if the
+                    thesis holds.
+                  </p>
+                </FlexColumn>
+              </Panel>
+            }
+            right={
+              <SignalPanel padding={SPACE.cardLg}>
+                <FlexColumn gap={SPACE.compLg}>
+                  <span
+                    style={{
+                      fontSize: TYPE.label.size,
+                      fontWeight: 600,
+                      letterSpacing: "0.06em",
+                      color: COLOR.textFaint,
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Decision Sequence
+                  </span>
+                  {[
+                    { step: "1", label: "Observe", desc: "Price, OI, IV, structure" },
+                    { step: "2", label: "Form Thesis", desc: "Range-bound, vol contraction" },
+                    { step: "3", label: "Structure", desc: "Iron Condor, 200pt wings" },
+                    { step: "4", label: "Payoff", desc: "Max profit, max loss, breakevens" },
+                    { step: "5", label: "Scenario", desc: "Spot ±200, IV ±3%, time decay" },
+                    { step: "6", label: "Risk", desc: "Greeks, tail risk, assignment" },
+                    { step: "7", label: "Decision", desc: "Proceed, adjust, or pass" },
+                  ].map((item, i) => (
+                    <FlexRow key={item.step} gap={SPACE.comp} align="center">
+                      <span
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: "50%",
+                          background: i === 2 ? COLOR.strategyDim : COLOR.surfaceDeep,
+                          border: `1px solid ${i === 2 ? COLOR.strategy : COLOR.borderSubtle}`,
+                          display: "grid",
+                          placeItems: "center",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: TYPE.caption.size,
+                            fontWeight: 700,
+                            color: i === 2 ? COLOR.strategy : COLOR.textMuted,
+                            fontFamily: TYPE.data,
+                          }}
+                        >
+                          {item.step}
+                        </span>
+                      </span>
+                      <FlexColumn gap={SPACE.micro}>
+                        <span
+                          style={{
+                            fontSize: TYPE.bodySmall.size,
+                            fontWeight: 600,
+                            color: COLOR.textPrimary,
+                          }}
+                        >
+                          {item.label}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: TYPE.caption.size,
+                            color: COLOR.textFaint,
+                          }}
+                        >
+                          {item.desc}
+                        </span>
+                      </FlexColumn>
+                    </FlexRow>
+                  ))}
+                </FlexColumn>
+              </SignalPanel>
+            }
+          />
         </Container>
       </Section>
 
