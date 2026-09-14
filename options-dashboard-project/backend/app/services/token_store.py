@@ -112,6 +112,77 @@ def set_token(token: str, *, connection_id: str | None = None, expires_at=None, 
     return session_id
 
 
+# ---------------------------------------------------------------------------
+# Session-scoped broker-session API — atomic broker-link persistence.
+#
+# The broker OAuth callback MUST use this three-step flow instead of
+# set_token() so the BrokerToken row is written on the callback's ACTIVE
+# SQLAlchemy session (same transaction as the BrokerConnection and
+# UserSession rows — UPSTOX_IDENTITY_LINKING_DESIGN.md §10/§17.4):
+#
+#   session_id = prepare_broker_session(token, expires_at=...)   # memory only
+#   persist_broker_token_row(db, session_id, token, conn_id, exp)  # caller's tx
+#   ... commit ...
+#   cache_broker_session(session_id, token)                      # post-commit
+#
+# If the caller's transaction rolls back, the memory cache was never
+# populated, so no committed broker session can reference a connection
+# that does not exist.
+# ---------------------------------------------------------------------------
+
+
+def prepare_broker_session(token: str, *, expires_at=None) -> str:
+    """Generate (but do not cache) the broker session id for a callback.
+
+    The id is reserved so the callback can persist the UserSession and
+    BrokerToken rows inside its own transaction before anything is
+    visible in the in-memory cache.
+    """
+    return secrets.token_urlsafe(32)
+
+
+def persist_broker_token_row(
+    db,
+    session_id: str,
+    token: str,
+    connection_id: str | None,
+    expires_at=None,
+) -> None:
+    """Write the encrypted BrokerToken row on the CALLER's active session.
+
+    Runs inside the caller's transaction — no commit, no rollback, no
+    separate DB session. Persistence failures propagate to the caller and
+    roll back the whole broker-link transaction (never swallowed as
+    "non-critical" in this flow).
+    """
+    from datetime import datetime, timezone
+
+    from app.crypto import encrypt
+    from app.identity import BrokerToken, hash_session_id
+
+    bt = BrokerToken(
+        connection_id=connection_id or "none",
+        session_hash=hash_session_id(session_id),
+        broker_token_encrypted=encrypt(token),
+        broker_token_expires_at=expires_at,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(bt)
+    db.flush()
+
+
+def cache_broker_session(session_id: str, token: str) -> None:
+    """Populate the in-memory cache AFTER the caller's transaction commits."""
+    _sessions[session_id] = {
+        "access_token": token,
+        "created_at": time.time(),
+    }
+    logger.info(
+        "Session created",
+        extra={"event": "auth.session.created", "session_prefix": session_id[:8]},
+    )
+
+
 def get_token(session_id: str | None) -> str | None:
     """Return the broker access token for the given session.
 

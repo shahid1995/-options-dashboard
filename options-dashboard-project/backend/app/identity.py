@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
@@ -194,8 +195,99 @@ def hash_session_id(session_id: str) -> str:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
 
 
+class BrokerIdentityInUse(Exception):
+    """A broker identity is already owned by a different StrikeNova user.
+
+    Ownership is never transferred (UPSTOX_IDENTITY_LINKING_DESIGN.md
+    Invariant 7 / §17.5); callers must reject the connection attempt.
+    """
+
+
+def resolve_platform_user(db: Session, user_id: str) -> User:
+    """Resolve the authenticated platform user for a broker-link flow.
+
+    Session-bound linking (design §7 / §17): the initiating session's
+    user_id is the ONLY platform-identity authority. This function NEVER
+    creates a User and NEVER consults broker profile data (email, display
+    name, or otherwise) for identity decisions.
+    """
+    user = db.query(User).filter(User.id == user_id).one_or_none()
+    if user is None:
+        raise ValueError(f"No StrikeNova user for session user_id={user_id}")
+    return user
+
+
+def find_broker_identity_owner(
+    db: Session, provider: str, broker_user_id: str, broker_account_id: str
+) -> str | None:
+    """Return the user_id owning the broker identity, if anyone does.
+
+    Checks both the ownership ledger (``broker_connections``) and the
+    legacy ``users.broker_*`` stamp. The two must agree; disagreement
+    raises :class:`BrokerIdentityInUse` (corrupt state is never silently
+    resolved).
+    """
+    owner: str | None = None
+    conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.broker == provider,
+            BrokerConnection.broker_account_id == broker_account_id,
+        )
+        .one_or_none()
+    )
+    if conn is not None:
+        owner = conn.user_id
+    stamped = (
+        db.query(User)
+        .filter(User.broker_provider == provider, User.broker_user_id == broker_user_id)
+        .one_or_none()
+    )
+    if stamped is not None:
+        if owner is not None and stamped.id != owner:
+            raise BrokerIdentityInUse(
+                f"broker identity {provider}/{broker_user_id} has conflicting "
+                f"ownership records: connection owner {owner} vs stamped user {stamped.id}"
+            )
+        owner = stamped.id
+    return owner
+
+
+def ensure_broker_stamp(
+    db: Session, user: User, provider: str, broker_user_id: str
+) -> None:
+    """Stamp ``users.broker_*`` for the initiating user (design §17.5).
+
+    Allowed:  NULL → (provider, broker_user_id); identical → no-op.
+    Forbidden: any different existing stamp — raises
+    :class:`BrokerIdentityInUse` rather than overwriting platform
+    identity metadata.
+    """
+    if user.broker_provider is None and user.broker_user_id is None:
+        user.broker_provider = provider
+        user.broker_user_id = broker_user_id
+        db.flush()
+        return
+    if user.broker_provider == provider and user.broker_user_id == broker_user_id:
+        return
+    raise BrokerIdentityInUse(
+        f"user {user.id} is already stamped with broker identity "
+        f"{user.broker_provider}/{user.broker_user_id}"
+    )
+
+
 def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
-    """Map the authenticated Upstox identity to one durable StrikeNova user."""
+    """DEPRECATED legacy helper — lookup-only since session-bound linking.
+
+    The historical create-path here (INSERT a platform User from the
+    Upstox profile, including its email) caused duplicate-platform-user
+    forks and ``users.email`` UniqueViolations; it is retired by the
+    authorized identity-linking design (§7/§17.1: no anonymous Upstox
+    sign-in, no broker-coupled user creation). The lookup-only remnant
+    exists solely for the legacy Upstox-only migration workstream and
+    tests. The live OAuth callback must NOT call this function; it uses
+    :func:`resolve_platform_user` with the bound session's user_id.
+    """
     data = profile.get("data") if isinstance(profile, dict) else None
     data = data if isinstance(data, dict) else {}
 
@@ -204,7 +296,6 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
         raise ValueError("Upstox profile did not contain a broker user_id")
 
     provider = str(data.get("broker") or "UPSTOX").strip().upper()
-    email = str(data.get("email") or "").strip().lower() or None
     display_name = str(data.get("user_name") or "").strip() or None
     broker_active = bool(data.get("is_active", True))
 
@@ -213,28 +304,20 @@ def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
         .filter(User.broker_provider == provider, User.broker_user_id == broker_user_id)
         .one_or_none()
     )
-
     if user is None:
-        user = User(
-            id=str(uuid4()),
-            email=email,
-            display_name=display_name,
-            status="active" if broker_active else "suspended",
-            identity_source="upstox",
-            broker_provider=provider,
-            broker_user_id=broker_user_id,
-            last_login_at=_utcnow(),
+        raise LookupError(
+            f"No StrikeNova user for broker identity {provider}/{broker_user_id}; "
+            "broker OAuth no longer creates platform users"
         )
-        db.add(user)
-    else:
-        user.email = email or user.email
+
+    if display_name:
         user.display_name = display_name or user.display_name
-        # Do not let broker login silently undo a future StrikeNova admin
-        # suspension/disable action. Only an active account may be refreshed
-        # by broker activity; disabled/suspended are platform-owned states.
-        if user.status == "active" and not broker_active:
-            user.status = "suspended"
-        user.last_login_at = _utcnow()
+    # Do not let broker activity silently undo a future StrikeNova admin
+    # suspension/disable action. Only an active account may be refreshed
+    # by broker activity; disabled/suspended are platform-owned states.
+    if user.status == "active" and not broker_active:
+        user.status = "suspended"
+    user.last_login_at = _utcnow()
 
     db.flush()
     return user
@@ -520,55 +603,106 @@ def get_or_create_connection(
     it is updated (re-login scenario).
 
     broker_account_id must be pre-extracted by the adapter layer (AD-6).
+
+    Concurrency (design §11/§17.3): concurrent callbacks for the same
+    identity can both miss the SELECT. The INSERT/UPDATE is flushed
+    inside a SAVEPOINT (``begin_nested``) so a unique-constraint loss
+    rolls back ONLY the savepoint — the caller's outer transaction
+    (user resolution, stamping) stays intact. On conflict the row is
+    re-read: same-user winner → deterministic idempotent reconnect;
+    other-user winner → raised so the caller classifies it as
+    ``broker_identity_in_use`` (the global partial index makes the
+    database the arbiter of ownership).
     """
     broker_upper = broker.upper()
 
-    # First: check if a pending row exists for this (user, broker)
-    pending_conn = (
-        db.query(BrokerConnection)
-        .filter(
-            BrokerConnection.user_id == user_id,
-            BrokerConnection.broker == broker_upper,
-            BrokerConnection.broker_account_id == "pending",
-        )
-        .first()
-    )
+    def _apply(conn: BrokerConnection) -> BrokerConnection:
+        conn.broker_account_id = broker_account_id
+        conn.status = status
+        conn.disconnected_at = None
+        conn.connected_at = _utcnow()
+        conn.updated_at = _utcnow()
+        return conn
 
-    # Second: check if a connected row with this account ID exists
-    existing_conn = (
-        db.query(BrokerConnection)
-        .filter(
-            BrokerConnection.user_id == user_id,
-            BrokerConnection.broker == broker_upper,
-            BrokerConnection.broker_account_id == broker_account_id,
+    for attempt in range(3):
+        # First: check if a pending row exists for this (user, broker)
+        pending_conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.broker_account_id == "pending",
+            )
+            .first()
         )
-        .first()
-    )
 
-    if existing_conn is not None:
-        # Re-login to existing connection
-        conn = existing_conn
-    elif pending_conn is not None:
-        # Transition from pending → connected
-        conn = pending_conn
-    else:
-        # New connection (e.g. first OAuth without prior credential storage)
-        conn = BrokerConnection(
-            id=str(uuid4()),
-            user_id=user_id,
-            broker=broker_upper,
-            broker_account_id=broker_account_id,
-            connected_at=_utcnow(),
+        # Second: check if a connected row with this account ID exists
+        existing_conn = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.user_id == user_id,
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.broker_account_id == broker_account_id,
+            )
+            .first()
         )
-        db.add(conn)
 
-    conn.broker_account_id = broker_account_id
-    conn.status = status
-    conn.disconnected_at = None
-    conn.connected_at = _utcnow()
-    conn.updated_at = _utcnow()
-    db.flush()
-    return conn
+        if existing_conn is not None:
+            # Re-login to existing connection — an UPDATE of our own row
+            # cannot lose an ownership race.
+            return _apply(existing_conn)
+
+        if pending_conn is not None:
+            # Transition from pending → connected. The UPDATE can still
+            # lose a cross-user race on the global ownership index.
+            conn = _apply(pending_conn)
+            try:
+                with db.begin_nested():
+                    db.flush()
+                return conn
+            except IntegrityError:
+                pass  # fall through to the shared recover path
+        else:
+            # New connection (e.g. first OAuth without prior credential storage)
+            conn = BrokerConnection(
+                id=str(uuid4()),
+                user_id=user_id,
+                broker=broker_upper,
+                broker_account_id=broker_account_id,
+                connected_at=_utcnow(),
+            )
+            db.add(conn)
+            try:
+                with db.begin_nested():
+                    db.flush()
+                return conn
+            except IntegrityError:
+                pass  # fall through to the shared recover path
+
+        # Recover path: someone committed the identity between our SELECT
+        # and our flush. Re-read by GLOBAL identity (not just our user).
+        db.expire_all()
+        winner = (
+            db.query(BrokerConnection)
+            .filter(
+                BrokerConnection.broker == broker_upper,
+                BrokerConnection.broker_account_id == broker_account_id,
+            )
+            .one_or_none()
+        )
+        if winner is not None and winner.user_id != user_id:
+            # Cross-user ownership conflict — never transfer (design
+            # Invariant 7). Raise for the caller to classify.
+            raise BrokerIdentityInUse(
+                f"broker identity {broker_upper}/{broker_account_id} is "
+                f"already owned by user {winner.user_id}"
+            )
+        if winner is not None:
+            # Same-user reconnect race → deterministic idempotent finish.
+            return _apply(winner)
+        if attempt == 2:
+            raise
+        # Row vanished between conflict and re-read — retry the loop.
 
 
 # ---------------------------------------------------------------------------

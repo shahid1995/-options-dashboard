@@ -138,12 +138,19 @@ def test_callback_with_code_sets_session_cookie_and_redirects(client, db_session
     session_id = token_store.set_token("tok-callback-user")
     user = User(
         id=user_id, status="active", identity_source="upstox",
-        broker_provider="UPSTOX", broker_user_id="callback-user-1",
+        # Legacy stamp must match the identity the mocked profile returns —
+        # a conflicting stamp is by design rejected (broker_identity_in_use).
+        broker_provider="UPSTOX", broker_user_id="broker-user-1",
     )
     db_session.add(user)
     db_session.flush()
     create_session_record(db_session, user_id, session_id)
     store_credentials(db_session, user_id, "UPSTOX", "user-cb-key", "user-cb-secret")
+    # Commit ALL setup rows: the production callback closes its pre-OAuth
+    # session before the link transaction, which rolls back uncommitted
+    # setup state on a shared SQLite connection. Setup must be durable
+    # (UPSTOX_IDENTITY_LINKING_DESIGN.md §10 Phase 0 ordering).
+    db_session.commit()
 
     mock_adapter = AsyncMock()
     mock_adapter.exchange_authorization_code = AsyncMock(return_value="tok-xyz")

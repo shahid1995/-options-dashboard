@@ -23,6 +23,16 @@ def test_hash_session_id_is_deterministic_and_not_plaintext():
 
 
 def test_upstox_identity_is_stable_and_session_is_user_scoped(monkeypatch):
+    """Broker identity → platform user resolution is stable and user-scoped.
+
+    Session-bound linking (UPSTOX_IDENTITY_LINKING_DESIGN.md §17.1) retired
+    broker-coupled user creation: get_or_create_user_from_upstox is
+    lookup-only and never creates a User. The resolver must return the
+    same existing user on every sight of the broker identity and must
+    never let broker profile data touch users.email.
+    """
+    from uuid import uuid4
+
     engine = create_engine("sqlite:///:memory:")
     identity.Base.metadata.create_all(
         bind=engine,
@@ -41,13 +51,41 @@ def test_upstox_identity_is_stable_and_session_is_user_scoped(monkeypatch):
             },
         }
 
+        # The platform user must already exist (registered via email or
+        # Google) and be stamped with the broker identity.
+        existing = identity.User(
+            id=str(uuid4()),
+            email="trader@example.com",
+            display_name="Platform Display",
+            status="active",
+            identity_source="email",
+            broker_provider="UPSTOX",
+            broker_user_id="UCC-123",
+        )
+        db.add(existing)
+        db.commit()
+
         first = identity.get_or_create_user_from_upstox(db, profile)
         db.commit()
         second = identity.get_or_create_user_from_upstox(db, profile)
 
-        assert first.id == second.id
+        # Lookup-only: no user creation, stable identity, users.email never
+        # overwritten by the broker profile email. (display_name is
+        # informational metadata the legacy helper may refresh.)
+        assert first.id == existing.id
+        assert second.id == existing.id
         assert second.email == "trader@example.com"
         assert second.display_name == "Trader One"
+
+        # A broker identity with NO owning user is refused, never created.
+        stranger_profile = dict(profile)
+        stranger_profile["data"] = dict(profile["data"], user_id="UCC-NEW")
+        try:
+            identity.get_or_create_user_from_upstox(db, stranger_profile)
+            raised = False
+        except LookupError:
+            raised = True
+        assert raised, "broker OAuth must not create platform users"
 
         session = identity.create_session_record(db, first.id, "session-a")
         active = identity.get_active_session(db, "session-a")

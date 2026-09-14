@@ -1,3 +1,4 @@
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -18,19 +19,23 @@ from app.identity import (
     User,
     UserSession,
     create_session_record,
+    ensure_broker_stamp,
+    find_broker_identity_owner,
     get_active_session,
     get_or_create_connection,
     get_or_create_user_from_google,
-    get_or_create_user_from_upstox,
     get_analytics_token,
     hash_password,
     remove_analytics_token,
+    resolve_platform_user,
     resolve_user_credentials,
     revoke_session,
     store_analytics_token,
     store_credentials,
     verify_password,
+    BrokerIdentityInUse,
 )
+from sqlalchemy.exc import IntegrityError
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
 from app.services import token_store
 
@@ -191,51 +196,152 @@ async def callback(
         logger.error("Token/profile exchange failed: %s", e)
         return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(e.message)}")
 
-    # Phase 10.1: persist StrikeNova identity and durable session ownership.
+    # Session-bound linking (UPSTOX_IDENTITY_LINKING_DESIGN.md §7/§17):
+    # the state-bound initiating session's user is the ONLY platform
+    # identity authority. The callback NEVER creates a User and NEVER
+    # consults the broker profile email for identity decisions.
     db = SessionLocal()
     session_id = None
-    try:
-        user = get_or_create_user_from_upstox(db, profile)
-        if user.status != "active":
-            db.rollback()
-            raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+    broker_identity: str | None = None
+    broker_account_id: str | None = None
 
-        # Extract broker_account_id using adapter-specific logic (AD-6)
-        broker_account_id = adapter.extract_account_id(profile)
+    def _persist_broker_link() -> None:
+        """ONE transaction: stamp + connection + UserSession + BrokerToken.
+
+        (design §10/§17.4) — the token row is written on this callback's
+        active session; nothing here persists outside the transaction.
+        """
+        nonlocal session_id
+        db.rollback()  # discard any half-flushed state from a prior attempt
+        ensure_broker_stamp(db, user, broker_id, broker_identity)
+
         connection = None
         if broker_account_id:
             connection = get_or_create_connection(
                 db, user.id, broker_id, broker_account_id
             )
+            # Broker profile email/display name are INFORMATIONAL metadata
+            # (design Invariant 4) — stored on the connection, never on
+            # users.email.
+            try:
+                meta = json.loads(connection.provider_metadata_json or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            profile_meta = {
+                k: profile_data.get(k)
+                for k in ("email", "user_name", "broker", "is_active")
+                if profile_data.get(k) is not None
+            }
+            if profile_meta:
+                meta["upstox_profile"] = profile_meta
+                connection.provider_metadata_json = json.dumps(meta)
         else:
             logger.warning(
                 "Could not extract broker account ID from %s profile", broker_id
             )
 
-        session_id = token_store.set_token(
-            access_token,
-            connection_id=connection.id if connection else None,
-            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        )
+        session_id = token_store.prepare_broker_session(access_token)
         create_session_record(
             db, user.id, session_id,
             broker_connection_id=connection.id if connection else None,
         )
-        db.commit()  # Commit all DB changes from this callback
+        token_store.persist_broker_token_row(
+            db,
+            session_id,
+            access_token,
+            connection.id if connection else None,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        )
+        db.commit()
+
+    try:
+        user = resolve_platform_user(db, user_id_for_connection)
+        if user.status != "active":
+            db.rollback()
+            raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+
+        # Authoritative Upstox identity (design §17.2/§17.5): the profile's
+        # data.user_id (Upstox user_id / UCC). §17.2 proved
+        # extract_account_id() returns the same value for Upstox.
+        profile_data = profile.get("data") if isinstance(profile, dict) else {}
+        profile_data = profile_data if isinstance(profile_data, dict) else {}
+        broker_identity = str(profile_data.get("user_id") or "").strip()
+        if not broker_identity:
+            raise ValueError("Upstox profile did not contain a broker user_id")
+        adapter_account_id = adapter.extract_account_id(profile)
+        if adapter_account_id and adapter_account_id != broker_identity:
+            logger.warning(
+                "Upstox adapter account id mismatch: profile=%s adapter=%s",
+                broker_identity, adapter_account_id,
+            )
+        broker_account_id = broker_identity
+
+        # Ownership arbitration: a broker identity belongs to at most one
+        # StrikeNova user; contested ownership is rejected, never
+        # transferred (design Invariants 1/7).
+        owner_id = find_broker_identity_owner(
+            db, broker_id, broker_identity, broker_account_id
+        )
+        if owner_id is not None and owner_id != user.id:
+            db.rollback()
+            return RedirectResponse(
+                f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
+            )
+
+        _persist_broker_link()
     except HTTPException:
-        if session_id:
-            token_store.clear_token(session_id)
         raise
+    except BrokerIdentityInUse as e:
+        db.rollback()
+        logger.warning("Broker identity ownership conflict: %s", e)
+        return RedirectResponse(
+            f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
+        )
+    except IntegrityError:
+        # Database arbitration fired (global ownership index, per-user
+        # connection constraint, or the legacy stamp constraint). Roll back
+        # and classify by re-reading the committed winner (design §17.3).
+        db.rollback()
+        session_id = None
+        try:
+            owner_id = find_broker_identity_owner(
+                db, broker_id, broker_identity or "", broker_account_id or ""
+            )
+        except BrokerIdentityInUse:
+            owner_id = None  # corrupt/conflicting records — treat as unrecoverable
+        if owner_id is not None and owner_id != user.id:
+            logger.warning(
+                "Broker identity %s/%s owned by user %s; rejected for user %s",
+                broker_id, broker_account_id, owner_id, user.id,
+            )
+            return RedirectResponse(
+                f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
+            )
+        # Same-user reconnect race (or a vanished row): deterministic
+        # recover — re-run the link persistence exactly once.
+        try:
+            _persist_broker_link()
+        except Exception:
+            db.rollback()
+            session_id = None
+            logger.exception("Failed to persist StrikeNova identity/session")
+            return RedirectResponse(
+                f"{settings.FRONTEND_ORIGIN}?login_error=account_setup_failed"
+            )
     except Exception:
         db.rollback()
-        if session_id:
-            token_store.clear_token(session_id)
+        session_id = None
         logger.exception("Failed to persist StrikeNova identity/session")
         return RedirectResponse(
             f"{settings.FRONTEND_ORIGIN}?login_error=account_setup_failed"
         )
     finally:
         db.close()
+
+    # Design §10 Phase 2: populate the in-memory token cache ONLY after the
+    # link transaction committed. Idempotent; a rollback path never reaches
+    # this line, so no cached session can reference a rolled-back connection.
+    token_store.cache_broker_session(session_id, access_token)
 
     # Send the user back to the dashboard. The session ID is passed in the
     # URL fragment because it is not sent to servers as a query parameter.

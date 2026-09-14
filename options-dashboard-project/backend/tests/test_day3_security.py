@@ -425,7 +425,15 @@ class TestCallbackSessionMismatch:
     def test_callback_with_valid_bound_session(self, client, db_session, monkeypatch):
         """Callback with a valid bound session proceeds to exchange."""
         user_id, session_id = _create_user(db_session)
+        # Align the legacy stamp with the broker identity this test connects —
+        # a conflicting stamp is by design rejected (broker_identity_in_use).
+        user = db_session.query(User).filter(User.id == user_id).one()
+        user.broker_user_id = "broker-user-callback"
         store_credentials(db_session, user_id, "UPSTOX", "user-cb-key", "user-cb-secret")
+        # Commit ALL setup rows: the production callback closes its pre-OAuth
+        # session before the link transaction, which rolls back uncommitted
+        # setup state on a shared SQLite connection (design §10 Phase 0).
+        db_session.commit()
 
         # Mock the gateway
         mock_adapter = AsyncMock()
