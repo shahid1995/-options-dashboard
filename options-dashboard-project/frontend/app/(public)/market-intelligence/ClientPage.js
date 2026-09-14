@@ -20,11 +20,14 @@ import {
   CardGrid,
   TwoColumn,
   FlexRow,
+  FlexColumn,
+  Section,
   // Truth
   DemoLabel,
   ResearchBadge,
   Eyebrow,
   SectionTitle,
+  DataStateBadge,
   // Buttons
   LinkButton,
   TextLink,
@@ -47,37 +50,43 @@ const DIMENSIONS = [
     label: "PRICE",
     icon: "P",
     color: COLOR.textPrimary,
-    desc: "Spot, LTP across strikes and the current market level — the reference point for every derivative calculation.",
+    question: "What is the reference level for every derivative calculation?",
+    desc: "Spot, LTP across strikes and the current market level.",
   },
   {
     label: "OI",
     icon: "O",
     color: COLOR.signalOi,
-    desc: "Open interest on both sides, total and per-strike. Shows where positions have been placed.",
+    question: "Where have participants placed their positions?",
+    desc: "Open interest on both sides, total and per-strike.",
   },
   {
     label: "IV",
     icon: "V",
     color: COLOR.signalIv,
-    desc: "Implied volatility at each strike and the ATM level — how the market prices future uncertainty.",
+    question: "How does the market price future uncertainty?",
+    desc: "Implied volatility at each strike and the ATM level.",
   },
   {
     label: "ΔOI",
     icon: "Δ",
     color: COLOR.info,
-    desc: "How positions shifted during the session. New positions, unwound positions, and net change.",
+    question: "How did positions shift during the session?",
+    desc: "New positions, unwound positions, and net change.",
   },
   {
     label: "GREEKS",
     icon: "Γ",
     color: COLOR.signalGreeks,
-    desc: "Delta, gamma, theta and vega for every option — the sensitivity coefficients of each position.",
+    question: "What are the sensitivity coefficients of each position?",
+    desc: "Delta, gamma, theta and vega for every option.",
   },
   {
     label: "STRUCTURE",
     icon: "S",
     color: COLOR.strategy,
-    desc: "Resistance, support and pivot levels derived from the chain — the skeleton of the market.",
+    question: "What are the key spatial reference levels?",
+    desc: "Resistance, support and pivot levels derived from the chain.",
   },
 ];
 
@@ -366,12 +375,25 @@ export default function MarketIntelligenceClientPage() {
                   </span>
                 </div>
 
-                {/* Description */}
+                {/* Question */}
                 <p
                   style={{
                     fontSize: TYPE.bodySmall.size,
+                    fontWeight: 600,
+                    color: COLOR.textSecondary,
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}
+                >
+                  {dim.question}
+                </p>
+
+                {/* Description */}
+                <p
+                  style={{
+                    fontSize: TYPE.caption.size,
                     color: COLOR.textMuted,
-                    lineHeight: TYPE.bodySmall.lineHeight,
+                    lineHeight: 1.6,
                     margin: 0,
                   }}
                 >
@@ -574,7 +596,7 @@ export default function MarketIntelligenceClientPage() {
                     }}
                   >
                     Open interest distribution reveals where participants have placed their
-                    bets. High OI at a strike suggests conviction — it acts as a magnet or
+                    bets. High OI at a strike suggests conviction — it may act as a magnet or
                     a wall. The PCR (Put/Call Ratio) summarizes directional bias.
                   </p>
                   <MetricGrid minItemWidth={120} style={{ marginTop: SPACE.compLg }}>
@@ -690,7 +712,7 @@ export default function MarketIntelligenceClientPage() {
                   >
                     Implied volatility reflects how the market prices future uncertainty.
                     ATM IV, skew direction, and term structure together define the volatility
-                    regime — critical for choosing between premium-selling and
+                    regime — relevant for choosing between premium-selling and
                     premium-buying strategies.
                   </p>
                   <MetricGrid minItemWidth={120} style={{ marginTop: SPACE.compLg }}>

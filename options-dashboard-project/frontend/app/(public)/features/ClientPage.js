@@ -9,10 +9,9 @@ import {
 import {
   Section,
   Container,
-  Asymmetric,
   FlexRow,
   FlexColumn,
-  BentoGrid,
+  CardGrid,
 } from "@/components/public/layout";
 import {
   Surface,
@@ -24,13 +23,10 @@ import {
   SignalLine,
   SignalNode,
   GridOverlay,
-  TechnicalDivider,
-  DataTrace,
 } from "@/components/public/signals";
 import {
   Button,
   LinkButton,
-  TextLink,
 } from "@/components/public/buttons";
 import {
   DemoLabel,
@@ -38,14 +34,9 @@ import {
   Eyebrow,
   SectionTitle,
 } from "@/components/public/truth";
-import {
-  fadeUpStyle,
-  traceDrawStyle,
-} from "@/components/public/motion";
-import { VisualizationFrame } from "@/components/public/VisualizationFrame";
 
 // =============================================================================
-// Capability Atlas Page — Redesign
+// Features Page — Organized Around User Outcomes
 // =============================================================================
 
 const CAPABILITIES = [
@@ -54,10 +45,9 @@ const CAPABILITIES = [
     label: "MARKET INTELLIGENCE",
     href: "/market-intelligence",
     color: COLOR.intelligence,
-    accent: "intelligence",
-    tagline: "Tracked positioning. Streaming signals.",
+    tagline: "See what the market is doing — in real time.",
     description:
-      "Full call/put chain with open interest, volume, IV and Greeks — streaming over WebSocket to show you what the market is doing right now.",
+      "Full call/put chain with open interest, volume, IV and Greeks. Streaming over WebSocket to show current positioning, volatility and structure.",
     metrics: [
       { label: "OPTION CHAIN", value: "STREAMING" },
       { label: "OI TRACKING", value: "PER-STRIKE" },
@@ -74,7 +64,6 @@ const CAPABILITIES = [
     label: "STRATEGY LAB",
     href: "/strategy-lab",
     color: COLOR.strategy,
-    accent: "strategy",
     tagline: "Build. Analyze. Test.",
     description:
       "Construct multi-leg strategies, run payoff analysis, stress-test under spot, IV and time shifts — with position Greeks and scenario modeling.",
@@ -90,14 +79,13 @@ const CAPABILITIES = [
     ],
   },
   {
-    id: "risk-payoff",
-    label: "RISK / PAYOFF",
+    id: "risk-scenario",
+    label: "RISK & SCENARIO ANALYSIS",
     href: "/strategy-lab",
     color: COLOR.negative,
-    accent: "negative",
     tagline: "Know your downside before you commit.",
     description:
-      "Visual payoff curves with clear max profit, max loss and breakeven points — so you understand the risk profile before committing capital.",
+      "Visual payoff curves with clear max profit, max loss and breakeven points. Understand the risk profile before committing capital.",
     metrics: [
       { label: "MAX PROFIT", value: "CAPPED" },
       { label: "MAX LOSS", value: "DEFINED" },
@@ -114,7 +102,6 @@ const CAPABILITIES = [
     label: "PAPER TRADING",
     href: "/paper-trading",
     color: COLOR.positive,
-    accent: "positive",
     tagline: "Rehearse without risk.",
     description:
       "Simulated capital, orders, positions and P&L. Test every strategy in a zero-risk environment with full trade history and performance metrics.",
@@ -154,10 +141,10 @@ const RESEARCH_CAPABILITIES = [
 // Sub-components
 // =============================================================================
 
-function CapabilityModule({ cap, index }) {
+function CapabilityModule({ cap }) {
   return (
     <Panel
-      padding="2rem"
+      padding={SPACE.cardLg}
       style={{
         position: "relative",
         overflow: "hidden",
@@ -240,7 +227,7 @@ function CapabilityModule({ cap, index }) {
                 fontSize: TYPE.data.size,
                 fontWeight: 700,
                 color: cap.color,
-                fontFamily: TYPE.data.fontFamily,
+                fontFamily: TYPE.data,
               }}
             >
               {m.value}
@@ -279,7 +266,7 @@ function CapabilityModule({ cap, index }) {
                     fontSize: TYPE.bodySmall.size,
                     fontWeight: 600,
                     color: COLOR.textSecondary,
-                    fontFamily: TYPE.data.fontFamily,
+                    fontFamily: TYPE.data,
                   }}
                 >
                   {h.label}
@@ -318,41 +305,10 @@ function CapabilityModule({ cap, index }) {
   );
 }
 
-function AtlasConnector() {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: `${SPACE.compLg} 0`,
-        position: "relative",
-      }}
-      aria-hidden="true"
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: SPACE.compLg,
-          width: "100%",
-          maxWidth: 700,
-        }}
-      >
-        <SignalLine orientation="horizontal" color={COLOR.intelligence} style={{ flex: 1, opacity: 0.4 }} />
-        <SignalNode color={COLOR.info} size={12} pulsing />
-        <SignalLine orientation="horizontal" dashed color={COLOR.border} style={{ flex: 1, opacity: 0.4 }} />
-        <SignalNode color={COLOR.strategy} size={12} pulsing />
-        <SignalLine orientation="horizontal" color={COLOR.strategy} style={{ flex: 1, opacity: 0.4 }} />
-      </div>
-    </div>
-  );
-}
-
 function ResearchPanel() {
   return (
     <SignalPanel
-      padding="2.5rem"
+      padding={SPACE.cardLg}
       style={{
         borderStyle: "dashed",
         borderWidth: "1px",
@@ -372,20 +328,14 @@ function ResearchPanel() {
               fontSize: TYPE.labelSmall.size,
               color: COLOR.textFaint,
               letterSpacing: TYPE.labelSmall.letterSpacing,
-              fontFamily: TYPE.data.fontFamily,
+              fontFamily: TYPE.data,
             }}
           >
             ROADMAP · V1.3+
           </span>
         </FlexRow>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: SPACE.comp,
-          }}
-        >
+        <CardGrid minItemWidth={240} gap={SPACE.comp}>
           {RESEARCH_CAPABILITIES.map((r, i) => (
             <OutlinePanel
               key={i}
@@ -416,59 +366,9 @@ function ResearchPanel() {
               </FlexColumn>
             </OutlinePanel>
           ))}
-        </div>
+        </CardGrid>
       </FlexColumn>
     </SignalPanel>
-  );
-}
-
-function CapabilityFlow() {
-  const flows = [
-    { from: COLOR.intelligence, to: COLOR.strategy, label: "SIGNAL → STRATEGY" },
-    { from: COLOR.strategy, to: COLOR.negative, label: "STRATEGY → RISK" },
-    { from: COLOR.negative, to: COLOR.positive, label: "RISK → REHEARSAL" },
-  ];
-
-  return (
-    <FlexRow
-      gap={SPACE.comp}
-      justify="center"
-      align="center"
-      style={{ padding: `${SPACE.section} 0 ${SPACE.compLg}`, flexWrap: "wrap" }}
-    >
-      {flows.map((f, i) => (
-        <FlexRow key={i} gap={SPACE.xs} align="center">
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              background: f.from,
-              boxShadow: `0 0 6px ${f.from}50`,
-            }}
-          />
-          <span
-            style={{
-              fontSize: TYPE.labelSmall.size,
-              color: COLOR.textFaint,
-              letterSpacing: "0.08em",
-              fontFamily: TYPE.data.fontFamily,
-            }}
-          >
-            {f.label}
-          </span>
-          <span
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              background: f.to,
-              boxShadow: `0 0 6px ${f.to}50`,
-            }}
-          />
-        </FlexRow>
-      ))}
-    </FlexRow>
   );
 }
 
@@ -485,7 +385,7 @@ export default function FeaturesClientPage() {
       <Section
         padding={SPACE.sectionLg}
         style={{
-          paddingTop: "5.5rem",
+          paddingTop: SPACE.hero,
           paddingBottom: "4rem",
           textAlign: "center",
           background:
@@ -518,10 +418,10 @@ export default function FeaturesClientPage() {
                 margin: 0,
                 letterSpacing: TYPE.displayH1.letterSpacing,
                 lineHeight: TYPE.displayH1.lineHeight,
-                fontFamily: TYPE.display.fontFamily,
+                fontFamily: TYPE.display,
               }}
             >
-              Capability Atlas
+              The StrikeNova Workflow
             </h1>
 
             {/* Subtitle */}
@@ -532,11 +432,11 @@ export default function FeaturesClientPage() {
                 lineHeight: TYPE.bodyLarge.lineHeight,
                 maxWidth: 540,
                 margin: 0,
-                fontFamily: TYPE.body.fontFamily,
+                fontFamily: TYPE.body,
               }}
             >
-              StrikeNova connects market intelligence, strategy design, risk
-              analysis and paper-trading rehearsal into one continuous workflow.
+              Market intelligence, strategy design, risk analysis and paper-trading
+              rehearsal — connected in one continuous workflow.
             </p>
 
             {/* Hero signal line decoration */}
@@ -561,7 +461,7 @@ export default function FeaturesClientPage() {
       </Section>
 
       {/* ─────────────────────────────────────────────────────────────────────
-          CAPABILITY ATLAS — Asymmetric Composition
+          CAPABILITIES — User Outcomes
           ───────────────────────────────────────────────────────────────────── */}
       <Section
         padding={SPACE.sectionLg}
@@ -575,44 +475,18 @@ export default function FeaturesClientPage() {
         <Container maxWidth={1100}>
           {/* Section heading */}
           <SectionTitle
-            eyebrow="THE ATLAS"
-            title="How capabilities connect"
-            subtitle="Each module feeds into the next. Intelligence informs strategy. Strategy defines risk. Risk is rehearsed in simulation."
+            eyebrow="CAPABILITIES"
+            title="Four outcomes, one platform"
+            subtitle="Each capability feeds into the next. Intelligence informs strategy. Strategy defines risk. Risk is rehearsed in simulation."
             align="center"
           />
 
-          {/* Atlas connector decoration */}
-          <AtlasConnector />
-
-          {/* Primary capability grid — asymmetric bento-style layout */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, 1fr)",
-              gridTemplateRows: "auto auto",
-              gap: SPACE.compLg,
-              gridTemplateAreas: `
-                "mi strat"
-                "risk paper"
-              `,
-            }}
-          >
-            <div style={{ gridArea: "mi" }}>
-              <CapabilityModule cap={CAPABILITIES[0]} index={0} />
-            </div>
-            <div style={{ gridArea: "strat" }}>
-              <CapabilityModule cap={CAPABILITIES[1]} index={1} />
-            </div>
-            <div style={{ gridArea: "risk" }}>
-              <CapabilityModule cap={CAPABILITIES[2]} index={2} />
-            </div>
-            <div style={{ gridArea: "paper" }}>
-              <CapabilityModule cap={CAPABILITIES[3]} index={3} />
-            </div>
-          </div>
-
-          {/* Flow indicator */}
-          <CapabilityFlow />
+          {/* Primary capability grid */}
+          <CardGrid minItemWidth={320} gap={SPACE.compLg}>
+            {CAPABILITIES.map((cap) => (
+              <CapabilityModule key={cap.id} cap={cap} />
+            ))}
+          </CardGrid>
         </Container>
       </Section>
 
@@ -621,18 +495,14 @@ export default function FeaturesClientPage() {
           ───────────────────────────────────────────────────────────────────── */}
       <Section padding={SPACE.sectionLg} style={{ paddingTop: "2rem" }}>
         <Container maxWidth={900}>
-          <VisualizationFrame
+          <SectionTitle
             eyebrow="SIGNAL FIELD"
             title="One signal, one source"
-            caption="Every module derives from the same live data stream — eliminating conflicting signals from separate tools."
-            legend={[
-              { label: "Market Intelligence", color: COLOR.intelligence },
-              { label: "Strategy Lab", color: COLOR.strategy },
-              { label: "Risk Analysis", color: COLOR.negative },
-              { label: "Paper Trading", color: COLOR.positive },
-            ]}
-            demoLabel
-          >
+            subtitle="Every capability derives from the same live data stream — eliminating conflicting signals from separate tools."
+            align="center"
+          />
+
+          <SignalPanel padding={SPACE.cardLg}>
             <div style={{ minHeight: 200, position: "relative" }}>
               <GridOverlay spacing={32} />
               {/* Signal nodes positioned on the demo visualization */}
@@ -681,7 +551,10 @@ export default function FeaturesClientPage() {
                 }}
               />
             </div>
-          </VisualizationFrame>
+            <div style={{ marginTop: SPACE.comp }}>
+              <DemoLabel />
+            </div>
+          </SignalPanel>
         </Container>
       </Section>
 
