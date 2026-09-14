@@ -34,6 +34,7 @@ import AnalyticsPanel from "./AnalyticsPanel";
 import PortfolioAnalyticsPanel from "./PortfolioAnalyticsPanel";
 import CapitalPanel from "./CapitalPanel";
 import BrokerConnectionPanel from "./BrokerConnectionPanel";
+import JournalPanel from "./JournalPanel";
 import { BulkExitModal, BulkExitResultBanner } from "./BulkExit";
 import {
   makeLeg,
@@ -98,22 +99,10 @@ import {
 
 const PAPER_KEY = "options_dashboard_paper_v1";
 const DEFAULT_STARTING_CAPITAL = 500000;
-const JOURNAL_PAGE_SIZE = 10;
 const DRAFTS_KEY = "options_dashboard_drafts_v1";
 // SAVED_KEY removed in Phase 6.7 — replaced by backend-backed My Strategies
 
 const LEG_COLORS = [C.green, C.red, "#5B9BD5", "#B48AD9", "#E0A33A", "#5AC8C8", "#F283B4", "#7FBF7F"];
-
-const fmtJournalDate = (iso) =>
-  iso
-    ? new Date(iso).toLocaleString("en-IN", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : "—";
 
 const fmtExpiry = (iso) => {
   if (!iso) return "—";
@@ -1402,18 +1391,7 @@ export default function PaperTradingPage() {
 
 
 
-  // ---- Zone C rows: DB journal (source of truth) + any local-only closed
-  // trades that never synced (deduped by tradeId). ----
-  const journalIds = new Set((journal?.trades ?? []).map((t) => String(t.id)));
-  const localOnly = paperHistory.filter((h) => !(h.tradeId && journalIds.has(String(h.tradeId))));
-  const logRows = journal
-    ? [...journal.trades, ...localOnly.map((h) => ({ local: true, ...h }))]
-    : journalError
-      ? paperHistory.map((h) => ({ local: true, ...h }))
-      : [];
-  const logPageCount = Math.max(1, Math.ceil(logRows.length / JOURNAL_PAGE_SIZE));
-  const logPage = Math.min(journalPage, logPageCount - 1);
-  const logPageRows = logRows.slice(logPage * JOURNAL_PAGE_SIZE, logPage * JOURNAL_PAGE_SIZE + JOURNAL_PAGE_SIZE);
+  // ---- Zone C · Journal rendered by JournalPanel ----
 
   // ---- Render ----
   if (loggedIn === null) return <Centered>Checking login…</Centered>;
@@ -2976,155 +2954,15 @@ export default function PaperTradingPage() {
       )}
 
       {/* ================= ZONE C · TRANSACTION LOG & HISTORICAL JOURNAL ================= */}
-      <div style={{ marginTop: 14, ...panel, padding: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ fontSize: fluid(13, 15), fontWeight: 800, letterSpacing: 0.5, color: C.text }}>📝 TRANSACTION LOG & HISTORICAL JOURNAL</div>
-            {logRows.length > 0 && (
-              <Badge variant="neutral">{logRows.length} records</Badge>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            {paperHistory.length > 0 && (
-              <button
-                onClick={exportHistoryCsv}
-                style={{ fontSize: 11, color: C.gold, background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
-              >
-                Export CSV
-              </button>
-            )}
-            {logRows.length > JOURNAL_PAGE_SIZE && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button
-                  onClick={() => setJournalPage((p) => Math.max(0, p - 1))}
-                  disabled={logPage === 0}
-                  style={{ fontSize: 11, color: C.text, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: logPage === 0 ? "default" : "pointer", opacity: logPage === 0 ? 0.4 : 1 }}
-                >
-                  ← Prev
-                </button>
-                <span style={{ fontSize: 11, color: C.muted }}>
-                  Page {logPage + 1} / {logPageCount} · {logRows.length} rows
-                </span>
-                <button
-                  onClick={() => setJournalPage((p) => Math.min(logPageCount - 1, p + 1))}
-                  disabled={logPage >= logPageCount - 1}
-                  style={{ fontSize: 11, color: C.text, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px", cursor: logPage >= logPageCount - 1 ? "default" : "pointer", opacity: logPage >= logPageCount - 1 ? 0.4 : 1 }}
-                >
-                  Next →
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {perStrategy.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-            {perStrategy.map((s) => (
-              <span
-                key={s.strategyName}
-                style={{ fontSize: 10.5, color: C.muted, background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 999, padding: "3px 10px" }}
-              >
-                {s.strategyName} · {s.trades} closed · {(s.winRate * 100).toFixed(0)}% win ·{" "}
-                <span style={{ color: s.totalPnl >= 0 ? C.green : C.red, fontWeight: 600 }}>₹{fmtIN(s.totalPnl, 2)}</span>
-              </span>
-            ))}
-          </div>
-        )}
-
-        {journal === null && !journalError ? (
-          <div style={{ fontSize: 12.5, color: C.faint }}>Loading journal…</div>
-        ) : (
-          <>
-            {journalError && (
-              <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
-                Journal sync is unavailable right now ({journalError}). Showing this browser's local history — local paper trading still
-                works, and fills will log to the database once the backend is reachable.
-              </div>
-            )}
-            {logRows.length === 0 ? (
-              <div style={{ fontSize: 12.5, color: C.faint }}>
-                {journalError
-                  ? "No closed trades in this browser yet."
-                  : "No journal entries yet — submit a paper order and it will be logged here automatically."}
-              </div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-                  <thead>
-                    <tr style={{ color: C.muted, fontSize: 10.5 }}>
-                      <th style={{ padding: 6, textAlign: "left" }}>Status</th>
-                      <th style={{ padding: 6, textAlign: "left" }}>Strategy Tag</th>
-                      <th style={{ padding: 6, textAlign: "left" }}>Strike / Legs</th>
-                      <th style={{ padding: 6 }}>Net Entry</th>
-                      <th style={{ padding: 6 }}>Realized P&L</th>
-                      <th style={{ padding: 6 }}>Opened</th>
-                      <th style={{ padding: 6 }}>Closed</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {logPageRows.map((r, i) => {
-                      if (r.local) {
-                        const h = r;
-                        return (
-                          <tr key={`local-${h.entryTime}-${i}`} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
-                            <td style={{ padding: 6 }}>
-                              <span style={badge("CLOSED", h.realizedPnl >= 0 ? C.green : C.red, "rgba(136,146,166,0.1)", "rgba(136,146,166,0.3)")}>CLOSED</span>
-                            </td>
-                            <td style={{ padding: 6 }}>
-                              <div style={{ fontWeight: 700 }}>{h.strategyName ?? "Custom"}</div>
-                              <div style={{ color: C.faint, fontSize: 11 }}>{h.symbol}</div>
-                            </td>
-                            <td style={{ padding: 6, color: C.muted }}>
-                              {h.action.toUpperCase()} {fmtIN(h.strike)} {h.type === "call" ? "CE" : "PE"}×{h.qty}
-                            </td>
-                            <td style={{ padding: 6, color: C.muted }}>Entry {fmtIN(h.entryPremium, 2)}</td>
-                            <td style={{ padding: 6, color: h.realizedPnl >= 0 ? C.green : C.red }}>
-                              {`${h.realizedPnl >= 0 ? "+" : ""}₹${fmtIN(h.realizedPnl, 2)}`}
-                            </td>
-                            <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(h.entryTime)}</td>
-                            <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(h.exitTime)}</td>
-                          </tr>
-                        );
-                      }
-                      const t = r;
-                      const realized = t.realized_pnl;
-                      const credit = t.entry_net < 0;
-                      return (
-                        <tr key={t.id} className="paper-row" style={{ borderTop: `1px solid ${C.border}` }}>
-                          <td style={{ padding: 6 }}>
-                            {t.status === "open" ? (
-                              <span style={badge("OPEN", C.gold, "rgba(201,161,90,0.12)", "rgba(201,161,90,0.35)")}>OPEN</span>
-                            ) : (
-                              <span style={badge("CLOSED", realized >= 0 ? C.green : C.red, "rgba(136,146,166,0.1)", "rgba(136,146,166,0.3)")}>CLOSED</span>
-                            )}
-                          </td>
-                          <td style={{ padding: 6 }}>
-                            <div style={{ fontWeight: 700 }}>{t.strategy_tag}</div>
-                            <div style={{ color: C.faint, fontSize: 11 }}>{t.symbol}</div>
-                          </td>
-                          <td style={{ padding: 6, color: C.muted }}>
-                            {t.legs
-                              .map((l) => `${l.action === "sell" ? "S" : "B"} ${fmtIN(l.strike_price)} ${l.option_type === "call" ? "CE" : "PE"}×${l.quantity}`)
-                              .join(" · ")}
-                          </td>
-                          <td style={{ padding: 6, color: credit ? C.green : C.muted }}>
-                            {credit ? `Credit ${fmtIN(Math.abs(t.entry_net), 2)}` : `Debit ${fmtIN(t.entry_net, 2)}`}
-                          </td>
-                          <td style={{ padding: 6, color: realized == null ? C.muted : realized >= 0 ? C.green : C.red }}>
-                            {realized == null ? "—" : `${realized >= 0 ? "+" : ""}₹${fmtIN(realized, 2)}`}
-                          </td>
-                          <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{fmtJournalDate(t.entry_at)}</td>
-                          <td style={{ padding: 6, color: C.muted, fontSize: 11.5 }}>{t.exit_at ? fmtJournalDate(t.exit_at) : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      <JournalPanel
+        journal={journal}
+        journalError={journalError}
+        paperHistory={paperHistory}
+        journalPage={journalPage}
+        onPageChange={setJournalPage}
+        onExportCsv={exportHistoryCsv}
+        perStrategy={perStrategy}
+      />
     </div>
   );
 }
