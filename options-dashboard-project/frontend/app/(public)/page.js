@@ -10,7 +10,6 @@ import { CTASection } from "@/components/public";
 
 import HomeHero from "@/components/public/HomeHero";
 import PlatformPreview from "@/components/public/PlatformPreview";
-import AnalyticalLayerGrid from "@/components/public/AnalyticalLayerGrid";
 import SignalMetricOverview from "@/components/public/SignalMetricOverview";
 import MarketIntelligenceGrid from "@/components/public/MarketIntelligenceGrid";
 import EvidenceTrustSection from "@/components/public/EvidenceTrustSection";
@@ -44,23 +43,9 @@ function TransitionSection() {
           title="From market data to structured decisions."
           subtitle="The product is designed as a connected workflow, not a collection of unrelated charts."
         />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: SPACE.comp,
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: SPACE.comp }}>
           {steps.map((step) => (
-            <div
-              key={step.index}
-              style={{
-                padding: SPACE.cardLg,
-                background: COLOR.surface,
-                border: `1px solid ${COLOR.border}`,
-                borderRadius: RADIUS.lg,
-              }}
-            >
+            <div key={step.index} style={{ padding: SPACE.cardLg, background: COLOR.surface, border: `1px solid ${COLOR.border}`, borderRadius: RADIUS.lg }}>
               <div style={{ fontFamily: TYPE.data, color: COLOR.strategy, fontSize: TYPE.caption.size }}>{step.index}</div>
               <h3 style={{ margin: `${SPACE.small} 0`, color: COLOR.textPrimary, fontSize: TYPE.h4.size }}>{step.title}</h3>
               <p style={{ margin: 0, color: COLOR.textMuted, lineHeight: 1.7 }}>{step.body}</p>
@@ -77,22 +62,10 @@ function StrategyMarketView() {
     <div>
       <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>MARKET VIEW</h4>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>SPOT</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,500</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>PCR</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>0.92</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>ATM IV</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>14.2%</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>POSITIONING</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.info, fontFamily: TYPE.data }}>BALANCED</div>
-        </div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>SPOT</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,500</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>PCR</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>0.92</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>ATM IV</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>14.2%</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>POSITIONING</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.info, fontFamily: TYPE.data }}>BALANCED</div></div>
       </div>
       <DemoLabel style={{ fontSize: "0.625rem" }} />
     </div>
@@ -125,12 +98,7 @@ function StrategyLegs() {
 }
 
 function StrategyPayoff() {
-  return (
-    <div>
-      <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>PAYOFF</h4>
-      <PayoffMiniChart />
-    </div>
-  );
+  return <div><h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>PAYOFF</h4><PayoffMiniChart /></div>;
 }
 
 function StrategyRisk() {
@@ -145,30 +113,13 @@ function StrategyRisk() {
     <div>
       <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>RISK</h4>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX PROFIT</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>₹3,250</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX LOSS</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.negative, fontFamily: TYPE.data }}>-₹9,750</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVEN LOW</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,250</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVEN HIGH</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,750</div>
-        </div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX PROFIT</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>₹3,250</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX LOSS</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.negative, fontFamily: TYPE.data }}>-₹9,750</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVEN LOW</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,250</div></div>
+        <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVEN HIGH</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,750</div></div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: SPACE.comp, marginBottom: SPACE.comp }}>
-        {greeks.map((g) => (
-          <div key={g.label}>
-            <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>{g.label}</div>
-            <div style={{ fontSize: TYPE.dataSmall.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>{g.value}</div>
-          </div>
-        ))}
+        {greeks.map((g) => <div key={g.label}><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>{g.label}</div><div style={{ fontSize: TYPE.dataSmall.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>{g.value}</div></div>)}
       </div>
       <DemoLabel style={{ fontSize: "0.625rem" }} />
     </div>
@@ -176,22 +127,7 @@ function StrategyRisk() {
 }
 
 function PaperDecision() {
-  return (
-    <div>
-      <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>DECISION</h4>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>SPOT</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,500</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>STRATEGY</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.strategy, fontFamily: TYPE.data }}>IRON CONDOR</div>
-        </div>
-      </div>
-      <DemoLabel style={{ fontSize: "0.625rem" }} />
-    </div>
-  );
+  return <div><h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>DECISION</h4><div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>SPOT</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,500</div></div><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>STRATEGY</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.strategy, fontFamily: TYPE.data }}>IRON CONDOR</div></div></div><DemoLabel style={{ fontSize: "0.625rem" }} /></div>;
 }
 
 function PaperSimulation() {
@@ -199,16 +135,7 @@ function PaperSimulation() {
     <div>
       <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>SIMULATION</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: SPACE.small, marginBottom: SPACE.compLg }}>
-        {[
-          ["Order Type", "LIMIT"],
-          ["Simulated Qty", "2 Lot"],
-          ["Simulated Capital", "₹1,00,000"],
-        ].map(([label, value]) => (
-          <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
-            <span style={{ color: COLOR.textMuted }}>{label}</span>
-            <span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>{value}</span>
-          </div>
-        ))}
+        {[["Order Type", "LIMIT"], ["Simulated Qty", "2 Lot"], ["Simulated Capital", "₹1,00,000"]].map(([label, value]) => <div key={label} style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}><span style={{ color: COLOR.textMuted }}>{label}</span><span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>{value}</span></div>)}
       </div>
       <DemoLabel style={{ fontSize: "0.625rem" }} />
     </div>
@@ -216,41 +143,11 @@ function PaperSimulation() {
 }
 
 function PaperPosition() {
-  return (
-    <div>
-      <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>POSITION</h4>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>OPEN P&L</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>+₹1,240</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>DELTA</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>-0.02</div>
-        </div>
-      </div>
-      <DemoLabel style={{ fontSize: "0.625rem" }} />
-    </div>
-  );
+  return <div><h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>POSITION</h4><div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>OPEN P&L</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>+₹1,240</div></div><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>DELTA</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>-0.02</div></div></div><DemoLabel style={{ fontSize: "0.625rem" }} /></div>;
 }
 
 function PaperReview() {
-  return (
-    <div>
-      <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>REVIEW</h4>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>TRADES</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>12</div>
-        </div>
-        <div>
-          <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>WIN RATE</div>
-          <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>67%</div>
-        </div>
-      </div>
-      <DemoLabel style={{ fontSize: "0.625rem" }} />
-    </div>
-  );
+  return <div><h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>REVIEW</h4><div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: SPACE.comp, marginBottom: SPACE.compLg }}><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>TRADES</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>12</div></div><div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>WIN RATE</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>67%</div></div></div><DemoLabel style={{ fontSize: "0.625rem" }} /></div>;
 }
 
 export default function HomePage() {
@@ -277,9 +174,7 @@ export default function HomePage() {
 
       <Section style={{ paddingTop: 0 }}>
         <Container maxWidth={1100}>
-          <div style={{ marginTop: `-${SPACE.sectionLg}`, position: "relative" }}>
-            <PlatformPreview />
-          </div>
+          <div style={{ marginTop: `-${SPACE.sectionLg}`, position: "relative" }}><PlatformPreview /></div>
         </Container>
       </Section>
 
@@ -287,28 +182,16 @@ export default function HomePage() {
 
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
-          <SectionTitle
-            eyebrow="MARKET STATE"
-            title="Start with context, not isolated indicators."
-            subtitle="See the market state, positioning and core option metrics together before moving into deeper analysis."
-          />
+          <SectionTitle eyebrow="MARKET STATE" title="Start with context, not isolated indicators." subtitle="See the market state, positioning and core option metrics together before moving into deeper analysis." />
           <SignalMetricOverview />
         </Container>
       </Section>
 
       <Section>
         <Container maxWidth={1100}>
-          <SectionTitle
-            eyebrow="MARKET INTELLIGENCE"
-            title="See what is shaping the market."
-            subtitle="Positioning, volatility, Greeks and market structure become useful when read together."
-          />
+          <SectionTitle eyebrow="MARKET INTELLIGENCE" title="See what is shaping the market." subtitle="Positioning, volatility, Greeks and market structure become useful when read together." />
           <MarketIntelligenceGrid />
-          <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="primary" size="md" href="/market-intelligence" className="ds-focus-ring">
-              Explore Market Intelligence <span aria-hidden="true">→</span>
-            </LinkButton>
-          </div>
+          <div style={{ textAlign: "center", marginTop: SPACE.section }}><LinkButton variant="primary" size="md" href="/market-intelligence" className="ds-focus-ring">Explore Market Intelligence <span aria-hidden="true">→</span></LinkButton></div>
         </Container>
       </Section>
 
@@ -316,58 +199,25 @@ export default function HomePage() {
 
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
-          <SectionTitle
-            eyebrow="FROM CONTEXT TO STRATEGY"
-            title="Build the strategy. See the payoff. Understand the risk."
-            subtitle="Move through the decision workflow without losing the market context that informed it."
-          />
+          <SectionTitle eyebrow="FROM CONTEXT TO STRATEGY" title="Build the strategy. See the payoff. Understand the risk." subtitle="Move through the decision workflow without losing the market context that informed it." />
           <WorkflowTabs tabs={strategyTabs} defaultTab="market" ariaLabel="Strategy Lab" />
-          <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="primary" size="md" href="/strategy-lab" className="ds-focus-ring">
-              Open Strategy Lab <span aria-hidden="true">→</span>
-            </LinkButton>
-          </div>
+          <div style={{ textAlign: "center", marginTop: SPACE.section }}><LinkButton variant="primary" size="md" href="/strategy-lab" className="ds-focus-ring">Open Strategy Lab <span aria-hidden="true">→</span></LinkButton></div>
         </Container>
       </Section>
 
       <Section>
         <Container maxWidth={1100}>
-          <SectionTitle
-            eyebrow="RISK FIRST"
-            title="Know the payoff before you know the outcome."
-            subtitle="Explore payoff shape, maximum profit, maximum loss, breakevens and Greeks before putting capital behind an idea."
-          />
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr",
-              gap: SPACE.cardLg,
-              alignItems: "stretch",
-            }}
-          >
-            <Panel padding={SPACE.cardLg}>
-              <Eyebrow>ILLUSTRATIVE PAYOFF</Eyebrow>
-              <PayoffMiniChart />
-            </Panel>
+          <SectionTitle eyebrow="RISK FIRST" title="Know the payoff before you know the outcome." subtitle="Explore payoff shape, maximum profit, maximum loss, breakevens and Greeks before putting capital behind an idea." />
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr", gap: SPACE.cardLg, alignItems: "stretch" }}>
+            <Panel padding={SPACE.cardLg}><Eyebrow>ILLUSTRATIVE PAYOFF</Eyebrow><PayoffMiniChart /></Panel>
             <Panel padding={SPACE.cardLg}>
               <Eyebrow>RISK METRICS</Eyebrow>
               <div style={{ display: "flex", flexDirection: "column", gap: SPACE.compLg, marginTop: SPACE.comp }}>
-                <div>
-                  <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX PROFIT</div>
-                  <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>₹3,250</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX LOSS</div>
-                  <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.negative, fontFamily: TYPE.data }}>-₹9,750</div>
-                </div>
-                <div>
-                  <div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVENS</div>
-                  <div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,250 / 25,750</div>
-                </div>
+                <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX PROFIT</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.positive, fontFamily: TYPE.data }}>₹3,250</div></div>
+                <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>MAX LOSS</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.negative, fontFamily: TYPE.data }}>-₹9,750</div></div>
+                <div><div style={{ fontSize: TYPE.caption.size, color: COLOR.textFaint }}>BREAKEVENS</div><div style={{ fontSize: TYPE.data.size, fontWeight: 700, color: COLOR.textPrimary, fontFamily: TYPE.data }}>25,250 / 25,750</div></div>
               </div>
-              <div style={{ marginTop: SPACE.cardLg, textAlign: "center" }}>
-                <DemoLabel style={{ fontSize: "0.625rem" }} />
-              </div>
+              <div style={{ marginTop: SPACE.cardLg, textAlign: "center" }}><DemoLabel style={{ fontSize: "0.625rem" }} /></div>
             </Panel>
           </div>
         </Container>
@@ -375,32 +225,13 @@ export default function HomePage() {
 
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
-          <SectionTitle
-            eyebrow="PAPER WORKFLOW"
-            title="Practice the decision process. Not your capital."
-            subtitle="Carry the same workflow into simulation, position management and review."
-          />
+          <SectionTitle eyebrow="PAPER WORKFLOW" title="Practice the decision process. Not your capital." subtitle="Carry the same workflow into simulation, position management and review." />
           <WorkflowTabs tabs={paperTabs} defaultTab="decision" ariaLabel="Paper Trading" />
-          <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="secondary" size="md" href="/paper-trading" className="ds-focus-ring">
-              Explore Paper Trading <span aria-hidden="true">→</span>
-            </LinkButton>
-          </div>
+          <div style={{ textAlign: "center", marginTop: SPACE.section }}><LinkButton variant="secondary" size="md" href="/paper-trading" className="ds-focus-ring">Explore Paper Trading <span aria-hidden="true">→</span></LinkButton></div>
         </Container>
       </Section>
 
-      <CTASection
-        headline={
-          <>
-            Turn market data into a structured decision.
-          </>
-        }
-        body="Explore StrikeNova, understand the workflow, and practice your strategies before putting capital at risk."
-        primaryLabel="Explore the Platform"
-        primaryHref="/features"
-        secondaryLabel="See How It Works"
-        secondaryHref="/how-it-works"
-      />
+      <CTASection headline={<>Turn market data into a structured decision.</>} body="Explore StrikeNova, understand the workflow, and practice your strategies before putting capital at risk." primaryLabel="Explore the Platform" primaryHref="/features" secondaryLabel="See How It Works" secondaryHref="/how-it-works" />
     </>
   );
 }
