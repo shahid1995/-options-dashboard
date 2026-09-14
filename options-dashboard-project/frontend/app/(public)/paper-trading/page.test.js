@@ -40,12 +40,12 @@ describe("Paper Trading Page — P4 Tests", () => {
     expect(html).toContain("Rehearsal");
   });
 
-  it("contains rehearsal sequence (DECISION, SIMULATION, ORDERS, POSITIONS, P&L, REVIEW)", () => {
+  it("contains rehearsal sequence (OBSERVE, FORM THESIS, STRUCTURE, TEST, REVIEW)", () => {
     const html = renderPage();
-    expect(html).toContain("DECISION");
-    expect(html).toContain("SIMULATION");
-    expect(html).toContain("ORDERS");
-    expect(html).toContain("POSITIONS");
+    expect(html).toContain("OBSERVE");
+    expect(html).toContain("FORM THESIS");
+    expect(html).toContain("STRUCTURE");
+    expect(html).toContain("TEST");
     expect(html).toContain("REVIEW");
   });
 

@@ -35,13 +35,12 @@ describe("How It Works Page — P5 Tests", () => {
     expect(html).toContain("HOW IT WORKS");
   });
 
-  it("contains six stages in order", () => {
+  it("contains five stages in order", () => {
     const html = renderPage();
     expect(html).toContain("OBSERVE");
     expect(html).toContain("ANALYZE");
-    expect(html).toContain("BUILD");
+    expect(html).toContain("STRUCTURE");
     expect(html).toContain("TEST");
-    expect(html).toContain("PAPER TRADE");
     expect(html).toContain("REVIEW");
   });
 
@@ -52,7 +51,6 @@ describe("How It Works Page — P5 Tests", () => {
     expect(html).toContain("03");
     expect(html).toContain("04");
     expect(html).toContain("05");
-    expect(html).toContain("06");
   });
 
   it("contains CTA destinations", () => {
