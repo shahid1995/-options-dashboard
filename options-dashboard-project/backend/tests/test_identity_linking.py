@@ -328,14 +328,17 @@ def test_broker_identity_owned_by_other_user_is_rejected(
     assert owner_conn.user_id == owner.id  # ownership preserved
 
 
-def test_conflicting_legacy_stamp_is_rejected_not_overwritten(
+def test_conflicting_legacy_stamp_does_not_block_and_is_not_overwritten(
     client, db_session, monkeypatch
 ):
-    """Phase 5: user already stamped with a DIFFERENT broker identity —
-    reject rather than corrupt the existing identity metadata."""
+    """Multi-broker refactor: a user already stamped with a DIFFERENT broker
+    identity may still legitimately connect an additional broker/account —
+    the stamp is compatibility metadata, never an authorization gate.
+    The existing stamp must NOT be overwritten by the new identity."""
     user = make_platform_user(db_session, email="a@example.com", stamped=("UPSTOX", "UCC-OLD"))
-    state = start_connect(db_session, user, broker_profile("UCC-NEW", "a@upstox.example"), monkeypatch)
-    before = counts(db_session)
+    state = start_connect(
+        db_session, user, broker_profile("UCC-NEW", "a@upstox.example"), monkeypatch
+    )
 
     resp = client.get(
         "/auth/callback",
@@ -344,10 +347,18 @@ def test_conflicting_legacy_stamp_is_rejected_not_overwritten(
     )
 
     assert resp.status_code == 307
-    assert login_error_of(resp) == "broker_identity_in_use"
-    assert counts(db_session) == before
+    assert login_error_of(resp) == ""
+    # the live connection is created for the NEW identity
+    conn = (
+        db_session.query(BrokerConnection)
+        .filter(BrokerConnection.broker_account_id == "UCC-NEW")
+        .one()
+    )
+    assert conn.user_id == user.id
+    # legacy metadata untouched
     db_session.refresh(user)
-    assert user.broker_user_id == "UCC-OLD"  # untouched
+    assert user.broker_provider == "UPSTOX"
+    assert user.broker_user_id == "UCC-OLD"
 
 
 def test_same_legacy_stamp_is_a_noop(client, db_session, monkeypatch):

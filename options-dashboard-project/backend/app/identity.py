@@ -15,7 +15,6 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base
@@ -65,6 +64,11 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
     identity_source: Mapped[str] = mapped_column(String(32), default="upstox")
+    # LEGACY COMPATIBILITY METADATA (multi-broker refactor): the stamp of
+    # the FIRST broker identity linked to this user. Never an ownership or
+    # authorization gate — BrokerConnection is the authoritative broker
+    # ownership ledger (one user -> many connections). Never overwritten
+    # once populated (see ensure_broker_stamp).
     broker_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     broker_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     google_sub: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
@@ -73,7 +77,15 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("broker_provider", "broker_user_id", name="uq_users_broker_identity"),
+        # NO schema-level uniqueness on the legacy stamp columns: under the
+        # multi-broker architecture the stamp is compatibility metadata
+        # that may legitimately duplicate across users (stale stamps are
+        # informational junk), and any uniqueness here would resurrect the
+        # one-user-one-broker gate at the DB level (Test G). The historical
+        # table-level constraint uq_users_broker_identity was removed by
+        # migration e5f6a7b8c9d0 on PostgreSQL/CockroachDB. The
+        # authoritative broker-identity uniqueness lives on
+        # broker_connections (migration d9e0f1a2b3c4), NOT here.
     )
 
 
@@ -222,10 +234,18 @@ def find_broker_identity_owner(
 ) -> str | None:
     """Return the user_id owning the broker identity, if anyone does.
 
-    Checks both the ownership ledger (``broker_connections``) and the
-    legacy ``users.broker_*`` stamp. The two must agree; disagreement
-    raises :class:`BrokerIdentityInUse` (corrupt state is never silently
-    resolved).
+    ``BrokerConnection`` is the AUTHORITATIVE broker-ownership ledger
+    (multi-broker architecture): a live ``(broker, broker_account_id)``
+    row with a non-sentinel account id determines current ownership.
+
+    The legacy ``users.broker_*`` stamp is compatibility metadata only.
+    It never confers ownership by itself (a stale stamp without a
+    matching live connection means "not owned"), and it never blocks a
+    legitimate additional broker/account connection for the stamped
+    user. The stamp IS still consulted for corruption detection: when a
+    different user's stamp collides with the ledger's live owner, the
+    disagreement raises :class:`BrokerIdentityInUse` (corrupt state is
+    never silently resolved — fail closed).
     """
     owner: str | None = None
     conn = (
@@ -249,31 +269,38 @@ def find_broker_identity_owner(
                 f"broker identity {provider}/{broker_user_id} has conflicting "
                 f"ownership records: connection owner {owner} vs stamped user {stamped.id}"
             )
-        owner = stamped.id
+        # A stamp agreeing with the ledger is consistent but adds no
+        # authority; a stamp WITHOUT a live ledger row does not create
+        # ownership (legacy metadata is not the ownership ledger).
     return owner
 
 
 def ensure_broker_stamp(
     db: Session, user: User, provider: str, broker_user_id: str
 ) -> None:
-    """Stamp ``users.broker_*`` for the initiating user (design §17.5).
+    """Maintain the legacy ``users.broker_*`` compatibility stamp.
 
-    Allowed:  NULL → (provider, broker_user_id); identical → no-op.
-    Forbidden: any different existing stamp — raises
-    :class:`BrokerIdentityInUse` rather than overwriting platform
-    identity metadata.
+    Multi-broker semantics (BrokerConnection is the authoritative
+    ownership ledger; the stamp is compatibility metadata only):
+
+    Allowed:  NULL → (provider, broker_user_id); identical → no-op;
+              a DIFFERENT existing stamp → no-op (never overwrite
+              existing legacy metadata with a second broker identity,
+              never block the legitimate additional connection).
+    Forbidden: nothing — this function can no longer reject a
+              connection. Ownership authorization lives entirely in
+              the ledger check (``find_broker_identity_owner`` /
+              the global uniqueness index); corrupt-state detection
+              lives in :func:`find_broker_identity_owner`.
     """
     if user.broker_provider is None and user.broker_user_id is None:
         user.broker_provider = provider
         user.broker_user_id = broker_user_id
         db.flush()
         return
-    if user.broker_provider == provider and user.broker_user_id == broker_user_id:
-        return
-    raise BrokerIdentityInUse(
-        f"user {user.id} is already stamped with broker identity "
-        f"{user.broker_provider}/{user.broker_user_id}"
-    )
+    # An existing stamp — identical or different — is left untouched.
+    # The legacy (broker_provider, broker_user_id) unique constraint on
+    # users is per-user metadata, not an authorization gate.
 
 
 def get_or_create_user_from_upstox(db: Session, profile: dict) -> User:
@@ -605,14 +632,18 @@ def get_or_create_connection(
     broker_account_id must be pre-extracted by the adapter layer (AD-6).
 
     Concurrency (design §11/§17.3): concurrent callbacks for the same
-    identity can both miss the SELECT. The INSERT/UPDATE is flushed
-    inside a SAVEPOINT (``begin_nested``) so a unique-constraint loss
-    rolls back ONLY the savepoint — the caller's outer transaction
-    (user resolution, stamping) stays intact. On conflict the row is
-    re-read: same-user winner → deterministic idempotent reconnect;
-    other-user winner → raised so the caller classifies it as
-    ``broker_identity_in_use`` (the global partial index makes the
-    database the arbiter of ownership).
+    identity can both miss the SELECT. When that happens the INSERT/UPDATE
+    flush raises ``IntegrityError`` (global partial ownership index or the
+    per-user connection constraint) and this helper propagates it —
+    flush-failure deactivates the SQLAlchemy session, so swallowing the
+    error and re-reading in-session would raise ``PendingRollbackError``
+    instead (proven live on PostgreSQL), which the API layer cannot
+    classify. The API-layer caller (``routers/auth.py``) owns the full
+    recover protocol on ``IntegrityError``: ROLLBACK → re-read the
+    committed owner in a fresh transaction → classify (other-user winner
+    → ``broker_identity_in_use``; same-user winner → deterministic
+    idempotent retry of the whole link transaction). The database's
+    global ownership index remains the arbiter of cross-user races.
     """
     broker_upper = broker.upper()
 
@@ -624,85 +655,57 @@ def get_or_create_connection(
         conn.updated_at = _utcnow()
         return conn
 
-    for attempt in range(3):
-        # First: check if a pending row exists for this (user, broker)
-        pending_conn = (
-            db.query(BrokerConnection)
-            .filter(
-                BrokerConnection.user_id == user_id,
-                BrokerConnection.broker == broker_upper,
-                BrokerConnection.broker_account_id == "pending",
-            )
-            .first()
+    # First: check if a pending row exists for this (user, broker)
+    pending_conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.broker_account_id == "pending",
         )
+        .first()
+    )
 
-        # Second: check if a connected row with this account ID exists
-        existing_conn = (
-            db.query(BrokerConnection)
-            .filter(
-                BrokerConnection.user_id == user_id,
-                BrokerConnection.broker == broker_upper,
-                BrokerConnection.broker_account_id == broker_account_id,
-            )
-            .first()
+    # Second: check if a connected row with this account ID exists
+    existing_conn = (
+        db.query(BrokerConnection)
+        .filter(
+            BrokerConnection.user_id == user_id,
+            BrokerConnection.broker == broker_upper,
+            BrokerConnection.broker_account_id == broker_account_id,
         )
+        .first()
+    )
 
-        if existing_conn is not None:
-            # Re-login to existing connection — an UPDATE of our own row
-            # cannot lose an ownership race.
-            return _apply(existing_conn)
+    if existing_conn is not None:
+        # Re-login to existing connection — an UPDATE of our own row
+        # cannot lose an ownership race.
+        return _apply(existing_conn)
 
-        if pending_conn is not None:
-            # Transition from pending → connected. The UPDATE can still
-            # lose a cross-user race on the global ownership index.
-            conn = _apply(pending_conn)
-            try:
-                with db.begin_nested():
-                    db.flush()
-                return conn
-            except IntegrityError:
-                pass  # fall through to the shared recover path
-        else:
-            # New connection (e.g. first OAuth without prior credential storage)
-            conn = BrokerConnection(
-                id=str(uuid4()),
-                user_id=user_id,
-                broker=broker_upper,
-                broker_account_id=broker_account_id,
-                connected_at=_utcnow(),
-            )
-            db.add(conn)
-            try:
-                with db.begin_nested():
-                    db.flush()
-                return conn
-            except IntegrityError:
-                pass  # fall through to the shared recover path
+    if pending_conn is not None:
+        # Transition from pending → connected. A cross-user winner that
+        # committed the identity between our SELECT and this flush makes
+        # the UPDATE enter the global ownership index → IntegrityError
+        # propagates for caller classification (docstring above).
+        conn = _apply(pending_conn)
+        db.flush()
+        return conn
 
-        # Recover path: someone committed the identity between our SELECT
-        # and our flush. Re-read by GLOBAL identity (not just our user).
-        db.expire_all()
-        winner = (
-            db.query(BrokerConnection)
-            .filter(
-                BrokerConnection.broker == broker_upper,
-                BrokerConnection.broker_account_id == broker_account_id,
-            )
-            .one_or_none()
-        )
-        if winner is not None and winner.user_id != user_id:
-            # Cross-user ownership conflict — never transfer (design
-            # Invariant 7). Raise for the caller to classify.
-            raise BrokerIdentityInUse(
-                f"broker identity {broker_upper}/{broker_account_id} is "
-                f"already owned by user {winner.user_id}"
-            )
-        if winner is not None:
-            # Same-user reconnect race → deterministic idempotent finish.
-            return _apply(winner)
-        if attempt == 2:
-            raise
-        # Row vanished between conflict and re-read — retry the loop.
+    # New connection (e.g. first OAuth without prior credential storage).
+    # A cross-user or same-user concurrent winner that committed between
+    # our SELECT and this flush makes the INSERT hit the global ownership
+    # index (or the per-user constraint) → IntegrityError propagates for
+    # caller classification (docstring above).
+    conn = BrokerConnection(
+        id=str(uuid4()),
+        user_id=user_id,
+        broker=broker_upper,
+        broker_account_id=broker_account_id,
+        connected_at=_utcnow(),
+    )
+    db.add(conn)
+    db.flush()
+    return conn
 
 
 # ---------------------------------------------------------------------------
