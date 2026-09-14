@@ -628,6 +628,76 @@ def test_global_partial_index_blocks_cross_user_duplicate_and_allows_pending():
         ).scalar() == 2
 
 
+def test_migration_predicate_allows_both_sentinels_per_user():
+    """The EXACT migration predicate (NOT IN ('pending','data-only')) must
+    reject a cross-user live-identity duplicate while allowing both per-user
+    sentinels for two different users.
+
+    Live staging evidence (2026-09-14): the original design predicate
+    excluded only 'pending', so pre-existing per-user 'data-only' analytics
+    connections ('UPSTOX','data-only' for multiple users) violated the
+    index at deploy time. 'data-only' is a per-user sentinel created by
+    store_analytics_token — never a broker account identity.
+    """
+    from sqlalchemy import text
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[User.__table__, BrokerConnection.__table__, BrokerToken.__table__, UserSession.__table__],
+    )
+    with engine.begin() as cx:
+        cx.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_broker_identity_global "
+                "ON broker_connections (broker, broker_account_id) "
+                "WHERE broker_account_id NOT IN ('pending', 'data-only')"
+            )
+        )
+        u1, u2 = "u1-" + str(uuid4()), "u2-" + str(uuid4())
+        for uid in (u1, u2):
+            cx.execute(
+                text(
+                    "INSERT INTO users (id, status, identity_source, created_at, updated_at) "
+                    "VALUES (:i, 'active', 'email', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"i": uid},
+            )
+
+        def insert(cid: str, uid: str, acct: str):
+            cx.execute(
+                text(
+                    "INSERT INTO broker_connections (id, user_id, broker, broker_account_id, "
+                    "is_default, status, capability_mode, data_status, trading_status, "
+                    "provider_metadata_json, created_at, updated_at, connected_at) VALUES "
+                    "(:c, :u, 'UPSTOX', :a, 0, 'connected', 'trading', 'inactive', 'inactive', '{}', "
+                    "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                ),
+                {"c": cid, "u": uid, "a": acct},
+            )
+
+        # Live identity: one owner.
+        insert("c1", u1, "UCC-LIVE")
+        # Cross-user duplicate of the LIVE identity -> must be rejected.
+        with pytest.raises(Exception):
+            insert("c2", u2, "UCC-LIVE")
+        # Both sentinels may exist per user — never ownership conflicts.
+        insert("p1", u1, "pending")
+        insert("p2", u2, "pending")
+        insert("d1", u1, "data-only")
+        insert("d2", u2, "data-only")
+
+        assert cx.execute(
+            text("SELECT COUNT(*) FROM broker_connections WHERE broker_account_id = 'pending'")
+        ).scalar() == 2
+        assert cx.execute(
+            text("SELECT COUNT(*) FROM broker_connections WHERE broker_account_id = 'data-only'")
+        ).scalar() == 2
+        assert cx.execute(
+            text("SELECT COUNT(*) FROM broker_connections WHERE broker_account_id = 'UCC-LIVE'")
+        ).scalar() == 1
+
+
 # ---------------------------------------------------------------------------
 # Phase 22 item 14/18: no duplicate users; cleanup on failure
 # ---------------------------------------------------------------------------

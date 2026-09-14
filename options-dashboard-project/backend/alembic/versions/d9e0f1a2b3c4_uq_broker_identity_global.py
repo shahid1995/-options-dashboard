@@ -14,17 +14,21 @@ clean checkout (staging deploy dep-dajt61ek1f9s739be460 failed with
 ``KeyError: 'e2b4c6d8f0a1'`` at startup); re-parented so the committed
 tree's migration graph is self-contained. If/when the Day41.2 chain is
 committed upstream, a later merge revision can restore that ancestry.
-Implements (exact design SQL):
+Implements (design SQL, extended for the SECOND per-user sentinel):
 
     CREATE UNIQUE INDEX uq_broker_identity_global
     ON broker_connections (broker, broker_account_id)
-    WHERE broker_account_id <> 'pending'
+    WHERE broker_account_id NOT IN ('pending', 'data-only')
 
 Purpose (design Invariants 1/7): one broker identity maps to at most one
-StrikeNova user. The partial predicate preserves the 'pending' sentinel
-semantics (any user may hold one pending pre-OAuth connection per broker)
-while making the database the arbiter of global ownership for live
-connections.
+StrikeNova user. The partial predicate preserves BOTH per-user sentinel
+semantics — 'pending' (pre-OAuth BYOB credentials) and 'data-only'
+(analytics-token connections created by store_analytics_token) — while
+making the database the arbiter of global ownership for live broker
+account identities. The design draft excluded only 'pending'; the first
+staging execution proved staging CRDB already holds multiple users'
+'data-only' rows (legitimate per-user state, no broker account identity),
+which are NOT ownership conflicts and must not block the index.
 
 Pre-condition verified before authoring (duplicate-ownership audit,
 2026-09-14, local dev DB): zero (broker, broker_account_id) groups with
@@ -49,7 +53,12 @@ depends_on: Union[str, Sequence[str], None] = None
 # SQLite/PostgreSQL dialects compile a raw str where-clause via
 # _compiler_dispatch and fail with AttributeError (verified 2026-09-14;
 # same convention as c7d3e5f8a9b2_google_sub_index).
-_PREDICATE = "broker_account_id <> 'pending'"
+#
+# 'pending' and 'data-only' are PER-USER sentinels (store_credentials /
+# store_analytics_token), never real broker account identities; both users'
+# sentinel rows may legitimately coexist and stay outside the global
+# ownership guarantee.
+_PREDICATE = "broker_account_id NOT IN ('pending', 'data-only')"
 
 
 def upgrade() -> None:
