@@ -154,6 +154,7 @@ export function CardGrid({
 }) {
   return (
     <div
+      className="sn-card-grid"
       style={{
         display: "grid",
         gridTemplateColumns: `repeat(auto-fit, minmax(${minItemWidth}px, 1fr))`,
@@ -180,6 +181,7 @@ export function BentoGrid({
 }) {
   return (
     <div
+      className="sn-bento-grid"
       style={{
         display: "grid",
         gridTemplateColumns: `repeat(${columns}, 1fr)`,

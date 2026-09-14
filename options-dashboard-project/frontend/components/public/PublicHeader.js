@@ -279,27 +279,31 @@ export default function PublicHeader() {
       </nav>
 
       {/* Mobile menu overlay */}
-      {mobileOpen && (
-        <div
-          ref={mobileMenuRef}
-          id="mobile-nav-menu"
-          className="pub-mobile-menu"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Navigation menu"
-          style={{
-            position: "fixed",
-            top: 60,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 99,
-            background: "rgba(11, 14, 20, 0.96)",
-            backdropFilter: "blur(12px)",
-            WebkitBackdropFilter: "blur(12px)",
-            overflowY: "auto",
-          }}
-        >
+      <div
+        ref={mobileMenuRef}
+        id="mobile-nav-menu"
+        className="pub-mobile-menu"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
+        aria-hidden={!mobileOpen}
+        style={{
+          position: "fixed",
+          top: 60,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 99,
+          background: "rgba(11, 14, 20, 0.96)",
+          backdropFilter: "blur(12px)",
+          WebkitBackdropFilter: "blur(12px)",
+          overflowY: "auto",
+          opacity: mobileOpen ? 1 : 0,
+          transform: mobileOpen ? "translateY(0)" : "translateY(-8px)",
+          transition: "opacity 0.2s cubic-bezier(0.22, 1, 0.36, 1), transform 0.2s cubic-bezier(0.22, 1, 0.36, 1)",
+          pointerEvents: mobileOpen ? "auto" : "none",
+        }}
+      >
           <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: `${SPACE.cardLg} ${SPACE.compLg}`, display: "flex", flexDirection: "column", gap: SPACE.xs }}>
             {NAV_LINKS.map((group) => {
               const groupActive = group.children.some((child) => isActive(pathname, child.href));
@@ -380,7 +384,7 @@ export default function PublicHeader() {
             </div>
           </div>
         </div>
-      )}
+      </div>
     </>
   );
 }

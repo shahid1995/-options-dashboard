@@ -66,6 +66,7 @@ export default function HomeHero({ onGetStarted }) {
       />
 
       <div
+        className="sn-fade"
         style={{
           position: "relative",
           maxWidth: 1000,

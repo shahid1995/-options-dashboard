@@ -249,7 +249,7 @@ function Sidebar({ activeKey, isMobile, isOpen, onClose }) {
         background: COLOR.surface,
         borderRight: isOpen ? `1px solid ${COLOR.border}` : "none",
         overflow: "hidden",
-        transition: "width 0.2s ease, min-width 0.2s ease",
+        transition: "width 0.2s ease, min-width 0.2s ease, border-right 0.2s ease",
         zIndex: LAYER.overlay - 10,
         display: "flex",
         flexDirection: "column",

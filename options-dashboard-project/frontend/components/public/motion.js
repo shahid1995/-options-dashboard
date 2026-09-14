@@ -64,6 +64,17 @@ export const PUBLIC_DS_CSS = `
 .sn-bar-fill { animation: sn-bar-fill 1s ${MOTION.easeOut} both; }
 .sn-node-appear { animation: sn-node-appear 0.35s ${MOTION.easeOut} both; }
 
+/* Card/Bento grid items — subtle hover lift */
+.sn-card-grid > *,
+.sn-bento-grid > * {
+  transition: border-color ${MOTION.fast} ${MOTION.easeOut}, transform ${MOTION.fast} ${MOTION.easeOut};
+}
+.sn-card-grid > *:hover,
+.sn-bento-grid > *:hover {
+  border-color: ${COLOR.borderStrong};
+  transform: translateY(-2px);
+}
+
 /* Ticker track — pause on hover */
 .sn-ticker-track {
   display: flex;

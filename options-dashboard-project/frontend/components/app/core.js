@@ -54,7 +54,7 @@ export function Metric({ label, value, unit, decimals = 0, hint, sub, size = "md
       <span style={{ fontSize: ss.labelFs, fontWeight: 700, letterSpacing: "0.06em", color: COLOR.textFaint, textTransform: "uppercase" }}>
         {label}
       </span>
-      <span style={{ fontSize: ss.valueFs, fontWeight: 800, color: valueColor, lineHeight: 1.1, fontVariantNumeric: "tabular-nums", fontFamily: TYPE.data, display: "flex", alignItems: "baseline", gap: SPACE.xs }}>
+      <span style={{ fontSize: ss.valueFs, fontWeight: 800, color: valueColor, lineHeight: 1.1, fontVariantNumeric: "tabular-nums", fontFamily: TYPE.data, display: "flex", alignItems: "baseline", gap: SPACE.xs, transition: "color 0.2s cubic-bezier(0.22, 1, 0.36, 1)" }}>
         {formatted}
         {unit && <span style={{ fontSize: "0.7em", fontWeight: 600, color: COLOR.textMuted }}>{unit}</span>}
       </span>
@@ -174,6 +174,7 @@ export function Badge({ variant = "neutral", children, style }) {
         border: `1px solid ${sem.border}`,
         textTransform: "uppercase",
         whiteSpace: "nowrap",
+        transition: "color 0.15s ease, background 0.15s ease, border-color 0.15s ease",
         ...style,
       }}
     >
