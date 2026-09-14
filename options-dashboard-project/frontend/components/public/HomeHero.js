@@ -11,15 +11,56 @@ export default function HomeHero({ onGetStarted }) {
   const isMobile = useIsMobile();
 
   return (
-    <header style={{ position: "relative", overflow: "hidden" }}>
-      {/* Background gradient */}
+    <header
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        background: COLOR.baseElevated,
+      }}
+    >
+      {/* Subtle grid overlay - restrained, no gradient glow */}
       <div
+        aria-hidden="true"
         style={{
           position: "absolute",
           inset: 0,
-          background: `radial-gradient(ellipse 50% 40% at 20% 10%, ${COLOR.strategyDim}, transparent 60%),
-                       radial-gradient(ellipse 40% 30% at 80% 80%, ${COLOR.intelligenceDim}, transparent 60%),
-                       linear-gradient(180deg, ${COLOR.base}, ${COLOR.baseElevated})`,
+          backgroundImage: `linear-gradient(${COLOR.borderSubtle} 1px, transparent 1px), linear-gradient(90deg, ${COLOR.borderSubtle} 1px, transparent 1px)`,
+          backgroundSize: "40px 40px",
+          maskImage: "radial-gradient(ellipse 80% 60% at 50% 50%, black 30%, transparent 70%)",
+          WebkitMaskImage: "radial-gradient(ellipse 80% 60% at 50% 50%, black 30%, transparent 70%)",
+          pointerEvents: "none",
+          opacity: 0.5,
+        }}
+      />
+
+      {/* Subtle corner accent lines */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: 120,
+          height: 120,
+          borderTop: `1px solid ${COLOR.strategy}`,
+          borderLeft: `1px solid ${COLOR.strategy}`,
+          borderTopLeftRadius: RADIUS.lg,
+          opacity: 0.3,
+          pointerEvents: "none",
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          bottom: 0,
+          right: 0,
+          width: 120,
+          height: 120,
+          borderBottom: `1px solid ${COLOR.border}`,
+          borderRight: `1px solid ${COLOR.border}`,
+          borderBottomRightRadius: RADIUS.lg,
+          opacity: 0.2,
           pointerEvents: "none",
         }}
       />
@@ -27,13 +68,13 @@ export default function HomeHero({ onGetStarted }) {
       <div
         style={{
           position: "relative",
-          maxWidth: 1100,
+          maxWidth: 1000,
           margin: "0 auto",
-          padding: isMobile ? `${SPACE.sectionLg} 1.25rem` : `${SPACE.hero} 1.25rem`,
+          padding: isMobile ? `${SPACE.sectionLg} ${SPACE.compLg}` : `${SPACE.hero} ${SPACE.compLg}`,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: SPACE.section,
+          gap: SPACE.cardLg,
         }}
       >
         {/* Brand mark */}
@@ -49,7 +90,7 @@ export default function HomeHero({ onGetStarted }) {
           StrikeNova
         </span>
 
-        {/* H1 */}
+        {/* H1 - restrained, no colored accent span */}
         <h1
           style={{
             margin: 0,
@@ -59,23 +100,22 @@ export default function HomeHero({ onGetStarted }) {
             letterSpacing: TYPE.displayH1.letterSpacing,
             color: COLOR.textPrimary,
             textAlign: "center",
-            maxWidth: "20ch",
+            maxWidth: "18ch",
           }}
-          className="sn-fade"
         >
-          OPTIONS INTELLIGENCE
+          Options Intelligence
           <br />
-          <span style={{ color: COLOR.strategy }}>FOR STRUCTURED DECISIONS.</span>
+          <span style={{ color: COLOR.textSecondary }}>for Structured Decisions.</span>
         </h1>
 
         {/* Supporting message */}
         <p
           style={{
-            color: COLOR.textSecondary,
+            color: COLOR.textMuted,
             fontSize: TYPE.bodyLarge.size,
             lineHeight: TYPE.bodyLarge.lineHeight,
             textAlign: "center",
-            maxWidth: "40ch",
+            maxWidth: "42ch",
             margin: 0,
           }}
         >
@@ -98,11 +138,17 @@ export default function HomeHero({ onGetStarted }) {
             variant="primary"
             size="lg"
             href="/features"
+            className="ds-focus-ring"
             style={{ minWidth: 200 }}
           >
-            Explore StrikeNova <span aria-hidden>→</span>
+            Explore StrikeNova <span aria-hidden="true">→</span>
           </LinkButton>
-          <LinkButton variant="secondary" size="lg" href="/strategy-lab">
+          <LinkButton
+            variant="secondary"
+            size="lg"
+            href="/strategy-lab"
+            className="ds-focus-ring"
+          >
             Strategy Lab
           </LinkButton>
         </div>

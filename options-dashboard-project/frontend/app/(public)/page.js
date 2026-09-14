@@ -1,7 +1,7 @@
 "use client";
 import { useIsMobile } from "@/lib/ui";
 import { useAuthModal } from "@/components/public/AuthModalContext";
-import { Section, Container, FlexRow, FlexColumn, MetricGrid } from "@/components/public/layout";
+import { Section, Container } from "@/components/public/layout";
 import { Panel } from "@/components/public/surfaces";
 import { LinkButton } from "@/components/public/buttons";
 import { DemoLabel, Eyebrow, SectionTitle } from "@/components/public/truth";
@@ -16,6 +16,58 @@ import MarketIntelligenceGrid from "@/components/public/MarketIntelligenceGrid";
 import EvidenceTrustSection from "@/components/public/EvidenceTrustSection";
 import WorkflowTabs from "@/components/public/WorkflowTabs";
 import PayoffMiniChart from "@/components/public/PayoffMiniChart";
+
+// =============================================================================
+// MARKET PROBLEM — Why options traders struggle
+// =============================================================================
+function MarketProblemSection() {
+  const problems = [
+    {
+      title: "Fragmented Data",
+      description: "Option chains, Greeks, OI, IV — scattered across screens with no unified analytical layer.",
+    },
+    {
+      title: "Opaque Risk",
+      description: "Payoff profiles, max loss, breakevens — hidden behind complex calculations most traders skip.",
+    },
+    {
+      title: "Unstructured Workflow",
+      description: "From market view to execution, there is no coherent analytical bridge between analysis and action.",
+    },
+  ];
+
+  return (
+    <Section>
+      <Container maxWidth={1100}>
+        <SectionTitle
+          eyebrow="THE MARKET PROBLEM"
+          title="Options trading demands structure. Most tools provide noise."
+          subtitle="StrikeNova turns raw option chain data into a structured analytical workflow — from market state to execution."
+        />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: SPACE.compLg }}>
+          {problems.map((p) => (
+            <div
+              key={p.title}
+              style={{
+                padding: SPACE.cardLg,
+                background: COLOR.surface,
+                border: `1px solid ${COLOR.border}`,
+                borderRadius: RADIUS.lg,
+              }}
+            >
+              <h3 style={{ margin: 0, marginBottom: SPACE.small, fontSize: TYPE.h4.size, color: COLOR.textPrimary }}>
+                {p.title}
+              </h3>
+              <p style={{ margin: 0, color: COLOR.textMuted, lineHeight: 1.7 }}>
+                {p.description}
+              </p>
+            </div>
+          ))}
+        </div>
+      </Container>
+    </Section>
+  );
+}
 
 // =============================================================================
 // STRATEGY LAB TAB CONTENT
@@ -59,7 +111,7 @@ function StrategyLegs() {
       <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>IRON CONDOR</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: SPACE.small }}>
         {legs.map((leg, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem", background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
             <span style={{ fontWeight: 700, color: leg.action === "BUY" ? COLOR.positive : COLOR.negative }}>{leg.action}</span>
             <span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>{leg.strike}</span>
             <span style={{ color: COLOR.textMuted }}>{leg.type}</span>
@@ -148,15 +200,15 @@ function PaperSimulation() {
     <div>
       <h4 style={{ margin: 0, marginBottom: SPACE.comp, color: COLOR.textPrimary }}>SIMULATION</h4>
       <div style={{ display: "flex", flexDirection: "column", gap: SPACE.small, marginBottom: SPACE.compLg }}>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem", background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
           <span style={{ color: COLOR.textMuted }}>Order Type</span>
           <span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>LIMIT</span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem", background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
           <span style={{ color: COLOR.textMuted }}>Simulated Qty</span>
           <span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>2 Lot</span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "0.5rem 0.75rem", background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: `${SPACE.small} ${SPACE.comp}`, background: COLOR.baseElevated, borderRadius: RADIUS.sm }}>
           <span style={{ color: COLOR.textMuted }}>Simulated Capital</span>
           <span style={{ fontFamily: TYPE.data, color: COLOR.textPrimary }}>₹1,00,000</span>
         </div>
@@ -227,19 +279,22 @@ export default function HomePage() {
 
   return (
     <>
-      {/* SECTION 01 — HERO */}
+      {/* 01 — HERO */}
       <HomeHero onGetStarted={openAuth} />
 
       {/* Platform Preview */}
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 1.25rem ${SPACE.section}` }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${SPACE.compLg} ${SPACE.section}` }}>
         <PlatformPreview />
       </div>
 
-      {/* SECTION 02 — ANALYTICAL LAYERS */}
+      {/* 02 — MARKET PROBLEM */}
+      <MarketProblemSection />
+
+      {/* 03 — ANALYTICAL LAYERS (Market Data) */}
       <Section style={{ borderTop: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="THE MARKET IS MORE THAN PRICE"
+            eyebrow="MARKET DATA"
             title="Eight analytical layers. One coherent system."
             subtitle="StrikeNova turns raw option chain data into a structured analytical workflow."
           />
@@ -247,11 +302,11 @@ export default function HomePage() {
         </Container>
       </Section>
 
-      {/* SECTION 03 — SIGNAL FIELD */}
+      {/* 04 — SIGNAL FIELD (Market State) */}
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="SIGNAL FIELD"
+            eyebrow="MARKET STATE"
             title="The market state in one view"
             subtitle="Key indicators, signal visualization, OI structure and Greeks in a single coherent display."
           />
@@ -259,48 +314,48 @@ export default function HomePage() {
         </Container>
       </Section>
 
-      {/* SECTION 04 — MARKET INTELLIGENCE */}
+      {/* 05 — MARKET INTELLIGENCE (Analytics) */}
       <Section>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="MARKET INTELLIGENCE"
+            eyebrow="ANALYTICS"
             title="Understand the forces behind the option chain."
             subtitle="Positioning, volatility, Greeks and market structure in one coherent view."
           />
           <MarketIntelligenceGrid />
           <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="primary" size="md" href="/market-intelligence">
-              Explore Market Intelligence <span aria-hidden>→</span>
+            <LinkButton variant="primary" size="md" href="/market-intelligence" className="ds-focus-ring">
+              Explore Market Intelligence <span aria-hidden="true">→</span>
             </LinkButton>
           </div>
         </Container>
       </Section>
 
-      {/* SECTION 04.5 — EVIDENCE & TRUST */}
+      {/* 05.5 — EVIDENCE & TRUST */}
       <EvidenceTrustSection />
 
-      {/* SECTION 05 — STRATEGY LAB (INTERACTIVE) */}
+      {/* 06 — STRATEGY LAB (Interactive) */}
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="STRATEGY LAB"
+            eyebrow="STRATEGY"
             title="Build the strategy. See the risk. Test the outcome."
             subtitle="From market view to payoff analysis in one structured workflow."
           />
           <WorkflowTabs tabs={strategyTabs} defaultTab="market" ariaLabel="Strategy Lab" />
           <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="primary" size="md" href="/strategy-lab">
-              Open Strategy Lab <span aria-hidden>→</span>
+            <LinkButton variant="primary" size="md" href="/strategy-lab" className="ds-focus-ring">
+              Open Strategy Lab <span aria-hidden="true">→</span>
             </LinkButton>
           </div>
         </Container>
       </Section>
 
-      {/* SECTION 06 — RISK (PAYOFF GRAPH) */}
+      {/* 07 — RISK (Payoff Graph) */}
       <Section>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="RISK BEFORE CAPITAL"
+            eyebrow="RISK"
             title="Understand the risk before committing capital."
             subtitle="Payoff curves, max profit, max loss, breakevens, Greeks and scenarios."
           />
@@ -340,24 +395,24 @@ export default function HomePage() {
         </Container>
       </Section>
 
-      {/* SECTION 07 — PAPER TRADING (INTERACTIVE) */}
+      {/* 08 — PAPER TRADING (Interactive) */}
       <Section style={{ background: COLOR.baseElevated, borderTop: `1px solid ${COLOR.border}`, borderBottom: `1px solid ${COLOR.border}` }}>
         <Container maxWidth={1100}>
           <SectionTitle
-            eyebrow="PAPER TRADING"
+            eyebrow="PAPER EXECUTION"
             title="Practice the workflow. Not your capital."
             subtitle="Decision, simulation, position management, P&L and review in one environment."
           />
           <WorkflowTabs tabs={paperTabs} defaultTab="decision" ariaLabel="Paper Trading" />
           <div style={{ textAlign: "center", marginTop: SPACE.section }}>
-            <LinkButton variant="secondary" size="md" href="/paper-trading">
-              Learn More <span aria-hidden>→</span>
+            <LinkButton variant="secondary" size="md" href="/paper-trading" className="ds-focus-ring">
+              Learn More <span aria-hidden="true">→</span>
             </LinkButton>
           </div>
         </Container>
       </Section>
 
-      {/* SECTION 08 — FINAL CTA */}
+      {/* 09 — FINAL CTA */}
       <CTASection
         headline={
           <>

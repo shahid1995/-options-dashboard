@@ -42,9 +42,9 @@ describe("HomePage — Redesign", () => {
       expect(html).toContain("StrikeNova");
     });
 
-    it("contains OPTIONS INTELLIGENCE tagline", () => {
+    it("contains Options Intelligence tagline", () => {
       const html = renderPage();
-      expect(html).toContain("OPTIONS INTELLIGENCE");
+      expect(html).toMatch(/Options Intelligence|OPTIONS INTELLIGENCE/);
     });
 
     it("contains 'for Structured Decisions' tagline", () => {
