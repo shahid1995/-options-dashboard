@@ -12,7 +12,7 @@
 | Field | Value |
 | ----- | ----- |
 | Branch | `feat/strikenova-day35-portfolio-intelligence` |
-| HEAD SHA (start) | `f75c3824dc9ef4f7fab25d508439920d5cfc9f111` |
+| HEAD SHA (start) | `127959bb1825b82cd309accc0f1566495f274ca3` |
 | Baseline tests | 1754/1754 passing |
 | Baseline build | 17 routes compiled |
 
@@ -24,22 +24,21 @@
 
 | Task | Commit | Description |
 | ------ | ------ | ----------- |
-| Task 2 | `ed04fb8` | Structure Strategy Lab — ScenarioPanel Metric + ChartContainer integration |
-| Task 4 | `7c96ace` | Refine strategy analytics panels — IVAnalyticsPanel Metric + ChartContainer |
+| Task 2 | `ebc19557e2c7cce2914947dae2d030a7e18abb19` | Structure Strategy Lab — ScenarioPanel Metric + ChartContainer integration |
+| Task 4 | `c07a65e41b3fd59b5985b62557366db102f7364d` | Refine strategy analytics panels — IVAnalyticsPanel Metric + ChartContainer |
 
 ### Track B — Paper Trading
 
 | Task | Commit | Description |
 | ------ | ------ | ----------- |
-| Task 5 | (partial) | Structure Paper Trading — initial implementation |
-| Task 6 | `2f514fc` | Refine paper portfolio analytics — Metric, Badge, Table, ActionButton across all panels |
+| Task 5/6 | `b6b6d7a450db8f574147d4abdfdead55ee7fd83b` | Refine paper portfolio analytics — Metric, Badge, Table, ActionButton across all panels |
 
 ### Track C — Trading Journal
 
 | Task | Commit | Description |
 | ------ | ------ | ----------- |
-| Task 7 | `c291fa2` | Structure Trading Journal — extracted JournalPanel with Metric, Badge, Table, EmptyState, ActionButton |
-| Task 8 | `aa53f1b` | Refine journal responsiveness — ARIA roles, keyboard access, responsive layout |
+| Task 7 | `9e95acbc998f67b3bd92886ef3ad9f815d3c75b4` | Structure Trading Journal — extracted JournalPanel with Metric, Badge, Table, EmptyState, ActionButton |
+| Task 8 | `a583880d52bb7859ed96a8890a7942b6e3a1f70f` | Refine journal responsiveness — ARIA roles, keyboard access, responsive layout |
 
 ### Track D — Shared UI & Accessibility Consolidation
 
@@ -59,13 +58,13 @@
 
 ## 3. Commits
 
-| SHA | Message | Track |
-| --- | ------- | ----- |
-| `ed04fb8` | `refactor(ui): structure StrikeNova strategy lab` | A |
-| `7c96ace` | `refactor(ui): refine strategy analytics panels` | A |
-| `2f514fc` | `refactor(ui): refine paper portfolio analytics` | B |
-| `c291fa2` | `refactor(ui): structure StrikeNova trading journal` | C |
-| `aa53f1b` | `refactor(ui): refine StrikeNova journal responsiveness` | C |
+| SHA | Message | Track | GitHub URL |
+| --- | ------- | ----- | ---------- |
+| `ebc19557e2c7cce2914947dae2d030a7e18abb19` | `refactor(ui): structure StrikeNova strategy lab` | A | https://github.com/shahid1995/-options-dashboard/commit/ebc19557e2c7cce2914947dae2d030a7e18abb19 |
+| `c07a65e41b3fd59b5985b62557366db102f7364d` | `refactor(ui): refine strategy analytics panels` | A | https://github.com/shahid1995/-options-dashboard/commit/c07a65e41b3fd59b5985b62557366db102f7364d |
+| `b6b6d7a450db8f574147d4abdfdead55ee7fd83b` | `refactor(ui): refine paper portfolio analytics` | B | https://github.com/shahid1995/-options-dashboard/commit/b6b6d7a450db8f574147d4abdfdead55ee7fd83b |
+| `9e95acbc998f67b3bd92886ef3ad9f815d3c75b4` | `refactor(ui): structure StrikeNova trading journal` | C | https://github.com/shahid1995/-options-dashboard/commit/9e95acbc998f67b3bd92886ef3ad9f815d3c75b4 |
+| `a583880d52bb7859ed96a8890a7942b6e3a1f70f` | `refactor(ui): refine StrikeNova journal responsiveness` | C | https://github.com/shahid1995/-options-dashboard/commit/a583880d52bb7859ed96a8890a7942b6e3a1f70f |
 
 ---
 
@@ -80,7 +79,6 @@
 | IVAnalyticsPanel | `IVAnalyticsPanel.test.js` | 7 |
 | AnalyticsPanel | `AnalyticsPanel.test.js` | 8 |
 | JournalPanel | `JournalPanel.test.js` | 29 |
-| Paper Trading (various) | (via page.js integration) | — |
 
 ### Full Suite
 
@@ -148,17 +146,7 @@ Confirmed:
 
 ---
 
-## 9. Deferred Work
-
-| Item | Deferred to |
-| ---- | ----------- |
-| Tooltip primitive | Phase G (or later) |
-| Full page.js inline style migration | Phase G (or later) |
-| Public website migration | Phase G |
-
----
-
-## 10. Accessibility Evidence
+## 9. Accessibility Evidence
 
 - **JournalPanel**: `role="region"` + `aria-label`, `<nav aria-label="Journal pagination">`, `aria-label="Previous page"`/`aria-label="Next page"` on pagination buttons
 - **BulkExit modal**: `role="dialog"` + `aria-modal="true"`
@@ -169,7 +157,7 @@ Confirmed:
 
 ---
 
-## 11. Semantic Safeguards
+## 10. Semantic Safeguards
 
 - ✅ "SIMULATED MODE" badge preserved
 - ✅ "PAPER TRADING PORTFOLIO" header label preserved
@@ -183,8 +171,22 @@ Confirmed:
 
 ---
 
+## 11. Deferred Work
+
+| Item | Deferred to |
+| ---- | ----------- |
+| Tooltip primitive | Phase G (or later) |
+| Full page.js inline style migration | Phase G (or later) |
+| Public website migration | Phase G |
+
+---
+
 ## 12. Final Decision
 
 **PHASE F CLOSED — PHASE G READY**
 
 All Phase F tasks implemented, tested, and verified.
+
+---
+
+*End of Phase F audit.*
