@@ -175,7 +175,7 @@ export default function Dashboard() {
             No Broker Connected
           </div>
           <div style={{ fontSize: 14, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>
-            You’re signed in to StrikeNova, but market data requires a broker connection.
+            You're signed in to StrikeNova, but market data requires a broker connection.
             Connect your Upstox account to view the option chain.
           </div>
           <button
@@ -271,21 +271,21 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Phase 2.1d: MetricCard grid */}
+      {/* Phase E: Market Intelligence metrics — PCR coloring fixed to neutral */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, marginBottom: 14 }}>
         {spot != null && (
-          <MetricCard label="SPOT" value={fmtIN(spot, 2)} color={C.gold} />
+          <MetricCard label="SPOT" value={fmtIN(spot, 2)} color={C.gold} hint="Underlying price" />
         )}
         <MetricCard
           label="PCR (OI)"
-          value={pcr != null ? pcr.toFixed(2) : "-"}
-          color={pcr == null ? C.muted : pcr > 1 ? C.green : pcr < 0.8 ? C.red : C.text}
-          hint="Put OI ÷ Call OI"
+          value={pcr != null ? pcr.toFixed(2) : "—"}
+          color={C.text}
+          hint="Put OI ÷ Call OI · Structural ratio"
         />
-        <MetricCard label="MAX PAIN" value={maxPain != null ? fmtIN(maxPain) : "-"} color={C.gold} hint="Writer-wins strike" />
+        <MetricCard label="MAX PAIN" value={maxPain != null ? fmtIN(maxPain) : "—"} color={C.gold} hint="Writer-wins strike" />
         <MetricCard label="IV" value="—" color={C.faint} hint="Coming in Phase 2.2" />
-        {totals && <MetricCard label="CALL OI" value={fmtIN(totals.callOI)} color={C.red} />}
-        {totals && <MetricCard label="PUT OI" value={fmtIN(totals.putOI)} color={C.green} />}
+        {totals && <MetricCard label="CALL OI" value={fmtIN(totals.callOI)} color={C.text} hint="Total call open interest" />}
+        {totals && <MetricCard label="PUT OI" value={fmtIN(totals.putOI)} color={C.text} hint="Total put open interest" />}
       </div>
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap" }}>

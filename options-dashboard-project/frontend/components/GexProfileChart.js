@@ -1,16 +1,14 @@
+"use client";
 /**
- * GEX Profile Chart — Live GEX visualization for the dashboard.
+ * GEX Profile Chart — Phase E (Market Intelligence)
  *
- * Displays a horizontal bar chart of per-strike Net GEX using Recharts.
+ * Horizontal bar chart of per-strike Net GEX using Recharts.
  * Positive GEX extends right (green), negative extends left (red).
  *
- * Requires live chain data via useGexCapture → latestSnapshot.strikeData.
- * Optional sweep data (enableSweep in useGexCapture) shows gamma flip and walls.
+ * Uses Phase D primitives: ChartContainer, Metric, EmptyState, ErrorState.
  *
  * No trading signals. Market-structure analytics only.
  */
-"use client";
-
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
 import {
@@ -23,6 +21,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { ChartContainer, Metric, EmptyState } from "@/components/app/core";
 
 /* ── Helpers ────────────────────────────────────────────────────────── */
 
@@ -33,43 +32,6 @@ function fmtGex(v) {
   if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)} Cr`;
   if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)} L`;
   return `${sign}₹${abs.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
-
-function GexMetric({ label, value, color }) {
-  return (
-    <div
-      style={{
-        background: C.surface2,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        padding: "8px 10px",
-        minWidth: 0,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 9,
-          letterSpacing: 0.8,
-          color: C.faint,
-          fontWeight: 700,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: 13,
-          fontWeight: 800,
-          color: color || C.text,
-          marginTop: 2,
-          whiteSpace: "nowrap",
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
 }
 
 /* ── Custom bar shape: horizontal bar centered at zero ──────────────── */
@@ -209,194 +171,187 @@ export default function GexProfileChart({
 
   if (!chartData.length) {
     return (
-      <div
-        style={{
-          background: C.surface,
-          border: `1px solid ${C.border}`,
-          borderRadius: 10,
-        }}
+      <ChartContainer
+        title="GEX PROFILE"
+        eyebrow="MARKET STRUCTURE"
+        caption="Dealer positioning context · Not a directional signal"
+        source={expiry ? `${expiry} · Spot ${spot ? fmtIN(spot, 2) : "—"}` : undefined}
       >
-        <div
-          style={{
-            padding: "10px 14px",
-            borderBottom: `1px solid ${C.border}`,
-            fontSize: 12,
-            color: C.muted,
-            letterSpacing: 0.5,
-            display: "flex",
-            justifyContent: "space-between",
-          }}
-        >
-          <span>GEX PROFILE</span>
-        </div>
-        <div
-          style={{
-            padding: "24px 16px",
-            textAlign: "center",
-            fontSize: 12,
-            color: C.faint,
-          }}
-        >
-          GEX data unavailable — waiting for live chain with gamma &amp; OI.
-        </div>
-      </div>
+        <EmptyState message="GEX data unavailable — waiting for live chain with gamma & OI." />
+      </ChartContainer>
     );
   }
 
   /* ── Render ─────────────────────────────────────────────────────── */
 
-  return (
-    <div
-      style={{
-        background: C.surface,
-        border: `1px solid ${C.border}`,
-        borderRadius: 10,
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          padding: "10px 14px",
-          borderBottom: `1px solid ${C.border}`,
-          fontSize: 12,
-          color: C.muted,
-          letterSpacing: 0.5,
-          display: "flex",
-          justifyContent: "space-between",
-        }}
-      >
-        <span>GEX PROFILE</span>
-        {expiry && (
-          <span style={{ color: C.faint, fontSize: 10 }}>
-            {expiry} · {fmtIN(spot, 2)}
-          </span>
-        )}
-      </div>
+  const hasGammaFlip = gammaFlipSpot != null;
+  const hasWalls = callWallStrikes.length > 0 || putWallStrikes.length > 0;
 
-      {/* Summary metrics */}
+  return (
+    <ChartContainer
+      title="GEX PROFILE"
+      eyebrow="MARKET STRUCTURE"
+      caption="Call GEX (+) dealer long gamma · Put GEX (−) dealer short gamma"
+      source={expiry ? `${expiry} · Spot ${fmtIN(spot, 2)}` : undefined}
+    >
+      {/* Summary metrics using Phase D Metric primitive */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 6,
-          padding: "8px 10px",
+          gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(120px, 1fr))",
+          gap: 8,
+          padding: "0 4px 12px",
         }}
       >
-        <GexMetric
+        <Metric
           label="NET GEX"
           value={fmtGex(netGex)}
-          color={netGex != null ? (netGex >= 0 ? C.green : C.red) : C.muted}
+          size="md"
+          semantic={netGex != null ? (netGex >= 0 ? "positive" : "negative") : "neutral"}
+          hint="Aggregate dealer gamma exposure"
         />
-        <GexMetric label="ATM" value={atmStrike != null ? fmtIN(atmStrike) : "—"} color={C.gold} />
-        <GexMetric label="CALL GEX" value={fmtGex(callGex)} color={callGex != null ? C.green : C.muted} />
-        <GexMetric label="PUT GEX" value={fmtGex(putGex)} color={putGex != null ? C.red : C.muted} />
-        {gammaFlipSpot != null && (
-          <GexMetric label="GAMMA FLIP" value={fmtIN(gammaFlipSpot)} color={C.gold} />
+        <Metric
+          label="ATM"
+          value={atmStrike != null ? fmtIN(atmStrike) : "—"}
+          size="md"
+          semantic="strategy"
+          hint="At-the-money strike"
+        />
+        <Metric
+          label="CALL GEX"
+          value={fmtGex(callGex)}
+          size="sm"
+          semantic={callGex != null ? "positive" : "neutral"}
+          hint="Total call-side dealer gamma"
+        />
+        <Metric
+          label="PUT GEX"
+          value={fmtGex(putGex)}
+          size="sm"
+          semantic={putGex != null ? "negative" : "neutral"}
+          hint="Total put-side dealer gamma"
+        />
+        {hasGammaFlip && (
+          <Metric
+            label="GAMMA FLIP"
+            value={fmtIN(gammaFlipSpot)}
+            size="sm"
+            semantic="strategy"
+            hint="Modeled regime transition level"
+          />
         )}
         {profileLabels.length > 0 && profileLabels[0] !== "UNAVAILABLE" && (
-          <GexMetric label="REGIME" value={profileLabels[0].replace(/_/g, " ")} color={C.gold} />
+          <Metric
+            label="REGIME"
+            value={profileLabels[0].replace(/_/g, " ")}
+            size="sm"
+            semantic="strategy"
+            hint="Current modeled gamma regime"
+          />
         )}
         {callWallStrikes.length > 0 && (
-          <GexMetric
+          <Metric
             label="CALL WALL"
             value={callWallStrikes.map(fmtIN).join(", ")}
-            color={C.green}
+            size="sm"
+            semantic="positive"
+            hint="Highest call-side GEX concentration"
           />
         )}
         {putWallStrikes.length > 0 && (
-          <GexMetric
+          <Metric
             label="PUT WALL"
             value={putWallStrikes.map(fmtIN).join(", ")}
-            color={C.red}
+            size="sm"
+            semantic="negative"
+            hint="Highest put-side GEX concentration"
           />
         )}
       </div>
 
       {/* Chart */}
-      <div style={{ padding: "4px 4px 0 4px" }}>
-        <div style={{ height: isMobile ? 320 : 380 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart
-              data={chartData}
-              layout="vertical"
-              margin={{ top: 4, right: 12, bottom: 4, left: 4 }}
-            >
-              <XAxis
-                type="number"
-                domain={domain}
-                tick={{ fill: C.faint, fontSize: 9 }}
-                tickFormatter={fmtGex}
-                stroke={C.border}
-                tickLine={false}
-              />
-              <YAxis
-                type="category"
-                dataKey="strike"
-                tick={{ fill: C.muted, fontSize: 10 }}
-                tickFormatter={(v) => fmtIN(v)}
-                width={isMobile ? 48 : 56}
-                stroke={C.border}
-                tickLine={false}
-              />
-              <Tooltip
-                content={<GexTooltip />}
-                cursor={{ fill: "rgba(201,161,90,0.06)" }}
-              />
+      <div style={{ height: isMobile ? 320 : 380 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={chartData}
+            layout="vertical"
+            margin={{ top: 4, right: 12, bottom: 4, left: 4 }}
+          >
+            <XAxis
+              type="number"
+              domain={domain}
+              tick={{ fill: C.faint, fontSize: 9 }}
+              tickFormatter={fmtGex}
+              stroke={C.border}
+              tickLine={false}
+            />
+            <YAxis
+              type="category"
+              dataKey="strike"
+              tick={{ fill: C.muted, fontSize: 10 }}
+              tickFormatter={(v) => fmtIN(v)}
+              width={isMobile ? 48 : 56}
+              stroke={C.border}
+              tickLine={false}
+            />
+            <Tooltip
+              content={<GexTooltip />}
+              cursor={{ fill: "rgba(201,161,90,0.06)" }}
+            />
 
-              {/* Zero-GEX line */}
+            {/* Zero-GEX line */}
+            <ReferenceLine
+              x={0}
+              stroke={C.muted}
+              strokeDasharray="3 3"
+              strokeWidth={1}
+            />
+
+            {/* ATM strike line */}
+            {atmStrike != null && chartData.some((d) => d.strike === atmStrike) && (
+              <ReferenceLine
+                y={atmStrike}
+                stroke={C.gold}
+                strokeDasharray="4 4"
+                strokeWidth={1}
+                label={{
+                  value: "ATM",
+                  fill: C.gold,
+                  fontSize: 9,
+                  position: "right",
+                }}
+              />
+            )}
+
+            {/* Gamma flip annotation */}
+            {hasGammaFlip && (
               <ReferenceLine
                 x={0}
-                stroke={C.muted}
-                strokeDasharray="3 3"
-                strokeWidth={1}
+                stroke={C.gold}
+                strokeWidth={0}
+                label={{
+                  value: `Flip ${fmtIN(gammaFlipSpot)}`,
+                  fill: C.gold,
+                  fontSize: 9,
+                  position: "insideTopRight",
+                }}
               />
+            )}
 
-              {/* ATM strike line */}
-              {atmStrike != null && chartData.some((d) => d.strike === atmStrike) && (
-                <ReferenceLine
-                  y={atmStrike}
-                  stroke={C.gold}
-                  strokeDasharray="4 4"
-                  strokeWidth={1}
-                  label={{
-                    value: "ATM",
-                    fill: C.gold,
-                    fontSize: 9,
-                    position: "right",
-                  }}
-                />
-              )}
-
-              {/* Gamma flip line */}
-              {gammaFlipSpot != null && (
-                <ReferenceLine
-                  x={0}
-                  stroke={C.gold}
-                  strokeWidth={0}
-                  label={{
-                    value: `Flip ${fmtIN(gammaFlipSpot)}`,
-                    fill: C.gold,
-                    fontSize: 9,
-                    position: "insideTopRight",
-                  }}
-                />
-              )}
-
-              {/* Net GEX bars */}
-              <Bar
-                dataKey="netGex"
-                shape={<HorizontalGexBar />}
-                isAnimationActive={false}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+            {/* Net GEX bars */}
+            <Bar
+              dataKey="netGex"
+              shape={<HorizontalGexBar />}
+              isAnimationActive={false}
+            />
+          </BarChart>
+        </ResponsiveContainer>
       </div>
 
       {/* Legend */}
       <div
         style={{
-          padding: "6px 14px 10px",
+          padding: "6px 14px 0",
           fontSize: 9.5,
           color: C.faint,
           display: "flex",
@@ -412,7 +367,7 @@ export default function GexProfileChart({
           <span style={{ display: "inline-block", width: 8, height: 8, background: C.red, borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />
           Put GEX (−)
         </span>
-        {gammaFlipSpot != null && (
+        {hasGammaFlip && (
           <span>
             <span style={{ display: "inline-block", width: 8, height: 2, background: C.gold, marginRight: 4, verticalAlign: "middle" }} />
             Gamma Flip
@@ -425,6 +380,6 @@ export default function GexProfileChart({
           <span style={{ color: C.red }}>■ Put Wall</span>
         )}
       </div>
-    </div>
+    </ChartContainer>
   );
 }

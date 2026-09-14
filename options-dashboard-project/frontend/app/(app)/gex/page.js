@@ -1,9 +1,15 @@
 "use client";
 /**
- * GEX Intelligence Dashboard — Phase 8D
+ * GEX Intelligence Dashboard — Phase E (Market Intelligence)
  *
  * Dedicated page for historical GEX analytics, regime tracking,
  * gamma walls, gamma flip, and data quality.
+ *
+ * Establishes Market Intelligence hierarchy:
+ *   Level 1 — Market State (regime, flip, walls, timestamp)
+ *   Level 2 — Market Structure (GEX profile, wall concentration)
+ *   Level 3 — Analytical Context (historical GEX, regime transitions)
+ *   Level 4 — Interpretation (with caveats)
  *
  * All GEX methodology follows the Phase 7.1 formula:
  *   raw_gex = gamma × OI × spot² × 0.01
@@ -14,7 +20,6 @@
  */
 import { useEffect, useState, useMemo } from "react";
 import { C, fmtIN, useIsMobile } from "@/lib/ui";
-import { AppPanel, SectionTitle } from "@/components/app/styles";
 import {
   getGexHistory,
   getGexRegime,
@@ -28,6 +33,7 @@ import GexRegimeTimeline from "@/components/GexRegimeTimeline";
 import GexWallTracker from "@/components/GexWallTracker";
 import GexFlipPanel from "@/components/GexFlipPanel";
 import GexDataQualityPanel from "@/components/GexDataQualityPanel";
+import { Metric, Badge, EmptyState, ErrorState, SegmentedControl } from "@/components/app/core";
 
 export default function GexPage() {
   const isMobile = useIsMobile();
@@ -99,14 +105,6 @@ export default function GexPage() {
       setQuality(results.quality || null);
       setLastFetchTime(Date.now());
       setLoading(false);
-
-      // Auto-refresh every 60 seconds if page is visible
-      const refreshTimer = setInterval(() => {
-        if (!document.hidden) {
-          fetchData();
-        }
-      }, 60000);
-      return () => clearInterval(refreshTimer);
     };
 
     fetchData();
@@ -137,6 +135,29 @@ export default function GexPage() {
     { key: "quality", label: "Data Quality" },
   ];
 
+  // Compute latest values for Market State panel
+  const latestTimestamp = history?.timestamps?.length
+    ? history.timestamps[history.timestamps.length - 1]
+    : null;
+
+  const latestRegime = regime?.regimes?.length
+    ? regime.regimes[regime.regimes.length - 1]
+    : null;
+
+  const latestFlip = flip?.flips?.length
+    ? flip.flips[flip.flips.length - 1]
+    : null;
+
+  const latestWalls = walls?.walls?.length
+    ? walls.walls[walls.walls.length - 1]
+    : null;
+
+  const regimeColor = (r) => {
+    if (r === "POSITIVE_GAMMA") return C.green;
+    if (r === "NEGATIVE_GAMMA") return C.red;
+    return C.muted;
+  };
+
   return (
     <div style={{ padding: isMobile ? 12 : 20 }}>
       {/* Header */}
@@ -162,17 +183,19 @@ export default function GexPage() {
           GEX INTELLIGENCE
         </h1>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{
-            fontSize: 9,
-            fontWeight: 700,
-            padding: "2px 8px",
-            borderRadius: 4,
-            background: dataFreshness.color === C.green ? "rgba(34,197,94,0.15)" :
-                        dataFreshness.color === C.gold ? "rgba(201,161,90,0.15)" :
-                        dataFreshness.color === C.red ? "rgba(239,68,68,0.15)" : "transparent",
-            color: dataFreshness.color,
-            letterSpacing: 0.5,
-          }}>
+          <div
+            style={{
+              fontSize: 9,
+              fontWeight: 700,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: dataFreshness.color === C.green ? "rgba(34,197,94,0.15)" :
+                          dataFreshness.color === C.gold ? "rgba(201,161,90,0.15)" :
+                          dataFreshness.color === C.red ? "rgba(239,68,68,0.15)" : "transparent",
+              color: dataFreshness.color,
+              letterSpacing: 0.5,
+            }}
+          >
             {dataFreshness.label}
           </div>
           <div style={{ fontSize: 11, color: C.faint }}>
@@ -182,48 +205,18 @@ export default function GexPage() {
       </div>
 
       {/* Tabs */}
-      <div
-        style={{
-          display: "flex",
-          gap: 6,
-          marginBottom: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            style={{
-              fontSize: 11,
-              padding: "5px 12px",
-              borderRadius: 5,
-              border: `1px solid ${activeTab === tab.key ? C.gold : C.border}`,
-              background:
-                activeTab === tab.key ? "rgba(201,161,90,0.1)" : "transparent",
-              color: activeTab === tab.key ? C.gold : C.muted,
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div style={{ marginBottom: 16 }}>
+        <SegmentedControl
+          options={tabs}
+          value={activeTab}
+          onChange={setActiveTab}
+          aria-label="GEX Intelligence sections"
+        />
       </div>
 
       {/* Content */}
       {loading ? (
-        <div
-          style={{
-            ...AppPanel,
-            padding: 40,
-            textAlign: "center",
-            color: C.muted,
-            fontSize: 13,
-          }}
-        >
-          Loading GEX data...
-        </div>
+        <EmptyState message="Loading GEX data..." />
       ) : (
         <>
           {activeTab === "overview" && (
@@ -236,6 +229,11 @@ export default function GexPage() {
               errors={errors}
               isMobile={isMobile}
               lastFetchTime={lastFetchTime}
+              latestTimestamp={latestTimestamp}
+              latestRegime={latestRegime}
+              latestFlip={latestFlip}
+              latestWalls={latestWalls}
+              regimeColor={regimeColor}
             />
           )}
           {activeTab === "history" && (
@@ -261,140 +259,137 @@ export default function GexPage() {
 
 /* ── Overview Tab ─────────────────────────────────────────────────── */
 
-function OverviewTab({ history, regime, flip, walls, quality, errors, isMobile, lastFetchTime }) {
-  const latestTimestamp = history?.timestamps?.length
-    ? history.timestamps[history.timestamps.length - 1]
-    : null;
-
-  const latestRegime = regime?.regimes?.length
-    ? regime.regimes[regime.regimes.length - 1]
-    : null;
-
-  const latestFlip = flip?.flips?.length
-    ? flip.flips[flip.flips.length - 1]
-    : null;
-
-  const latestWalls = walls?.walls?.length
-    ? walls.walls[walls.walls.length - 1]
-    : null;
-
-  const regimeColor = (r) => {
-    if (r === "POSITIVE_GAMMA") return C.green;
-    if (r === "NEGATIVE_GAMMA") return C.red;
-    return C.muted;
-  };
-
+function OverviewTab({
+  history,
+  regime,
+  flip,
+  walls,
+  quality,
+  errors,
+  isMobile,
+  lastFetchTime,
+  latestTimestamp,
+  latestRegime,
+  latestFlip,
+  latestWalls,
+  regimeColor,
+}) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
-        gap: 12,
-      }}
-    >
-      {/* Net GEX Card */}
-      <div style={AppPanel}>
-        <div style={SectionTitle}>NET GEX</div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: C.text, marginBottom: 4 }}>
-          {latestTimestamp ? fmtGex(latestTimestamp.netGex) : "—"}
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* Level 1 — Market State */}
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.faint, letterSpacing: 0.5, marginBottom: 8 }}>
+          MARKET STATE
         </div>
-        <div style={{ fontSize: 11, color: C.faint }}>
-          {latestTimestamp
-            ? `${fmtIN(latestTimestamp.instrumentCount)} instruments · ${fmtIN(latestTimestamp.strikeCount)} strikes`
-            : "No data"}
-        </div>
-        {latestTimestamp && (
-          <div style={{ fontSize: 10, color: C.faint, marginTop: 4 }}>
-            Spot: {fmtIN(latestTimestamp.spot, 2)}
-          </div>
-        )}
-      </div>
-
-      {/* Regime Card */}
-      <div style={AppPanel}>
-        <div style={SectionTitle}>GAMMA REGIME</div>
         <div
           style={{
-            fontSize: 18,
-            fontWeight: 800,
-            color: latestRegime ? regimeColor(latestRegime.regime) : C.muted,
-            marginBottom: 4,
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr 1fr",
+            gap: 8,
           }}
         >
-          {latestRegime ? latestRegime.regime.replace(/_/g, " ") : "—"}
+          <Metric
+            label="Gamma Regime"
+            value={latestRegime ? latestRegime.regime.replace(/_/g, " ") : "—"}
+            size="md"
+            semantic={latestRegime?.regime === "POSITIVE_GAMMA" ? "positive" : latestRegime?.regime === "NEGATIVE_GAMMA" ? "negative" : "neutral"}
+            hint="Current modeled gamma regime"
+          />
+          <Metric
+            label="Gamma Flip"
+            value={latestFlip?.flipStrike ? fmtIN(latestFlip.flipStrike) : "—"}
+            size="md"
+            semantic="strategy"
+            hint="Modeled regime transition level"
+          />
+          <Metric
+            label="Call Wall"
+            value={latestWalls?.strongestPositive ? fmtIN(latestWalls.strongestPositive.strike) : "—"}
+            size="md"
+            semantic="positive"
+            hint="Highest call-side GEX concentration"
+          />
+          <Metric
+            label="Put Wall"
+            value={latestWalls?.strongestNegative ? fmtIN(latestWalls.strongestNegative.strike) : "—"}
+            size="md"
+            semantic="negative"
+            hint="Highest put-side GEX concentration"
+          />
         </div>
-        {latestRegime?.regimeTransition && (
-          <div style={{ fontSize: 11, color: C.faint }}>
-            Transition: {latestRegime.regimeTransition}
-          </div>
-        )}
-        {latestRegime && (
-          <div style={{ fontSize: 10, color: C.faint, marginTop: 4 }}>
-            Net GEX: {fmtGex(latestRegime.netGex)}
-          </div>
-        )}
       </div>
 
-      {/* Gamma Flip Card */}
-      <div style={AppPanel}>
-        <div style={SectionTitle}>GAMMA FLIP</div>
-        <div style={{ fontSize: 18, fontWeight: 800, color: C.gold, marginBottom: 4 }}>
-          {latestFlip?.flipStrike ? fmtIN(latestFlip.flipStrike) : "—"}
+      {/* Level 2 — Market Structure */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
+          gap: 12,
+        }}
+      >
+        {/* Net GEX Summary */}
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.faint, letterSpacing: 0.5, marginBottom: 8 }}>
+            NET GEX
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+            }}
+          >
+            <Metric
+              label="Net GEX"
+              value={latestTimestamp ? fmtGex(latestTimestamp.netGex) : "—"}
+              size="lg"
+              semantic={latestTimestamp?.netGex >= 0 ? "positive" : "negative"}
+              hint="Aggregate dealer gamma exposure"
+            />
+            <Metric
+              label="Spot"
+              value={latestTimestamp ? fmtIN(latestTimestamp.spot, 2) : "—"}
+              size="lg"
+              semantic="strategy"
+              hint="Current underlying price"
+            />
+            <Metric
+              label="Instruments"
+              value={latestTimestamp ? fmtIN(latestTimestamp.instrumentCount) : "—"}
+              size="sm"
+              semantic="neutral"
+              hint="Number of instruments"
+            />
+            <Metric
+              label="Strikes"
+              value={latestTimestamp ? fmtIN(latestTimestamp.strikeCount) : "—"}
+              size="sm"
+              semantic="neutral"
+              hint="Number of strikes"
+            />
+          </div>
         </div>
-        {latestFlip && (
-          <>
-            <div style={{ fontSize: 11, color: C.faint }}>
-              Status: {latestFlip.status}
-            </div>
-            {latestFlip.flipConfidence != null && (
-              <div style={{ fontSize: 10, color: C.faint, marginTop: 4 }}>
-                Confidence: {(latestFlip.flipConfidence * 100).toFixed(0)}%
-              </div>
-            )}
-          </>
-        )}
-      </div>
 
-      {/* Walls Summary Card */}
-      <div style={AppPanel}>
-        <div style={SectionTitle}>GAMMA WALLS</div>
-        {latestWalls ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {latestWalls.strongestPositive && (
-              <div style={{ fontSize: 12 }}>
-                <span style={{ color: C.green, fontWeight: 700 }}>CALL WALL</span>{" "}
-                <span style={{ color: C.text }}>{fmtIN(latestWalls.strongestPositive.strike)}</span>
-                <span style={{ color: C.faint, fontSize: 10, marginLeft: 6 }}>
-                  {fmtGex(latestWalls.strongestPositive.gex)}
-                </span>
-              </div>
-            )}
-            {latestWalls.strongestNegative && (
-              <div style={{ fontSize: 12 }}>
-                <span style={{ color: C.red, fontWeight: 700 }}>PUT WALL</span>{" "}
-                <span style={{ color: C.text }}>{fmtIN(latestWalls.strongestNegative.strike)}</span>
-                <span style={{ color: C.faint, fontSize: 10, marginLeft: 6 }}>
-                  {fmtGex(latestWalls.strongestNegative.gex)}
-                </span>
-              </div>
-            )}
+        {/* Data Quality Summary */}
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.faint, letterSpacing: 0.5, marginBottom: 8 }}>
+            DATA QUALITY
           </div>
-        ) : (
-          <div style={{ fontSize: 12, color: C.muted }}>No wall data</div>
-        )}
-      </div>
-
-      {/* Data Quality Card */}
-      <div style={{ ...AppPanel, gridColumn: isMobile ? "auto" : "1 / -1" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={SectionTitle}>DATA QUALITY</div>
+          <GexDataQualityPanel quality={quality} compact />
           {lastFetchTime && (
-            <div style={{ fontSize: 9, color: C.faint }}>
+            <div style={{ fontSize: 10, color: C.faint, marginTop: 8 }}>
               Last updated: {new Date(lastFetchTime).toLocaleTimeString()}
             </div>
           )}
         </div>
-        <GexDataQualityPanel quality={quality} compact />
+      </div>
+
+      {/* Level 3 — Analytical Context */}
+      <div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: C.faint, letterSpacing: 0.5, marginBottom: 8 }}>
+          HISTORICAL CONTEXT
+        </div>
+        <GexHistoryChart data={history} isMobile={isMobile} />
       </div>
     </div>
   );
@@ -469,23 +464,4 @@ function fmtGex(v) {
   if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)} Cr`;
   if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)} L`;
   return `${sign}₹${abs.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
-}
-
-function EmptyState({ message }) {
-  return (
-    <div style={{ ...AppPanel, padding: 40, textAlign: "center" }}>
-      <div style={{ fontSize: 13, color: C.muted }}>{message}</div>
-    </div>
-  );
-}
-
-function ErrorState({ message }) {
-  return (
-    <div style={{ ...AppPanel, padding: 40, textAlign: "center" }}>
-      <div style={{ fontSize: 13, color: C.red, marginBottom: 8 }}>
-        Unable to load GEX data
-      </div>
-      <div style={{ fontSize: 11, color: C.faint }}>{message}</div>
-    </div>
-  );
 }

@@ -1,16 +1,17 @@
 "use client";
 /**
- * Gamma Regime Timeline — Phase 8D
+ * Gamma Regime Timeline — Phase E (Market Intelligence)
  *
  * Displays gamma regime transitions (POSITIVE_GAMMA, NEGATIVE_GAMMA, NEUTRAL)
  * as a horizontal timeline using Recharts.
  *
  * Uses /gex/regime endpoint data.
  * No directional interpretation. Structural positioning context only.
+ *
+ * Uses Phase D primitives: ChartContainer, EmptyState.
  */
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
-import { AppPanel, SectionTitle } from "@/components/app/styles";
 import {
   BarChart,
   Bar,
@@ -20,6 +21,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { ChartContainer, EmptyState } from "@/components/app/core";
 
 const REGIME_COLORS = {
   POSITIVE_GAMMA: C.green,
@@ -83,7 +85,6 @@ export default function GexRegimeTimeline({ data, isMobile = false }) {
       spot: r.spot,
       regimeTransition: r.regimeTransition,
       regimeDuration: r.regimeDuration,
-      // Use 1 for positive, -1 for negative, 0 for neutral (for bar height)
       regimeValue:
         r.regime === "POSITIVE_GAMMA" ? 1 : r.regime === "NEGATIVE_GAMMA" ? -1 : 0,
     }));
@@ -91,12 +92,13 @@ export default function GexRegimeTimeline({ data, isMobile = false }) {
 
   if (!chartData.length) {
     return (
-      <div style={AppPanel}>
-        <div style={SectionTitle}>GAMMA REGIME TIMELINE</div>
-        <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
-          No regime data available.
-        </div>
-      </div>
+      <ChartContainer
+        title="GAMMA REGIME TIMELINE"
+        eyebrow="STRUCTURAL CONTEXT"
+        caption="Regime = sign of aggregate Net GEX · Structural context, not directional signal"
+      >
+        <EmptyState message="No regime data available." />
+      </ChartContainer>
     );
   }
 
@@ -105,81 +107,75 @@ export default function GexRegimeTimeline({ data, isMobile = false }) {
   const currentRegime = chartData[chartData.length - 1]?.regime;
 
   return (
-    <div style={AppPanel}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-          flexWrap: "wrap",
-          gap: 8,
-        }}
-      >
-        <div style={SectionTitle}>GAMMA REGIME TIMELINE</div>
-        <div style={{ display: "flex", gap: 12, fontSize: 10 }}>
-          {Object.entries(REGIME_COLORS).map(([regime, color]) => (
-            <span key={regime} style={{ color, display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ width: 8, height: 8, borderRadius: 2, background: color, display: "inline-block" }} />
-              {regime.replace(/_/g, " ")}
-            </span>
-          ))}
-        </div>
-      </div>
-
+    <ChartContainer
+      title="GAMMA REGIME TIMELINE"
+      eyebrow="STRUCTURAL CONTEXT"
+      caption="Regime = sign of aggregate Net GEX · Structural context, not directional signal"
+      source={currentRegime ? `Current: ${currentRegime.replace(/_/g, " ")} · ${transitions} transitions` : undefined}
+    >
       {/* Current regime indicator */}
       {currentRegime && (
         <div
           style={{
-            fontSize: 14,
-            fontWeight: 800,
-            color: REGIME_COLORS[currentRegime] || C.muted,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
             marginBottom: 12,
+            flexWrap: "wrap",
+            gap: 8,
           }}
         >
-          Current: {currentRegime.replace(/_/g, " ")}
-          <span style={{ fontSize: 11, fontWeight: 400, color: C.faint, marginLeft: 8 }}>
-            {transitions} transitions
-          </span>
+          <div style={{ fontSize: 14, fontWeight: 800, color: REGIME_COLORS[currentRegime] || C.muted }}>
+            Current: {currentRegime.replace(/_/g, " ")}
+            <span style={{ fontSize: 11, fontWeight: 400, color: C.faint, marginLeft: 8 }}>
+              {transitions} transitions
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 12, fontSize: 10 }}>
+            {Object.entries(REGIME_COLORS).map(([regime, color]) => (
+              <span key={regime} style={{ color, display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 2, background: color, display: "inline-block" }} />
+                {regime.replace(/_/g, " ")}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
-      <ResponsiveContainer width="100%" height={isMobile ? 200 : 280}>
-        <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-          <XAxis
-            dataKey="timestamp"
-            tickFormatter={fmtTime}
-            stroke={C.faint}
-            fontSize={10}
-            tickLine={false}
-          />
-          <YAxis
-            domain={[-1.5, 1.5]}
-            ticks={[-1, 0, 1]}
-            tickFormatter={(v) =>
-              v === 1 ? "POS" : v === -1 ? "NEG" : "NEU"
-            }
-            stroke={C.faint}
-            fontSize={10}
-            tickLine={false}
-            width={40}
-          />
-          <Tooltip content={<RegimeTooltip />} />
-          <Bar dataKey="regimeValue" radius={[2, 2, 2, 2]}>
-            {chartData.map((entry, i) => (
-              <Cell
-                key={i}
-                fill={REGIME_COLORS[entry.regime] || C.muted}
-                fillOpacity={0.7}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-
-      <div style={{ fontSize: 10, color: C.faint, marginTop: 8, textAlign: "center" }}>
-        Regime = sign of aggregate Net GEX · Structural context, not directional signal
+      <div style={{ height: isMobile ? 200 : 280 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={fmtTime}
+              stroke={C.faint}
+              fontSize={10}
+              tickLine={false}
+            />
+            <YAxis
+              domain={[-1.5, 1.5]}
+              ticks={[-1, 0, 1]}
+              tickFormatter={(v) =>
+                v === 1 ? "POS" : v === -1 ? "NEG" : "NEU"
+              }
+              stroke={C.faint}
+              fontSize={10}
+              tickLine={false}
+              width={40}
+            />
+            <Tooltip content={<RegimeTooltip />} />
+            <Bar dataKey="regimeValue" radius={[2, 2, 2, 2]}>
+              {chartData.map((entry, i) => (
+                <Cell
+                  key={i}
+                  fill={REGIME_COLORS[entry.regime] || C.muted}
+                  fillOpacity={0.7}
+                />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
       </div>
-    </div>
+    </ChartContainer>
   );
 }

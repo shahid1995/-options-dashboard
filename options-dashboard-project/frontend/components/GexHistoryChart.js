@@ -1,15 +1,16 @@
 "use client";
 /**
- * GEX Historical Time-Series Chart — Phase 8D
+ * GEX Historical Time-Series Chart — Phase E (Market Intelligence)
  *
  * Displays net GEX over time using Recharts LineChart.
  * Uses /gex/history endpoint data.
+ *
+ * Uses Phase D primitives: ChartContainer, EmptyState.
  *
  * No directional interpretation. Structural analytics only.
  */
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
-import { AppPanel, SectionTitle } from "@/components/app/styles";
 import {
   LineChart,
   Line,
@@ -20,6 +21,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { ChartContainer, EmptyState } from "@/components/app/core";
 
 function fmtGex(v) {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -84,64 +86,54 @@ export default function GexHistoryChart({ data, isMobile = false }) {
 
   if (!chartData.length) {
     return (
-      <div style={AppPanel}>
-        <div style={SectionTitle}>HISTORICAL GEX</div>
-        <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
-          No historical GEX data available.
-        </div>
-      </div>
+      <ChartContainer
+        title="HISTORICAL NET GEX"
+        eyebrow="ANALYTICAL CONTEXT"
+        caption="Net GEX = Call GEX (+) + Put GEX (−) · Not a trading signal"
+      >
+        <EmptyState message="No historical GEX data available." />
+      </ChartContainer>
     );
   }
 
   return (
-    <div style={AppPanel}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 12,
-        }}
-      >
-        <div style={SectionTitle}>HISTORICAL NET GEX</div>
-        <div style={{ fontSize: 10, color: C.faint }}>
-          {chartData.length} timestamps
-        </div>
+    <ChartContainer
+      title="HISTORICAL NET GEX"
+      eyebrow="ANALYTICAL CONTEXT"
+      caption="Net GEX = Call GEX (+) + Put GEX (−) · Not a trading signal"
+      source={`${chartData.length} timestamps`}
+    >
+      <div style={{ height: isMobile ? 250 : 350 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={fmtTime}
+              stroke={C.faint}
+              fontSize={10}
+              tickLine={false}
+            />
+            <YAxis
+              tickFormatter={(v) => fmtGex(v)}
+              stroke={C.faint}
+              fontSize={10}
+              tickLine={false}
+              width={80}
+            />
+            <Tooltip content={<CustomTooltip />} />
+            <ReferenceLine y={0} stroke={C.border} strokeDasharray="3 3" />
+            <Line
+              type="monotone"
+              dataKey="netGex"
+              stroke={C.gold}
+              strokeWidth={2}
+              dot={false}
+              activeDot={{ r: 4, fill: C.gold }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
-
-      <ResponsiveContainer width="100%" height={isMobile ? 250 : 350}>
-        <LineChart data={chartData} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
-          <XAxis
-            dataKey="timestamp"
-            tickFormatter={fmtTime}
-            stroke={C.faint}
-            fontSize={10}
-            tickLine={false}
-          />
-          <YAxis
-            tickFormatter={(v) => fmtGex(v)}
-            stroke={C.faint}
-            fontSize={10}
-            tickLine={false}
-            width={80}
-          />
-          <Tooltip content={<CustomTooltip />} />
-          <ReferenceLine y={0} stroke={C.border} strokeDasharray="3 3" />
-          <Line
-            type="monotone"
-            dataKey="netGex"
-            stroke={C.gold}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, fill: C.gold }}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-
-      <div style={{ fontSize: 10, color: C.faint, marginTop: 8, textAlign: "center" }}>
-        Net GEX = Call GEX (+) + Put GEX (−) · Not a trading signal
-      </div>
-    </div>
+    </ChartContainer>
   );
 }

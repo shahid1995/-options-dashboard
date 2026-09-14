@@ -1,15 +1,17 @@
 "use client";
 /**
- * Gamma Wall Tracker — Phase 8D
+ * Gamma Wall Tracker — Phase E (Market Intelligence)
  *
  * Displays the strongest call and put gamma walls from /gex/walls data.
  * Shows strike, GEX concentration, distance from spot.
+ *
+ * Uses Phase D primitives: ChartContainer, Metric, Badge, EmptyState.
  *
  * No directional interpretation. Structural positioning context only.
  */
 import { useMemo } from "react";
 import { C, fmtIN } from "@/lib/ui";
-import { AppPanel, SectionTitle } from "@/components/app/styles";
+import { ChartContainer, Metric, Badge, EmptyState } from "@/components/app/core";
 
 function fmtGex(v) {
   if (v == null || !Number.isFinite(v)) return "—";
@@ -20,44 +22,6 @@ function fmtGex(v) {
   return `${sign}${fmtIN(v)}`;
 }
 
-function WallCard({ wall, type, spot }) {
-  if (!wall) return null;
-  const color = type === "call" ? C.green : C.red;
-  const label = type === "call" ? "CALL GAMMA WALL" : "PUT GAMMA WALL";
-  const distancePct = wall.distancePct != null ? (wall.distancePct * 100).toFixed(2) : null;
-
-  return (
-    <div
-      style={{
-        background: C.surface2,
-        border: `1px solid ${C.border}`,
-        borderRadius: 8,
-        padding: "10px 14px",
-      }}
-    >
-      <div style={{ fontSize: 10, fontWeight: 700, color, letterSpacing: 0.5, marginBottom: 6 }}>
-        {label}
-      </div>
-      <div style={{ fontSize: 20, fontWeight: 800, color: C.text, marginBottom: 4 }}>
-        {fmtIN(wall.strike)}
-      </div>
-      <div style={{ fontSize: 12, color: C.faint }}>
-        GEX: {fmtGex(wall.gex)}
-      </div>
-      {distancePct != null && (
-        <div style={{ fontSize: 11, color: C.faint, marginTop: 2 }}>
-          {distancePct}% from spot
-        </div>
-      )}
-      {wall.rank && (
-        <div style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
-          Rank #{wall.rank}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function GexWallTracker({ data, isMobile = false }) {
   const latest = useMemo(() => {
     if (!data?.walls?.length) return null;
@@ -66,47 +30,108 @@ export default function GexWallTracker({ data, isMobile = false }) {
 
   if (!latest) {
     return (
-      <div style={AppPanel}>
-        <div style={SectionTitle}>GAMMA WALLS</div>
-        <div style={{ padding: 24, textAlign: "center", color: C.muted, fontSize: 12 }}>
-          No wall data available.
-        </div>
-      </div>
+      <ChartContainer
+        title="GAMMA WALLS"
+        eyebrow="POSITIONING CONCENTRATION"
+        caption="Strikes with highest |GEX| concentration · Structural levels, not targets"
+      >
+        <EmptyState message="No wall data available." />
+      </ChartContainer>
     );
   }
 
   const spot = latest.spot;
+  const hasPositive = latest.strongestPositive != null;
+  const hasNegative = latest.strongestNegative != null;
 
   return (
-    <div style={AppPanel}>
-      <div style={SectionTitle}>GAMMA WALLS</div>
-
-      {spot && (
-        <div style={{ fontSize: 11, color: C.faint, marginBottom: 12 }}>
-          Spot: {fmtIN(spot, 2)}
-        </div>
-      )}
-
+    <ChartContainer
+      title="GAMMA WALLS"
+      eyebrow="POSITIONING CONCENTRATION"
+      caption="Strikes with highest |GEX| concentration · Structural levels, not targets"
+      source={spot ? `Spot ${fmtIN(spot, 2)}` : undefined}
+    >
+      {/* Primary walls - Call and Put */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr",
-          gap: 10,
-          marginBottom: 16,
+          gap: 12,
+          paddingBottom: 12,
         }}
       >
-        <WallCard wall={latest.strongestPositive} type="call" spot={spot} />
-        <WallCard wall={latest.strongestNegative} type="put" spot={spot} />
+        {hasPositive && (
+          <div>
+            <div style={{ marginBottom: 6 }}>
+              <Badge variant="positive">CALL GAMMA WALL</Badge>
+            </div>
+            <Metric
+              label="Strike"
+              value={fmtIN(latest.strongestPositive.strike)}
+              size="lg"
+              semantic="positive"
+              hint="Highest call-side GEX concentration"
+            />
+            <div style={{ marginTop: 6, fontSize: 12, color: C.faint }}>
+              GEX: <span style={{ color: C.green, fontWeight: 600 }}>{fmtGex(latest.strongestPositive.gex)}</span>
+            </div>
+            {latest.strongestPositive.distancePct != null && (
+              <div style={{ fontSize: 11, color: C.faint, marginTop: 2 }}>
+                {(latest.strongestPositive.distancePct * 100).toFixed(2)}% from spot
+              </div>
+            )}
+            {latest.strongestPositive.rank && (
+              <div style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
+                Rank #{latest.strongestPositive.rank}
+              </div>
+            )}
+          </div>
+        )}
+        {hasNegative && (
+          <div>
+            <div style={{ marginBottom: 6 }}>
+              <Badge variant="negative">PUT GAMMA WALL</Badge>
+            </div>
+            <Metric
+              label="Strike"
+              value={fmtIN(latest.strongestNegative.strike)}
+              size="lg"
+              semantic="negative"
+              hint="Highest put-side GEX concentration"
+            />
+            <div style={{ marginTop: 6, fontSize: 12, color: C.faint }}>
+              GEX: <span style={{ color: C.red, fontWeight: 600 }}>{fmtGex(latest.strongestNegative.gex)}</span>
+            </div>
+            {latest.strongestNegative.distancePct != null && (
+              <div style={{ fontSize: 11, color: C.faint, marginTop: 2 }}>
+                {(latest.strongestNegative.distancePct * 100).toFixed(2)}% from spot
+              </div>
+            )}
+            {latest.strongestNegative.rank && (
+              <div style={{ fontSize: 10, color: C.faint, marginTop: 2 }}>
+                Rank #{latest.strongestNegative.rank}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Additional walls list */}
       {(latest.positiveWalls?.length > 1 || latest.negativeWalls?.length > 1) && (
         <div style={{ marginTop: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: 0.5, marginBottom: 6 }}>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: C.muted,
+              letterSpacing: 0.5,
+              marginBottom: 8,
+            }}
+          >
             ALL WALLS
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {latest.positiveWalls?.map((w, i) => (
+            {latest.positiveWalls?.slice(0, 5).map((w, i) => (
               <div
                 key={`pos-${i}`}
                 style={{
@@ -118,11 +143,11 @@ export default function GexWallTracker({ data, isMobile = false }) {
                   fontSize: 11,
                 }}
               >
-                <span style={{ color: C.green }}>CALL {fmtIN(w.strike)}</span>
+                <span style={{ color: C.green, fontWeight: 600 }}>CALL {fmtIN(w.strike)}</span>
                 <span style={{ color: C.faint }}>{fmtGex(w.gex)}</span>
               </div>
             ))}
-            {latest.negativeWalls?.map((w, i) => (
+            {latest.negativeWalls?.slice(0, 5).map((w, i) => (
               <div
                 key={`neg-${i}`}
                 style={{
@@ -134,17 +159,13 @@ export default function GexWallTracker({ data, isMobile = false }) {
                   fontSize: 11,
                 }}
               >
-                <span style={{ color: C.red }}>PUT {fmtIN(w.strike)}</span>
+                <span style={{ color: C.red, fontWeight: 600 }}>PUT {fmtIN(w.strike)}</span>
                 <span style={{ color: C.faint }}>{fmtGex(w.gex)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      <div style={{ fontSize: 10, color: C.faint, marginTop: 12, textAlign: "center" }}>
-        Gamma walls = strikes with highest |GEX| concentration · Structural levels, not targets
-      </div>
-    </div>
+    </ChartContainer>
   );
 }

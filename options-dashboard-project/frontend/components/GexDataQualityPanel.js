@@ -1,15 +1,17 @@
 "use client";
 /**
- * GEX Data Quality Panel — Phase 8D
+ * GEX Data Quality Panel — Phase E (Market Intelligence)
  *
  * Displays data quality metrics from /gex/data-quality endpoint.
  * Shows coverage, exclusions, timestamps, and overall classification.
  *
+ * Uses Phase D primitives: ChartContainer, Metric, Badge, EmptyState.
+ *
  * Deterministic, transparent quality metrics.
  * No fabricated data.
  */
-import { C, fmtIN } from "@/lib/ui";
-import { AppPanel, SectionTitle } from "@/components/app/styles";
+import { C } from "@/lib/ui";
+import { ChartContainer, Metric, Badge, EmptyState } from "@/components/app/core";
 
 const CLASSIFICATION_COLORS = {
   EXCELLENT: C.green,
@@ -18,45 +20,9 @@ const CLASSIFICATION_COLORS = {
   INSUFFICIENT: C.red,
 };
 
-function QualityMetric({ label, value, sub, color }) {
-  return (
-    <div
-      style={{
-        background: C.surface2,
-        border: `1px solid ${C.border}`,
-        borderRadius: 6,
-        padding: "8px 10px",
-        minWidth: 0,
-      }}
-    >
-      <div style={{ fontSize: 9, fontWeight: 700, color: C.faint, letterSpacing: 0.5 }}>
-        {label}
-      </div>
-      <div
-        style={{
-          fontSize: 16,
-          fontWeight: 800,
-          color: color || C.text,
-          marginTop: 2,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {value}
-      </div>
-      {sub && (
-        <div style={{ fontSize: 10, color: C.faint, marginTop: 1 }}>{sub}</div>
-      )}
-    </div>
-  );
-}
-
 export default function GexDataQualityPanel({ quality, compact = false }) {
   if (!quality) {
-    return (
-      <div style={{ fontSize: 12, color: C.muted, padding: 12 }}>
-        No data quality information available.
-      </div>
-    );
+    return <EmptyState message="No data quality information available." />;
   }
 
   const score = quality.score;
@@ -77,45 +43,64 @@ export default function GexDataQualityPanel({ quality, compact = false }) {
   if (compact) {
     return (
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ fontSize: 12 }}>
-          <span style={{ color: C.faint }}>Status: </span>
-          <span style={{ fontWeight: 700, color: classColor }}>{classification || "—"}</span>
-        </div>
+        <Badge variant={
+          classification === "EXCELLENT" ? "positive" :
+          classification === "GOOD" ? "positive" :
+          classification === "DEGRADED" ? "warning" :
+          classification === "INSUFFICIENT" ? "negative" : "neutral"
+        }>
+          {classification || "UNKNOWN"}
+        </Badge>
         {score != null && (
-          <div style={{ fontSize: 12 }}>
+          <span style={{ fontSize: 12 }}>
             <span style={{ color: C.faint }}>Score: </span>
-            <span style={{ fontWeight: 700, color: C.text }}>{score}/100</span>
-          </div>
+            <span style={{ color: C.text, fontWeight: 700 }}>{score}/100</span>
+          </span>
         )}
         {gexCoverage && (
-          <div style={{ fontSize: 12 }}>
+          <span style={{ fontSize: 12 }}>
             <span style={{ color: C.faint }}>GEX: </span>
-            <span style={{ fontWeight: 700, color: C.text }}>{gexCoverage}%</span>
-          </div>
+            <span style={{ color: C.text, fontWeight: 700 }}>{gexCoverage}%</span>
+          </span>
         )}
       </div>
     );
   }
 
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div style={SectionTitle}>GEX DATA QUALITY</div>
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 800,
-            color: classColor,
-            padding: "2px 8px",
-            borderRadius: 4,
-            background: `${classColor}15`,
-            border: `1px solid ${classColor}30`,
-          }}
+    <ChartContainer
+      title="GEX DATA QUALITY"
+      eyebrow="DATA TRUST SURFACE"
+      caption="Freshness, completeness, and coverage metrics"
+      source={quality.generatedAt ? new Date(quality.generatedAt).toLocaleString() : undefined}
+    >
+      {/* Classification header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <Badge
+          variant={
+            classification === "EXCELLENT" ? "positive" :
+            classification === "GOOD" ? "positive" :
+            classification === "DEGRADED" ? "warning" :
+            classification === "INSUFFICIENT" ? "negative" : "neutral"
+          }
         >
           {classification || "UNKNOWN"}
-        </div>
+        </Badge>
+        {score != null && (
+          <Metric label="QUALITY SCORE" value={`${score}/100`} size="sm" semantic="neutral" />
+        )}
       </div>
 
+      {/* Metrics grid */}
       <div
         style={{
           display: "grid",
@@ -123,48 +108,49 @@ export default function GexDataQualityPanel({ quality, compact = false }) {
           gap: 8,
         }}
       >
-        {score != null && (
-          <QualityMetric label="QUALITY SCORE" value={`${score}/100`} color={classColor} />
-        )}
         {quality.totalHistoricalGex != null && (
-          <QualityMetric
+          <Metric
             label="HISTORICAL GEX"
-            value={fmtIN(quality.totalHistoricalGex)}
+            value={quality.totalHistoricalGex.toLocaleString("en-IN")}
             sub={gexCoverage ? `${gexCoverage}% coverage` : undefined}
+            size="sm"
+            semantic="neutral"
           />
         )}
         {quality.totalOptionCandles != null && (
-          <QualityMetric
+          <Metric
             label="OPTION CANDLES"
-            value={fmtIN(quality.totalOptionCandles)}
+            value={quality.totalOptionCandles.toLocaleString("en-IN")}
+            size="sm"
+            semantic="neutral"
           />
         )}
         {quality.totalOptionGreeks != null && (
-          <QualityMetric
+          <Metric
             label="OPTION GREEKS"
-            value={fmtIN(quality.totalOptionGreeks)}
+            value={quality.totalOptionGreeks.toLocaleString("en-IN")}
+            size="sm"
+            semantic="neutral"
           />
         )}
         {quality.totalNiftyCandles != null && (
-          <QualityMetric
+          <Metric
             label="NIFTY CANDLES"
-            value={fmtIN(quality.totalNiftyCandles)}
+            value={quality.totalNiftyCandles.toLocaleString("en-IN")}
+            size="sm"
+            semantic="neutral"
           />
         )}
         {quality.timestampsTotal != null && (
-          <QualityMetric
+          <Metric
             label="TIMESTAMPS"
-            value={fmtIN(quality.timestampsTotal)}
+            value={quality.timestampsTotal.toLocaleString("en-IN")}
             sub={timestampCoverage ? `${timestampCoverage}% with GEX` : undefined}
+            size="sm"
+            semantic="neutral"
           />
         )}
       </div>
-
-      {quality.generatedAt && (
-        <div style={{ fontSize: 10, color: C.faint, marginTop: 12, textAlign: "center" }}>
-          Generated: {new Date(quality.generatedAt).toLocaleString()}
-        </div>
-      )}
-    </div>
+    </ChartContainer>
   );
 }

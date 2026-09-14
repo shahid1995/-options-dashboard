@@ -41,7 +41,7 @@ const METRIC_SIZES = {
   hero: { valueFs: "clamp(1.5rem, 3vw, 2.5rem)", labelFs: "0.8125rem" },
 };
 
-export function Metric({ label, value, unit, decimals = 0, hint, size = "md", semantic, color, style }) {
+export function Metric({ label, value, unit, decimals = 0, hint, sub, size = "md", semantic, color, style }) {
   const ss = METRIC_SIZES[size] || METRIC_SIZES.md;
   const formatted = fmtNum(value, decimals);
   const isUnavailable = formatted === "—";
@@ -58,6 +58,7 @@ export function Metric({ label, value, unit, decimals = 0, hint, size = "md", se
         {formatted}
         {unit && <span style={{ fontSize: "0.7em", fontWeight: 600, color: COLOR.textMuted }}>{unit}</span>}
       </span>
+      {sub && <span style={{ fontSize: "0.75rem", color: COLOR.textMuted, lineHeight: 1.4 }}>{sub}</span>}
       {hint && <span style={{ fontSize: "0.75rem", color: COLOR.textFaint, lineHeight: 1.4 }}>{hint}</span>}
     </div>
   );
