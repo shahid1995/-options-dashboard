@@ -59,6 +59,23 @@ describe("Context to Strategy Workflow", () => {
     expect(html).toContain("MAX PROFIT · CAPPED");
   });
 
+  it("renders Risk First around the same defined-risk bull call spread", () => {
+    const html = renderPage();
+    expect(html).toContain("RISK FIRST");
+    expect(html).toContain("RISK BOUNDARIES");
+    expect(html).toContain("REWARD / RISK");
+    expect(html).toContain("1.22 : 1");
+    expect(html).toContain("-45 pts");
+    expect(html).toContain("+55 pts");
+    expect(html).toContain("25,495");
+    expect(html).toContain("BELOW 25,450");
+    expect(html).toContain("ABOVE 25,550");
+    expect(html).toContain("WHAT THIS MEANS");
+    expect(html).not.toContain("₹3,250");
+    expect(html).not.toContain("-₹9,750");
+    expect(html).not.toContain("25,250 / 25,750");
+  });
+
   it("preserves the homepage strategy CTA and demo semantics", () => {
     const html = renderPage();
     expect(html).toContain("/strategy-lab");
