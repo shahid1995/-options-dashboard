@@ -77,6 +77,16 @@ describe("Context to Strategy Workflow", () => {
     expect(html).toContain("PROFIT ZONE");
   });
 
+  it("renders a capped bull call spread payoff shape and restrained zone colors", () => {
+    const html = renderPage();
+    expect(html).toContain("M48 195 L160 195 L300 125 L403 55 L590 55");
+    expect(html).toContain('fill={COLOR.negative}');
+    expect(html).toContain('fill={COLOR.positive}');
+    expect(html).toContain('stroke={COLOR.strategy}');
+    expect(html).toContain("25,550");
+    expect(html).toContain("MAXIMUM PROFIT");
+  });
+
   it("contains Strategy Lab CTA linked to /strategy-lab", () => {
     const html = renderPage();
     expect(html).toContain("/strategy-lab");
