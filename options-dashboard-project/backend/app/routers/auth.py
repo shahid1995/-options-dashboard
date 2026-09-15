@@ -125,6 +125,7 @@ def login(
 @router.get("/callback")
 async def callback(
     code: str | None = None,
+    auth_code: str | None = None,
     error: str | None = None,
     state: str | None = None,
     broker: str = Query(default="UPSTOX"),
@@ -136,6 +137,11 @@ async def callback(
     """
     if error:
         return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(error)}")
+    # FYERS v3 redirects back with `auth_code` (its own parameter name, see
+    # PHASE_10_2B_CONNECTION_ARCHITECTURE.md §FYERS flow) instead of OAuth's
+    # standard `code`. Accept both — the broker identity comes from the signed
+    # state, so the extra accepted parameter cannot cross broker flows.
+    code = code or auth_code
     # Phase 10.2B-3: Extract session_id + broker from signed OAuth state.
     # This eliminates the race condition — we know EXACTLY which user initiated OAuth.
     state_data = token_store.consume_oauth_state(state)

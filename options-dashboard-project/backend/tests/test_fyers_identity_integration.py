@@ -329,3 +329,32 @@ def test_fyers_refresh_token_absent_ok(client, db_session, monkeypatch):
         .filter(BrokerToken.broker_refresh_token_encrypted.isnot(None))
         .count()
     ) == 0
+
+
+# ---------------------------------------------------------------------------
+# Staging validation regression — FYERS redirects back with `auth_code`,
+# its own parameter name, instead of OAuth's standard `code`.
+# ---------------------------------------------------------------------------
+
+
+def test_fyers_callback_accepts_auth_code_param(client, db_session, monkeypatch):
+    """The FYERS v3 consent redirect appends `auth_code` (not `code`) to the
+    callback URL. The callback must accept either name — the broker identity
+    comes from the signed state, so the alias cannot cross broker flows."""
+    user = make_platform_user(db_session, email="authcode@example.com")
+    store_byob(db_session, user, "FYERS")
+    sid = login_initiator(db_session, user)
+    mock_fyers_adapter(monkeypatch, fyers_profile())
+    state = token_store.create_oauth_state(session_id=sid, broker="FYERS")
+    resp = client.get(
+        "/auth/callback",
+        params={"auth_code": "fyers-auth-code-value", "state": state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 307, f"auth_code alias failed: {login_error_of(resp)}"
+    assert login_error_of(resp) == ""
+    fyers_conns = [
+        c for c in live_connections(db_session, user) if c.broker == "FYERS"
+    ]
+    assert len(fyers_conns) == 1
+    assert fyers_conns[0].broker_account_id == FYERS_LOGIN_ID
