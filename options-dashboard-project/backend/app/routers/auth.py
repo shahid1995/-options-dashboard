@@ -213,6 +213,22 @@ async def callback(
     profile_data = profile.get("data") if isinstance(profile, dict) else {}
     profile_data = profile_data if isinstance(profile_data, dict) else {}
 
+    # FYERS staging validation (identity-confirmation phase): run the safe,
+    # masked identity diagnostic on the first real profile response. Reports
+    # ONLY profile key names, the selected identity field and a masked value
+    # — never tokens, secrets, PIN, PAN or the full email. Non-fatal: a
+    # diagnostic failure must never break the connection flow.
+    if broker_id == "FYERS":
+        try:
+            from app.brokers.adapters.fyers.profile import diagnose_profile_identity
+
+            logger.info(
+                "FYERS profile identity diagnostic: %s",
+                diagnose_profile_identity(profile),
+            )
+        except Exception:
+            logger.exception("FYERS identity diagnostic failed (non-fatal)")
+
     def _persist_broker_link() -> None:
         """ONE transaction: stamp + connection + UserSession + BrokerToken.
 

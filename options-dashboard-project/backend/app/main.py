@@ -371,6 +371,9 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
+from app.routers import broker_diagnostics  # noqa: E402  (after app creation)
+
+app.include_router(broker_diagnostics.router)
 app.include_router(chains.router, prefix="/chains", tags=["chains"])
 app.include_router(paper.router, prefix="/paper", tags=["paper"])
 app.include_router(templates.router, prefix="/paper", tags=["templates"])
