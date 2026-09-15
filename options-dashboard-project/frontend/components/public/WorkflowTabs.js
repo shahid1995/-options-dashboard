@@ -1,85 +1,166 @@
 // =============================================================================
-// WorkflowTabs — Accessible tab interface for Strategy Lab & Paper Trading
+// WorkflowTabs — Decision Workflow: analytical progression interface
+// 01 MARKET VIEW → 02 STRATEGY → 03 PAYOFF → 04 RISK
 // =============================================================================
 "use client";
 import React, { useState } from "react";
 import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "@/components/public/tokens";
 import { useIsMobile } from "@/lib/ui";
+import { DemoLabel } from "@/components/public/truth";
+
+/** @typedef {{ id: string, number: string, label: string, sublabel: string, content: React.ReactNode }} WorkflowStep */
 
 /**
- * WorkflowTabs — accessible tab interface.
+ * WorkflowTabs — accessible analytical workflow interface.
  *
- * Props:
- *   tabs: [{ id, label, content: ReactNode }]
- *   defaultTab: string (tab id)
- *   ariaLabel: string
+ * @param {{ steps: WorkflowStep[], defaultStep: string, ariaLabel: string }} props
  */
-export default function WorkflowTabs({ tabs, defaultTab, ariaLabel }) {
+export default function WorkflowTabs({ steps, defaultStep, ariaLabel }) {
   const isMobile = useIsMobile();
-  const [activeTab, setActiveTab] = useState(defaultTab || tabs[0]?.id);
+  const [activeStep, setActiveStep] = useState(defaultStep || steps[0]?.id);
 
-  const activeContent = tabs.find((t) => t.id === activeTab)?.content;
+  const activeContent = steps.find((s) => s.id === activeStep)?.content;
 
   return (
     <div>
-      {/* Tab list */}
+      {/* Step progression bar */}
       <div
         role="tablist"
         aria-label={ariaLabel}
         style={{
           display: "flex",
-          gap: SPACE.xs,
+          gap: 0,
           marginBottom: SPACE.cardLg,
-          flexWrap: "wrap",
+          flexDirection: isMobile ? "column" : "row",
         }}
       >
-        {tabs.map((tab) => {
-          const isActive = tab.id === activeTab;
+        {steps.map((step, index) => {
+          const isActive = step.id === activeStep;
+          const isLast = index === steps.length - 1;
+
           return (
-            <button
-              key={tab.id}
-              role="tab"
-              aria-selected={isActive}
-              aria-controls={`tabpanel-${tab.id}`}
-              id={`tab-${tab.id}`}
-              onClick={() => setActiveTab(tab.id)}
-              className="ds-focus-ring"
-              style={{
-                padding: isMobile ? "0.5rem 0.75rem" : "0.625rem 1.25rem",
-                fontSize: TYPE.caption.size,
-                fontWeight: 700,
-                letterSpacing: "0.06em",
-                fontFamily: TYPE.data,
-                textTransform: "uppercase",
-                background: isActive ? COLOR.strategy : "transparent",
-                color: isActive ? "#0B0E14" : COLOR.textMuted,
-                border: `1px solid ${isActive ? COLOR.strategy : COLOR.border}`,
-                borderRadius: RADIUS.md,
-                cursor: "pointer",
-                transition: "background 0.15s, color 0.15s, border-color 0.15s",
-                minHeight: 44,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {tab.label}
-            </button>
+            <React.Fragment key={step.id}>
+              {/* Individual step trigger */}
+              <button
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`tabpanel-${step.id}`}
+                id={`tab-${step.id}`}
+                onClick={() => setActiveStep(step.id)}
+                className="ds-focus-ring"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: isMobile ? "flex-start" : "center",
+                  textAlign: "left",
+                  padding: `${SPACE.comp} ${SPACE.compLg}`,
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: isMobile ? "none" : `2px solid ${isActive ? COLOR.strategy : "transparent"}`,
+                  borderLeft: isMobile ? `2px solid ${isActive ? COLOR.strategy : COLOR.border}` : "none",
+                  cursor: "pointer",
+                  transition: `border-color ${MOTION.fast}, background ${MOTION.fast}`,
+                  borderRadius: 0,
+                  minHeight: "auto",
+                  gap: SPACE.xs,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: SPACE.small,
+                    width: "100%",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "0.625rem",
+                      fontWeight: 700,
+                      fontFamily: TYPE.data,
+                      color: isActive ? COLOR.strategy : COLOR.textFaint,
+                      letterSpacing: "0.04em",
+                      transition: `color ${MOTION.fast}`,
+                    }}
+                  >
+                    {step.number}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: TYPE.caption.size,
+                      fontWeight: 700,
+                      letterSpacing: "0.06em",
+                      fontFamily: TYPE.data,
+                      textTransform: "uppercase",
+                      color: isActive ? COLOR.textPrimary : COLOR.textMuted,
+                      transition: `color ${MOTION.fast}`,
+                    }}
+                  >
+                    {step.label}
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: "0.6875rem",
+                    color: isActive ? COLOR.textSecondary : COLOR.textFaint,
+                    lineHeight: 1.4,
+                    transition: `color ${MOTION.fast}`,
+                  }}
+                >
+                  {step.sublabel}
+                </span>
+              </button>
+
+              {/* Connector (horizontal on desktop, hidden on mobile) */}
+              {!isLast && !isMobile && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    paddingBottom: "2rem",
+                    flexShrink: 0,
+                  }}
+                  aria-hidden="true"
+                >
+                  <div
+                    style={{
+                      width: "2rem",
+                      height: 1,
+                      background: COLOR.borderSubtle,
+                    }}
+                  />
+                  <svg
+                    width="6"
+                    height="8"
+                    viewBox="0 0 6 8"
+                    fill="none"
+                    style={{ marginLeft: -1 }}
+                  >
+                    <path
+                      d="M0 0 L6 4 L0 8 Z"
+                      fill={COLOR.borderSubtle}
+                    />
+                  </svg>
+                </div>
+              )}
+            </React.Fragment>
           );
         })}
       </div>
 
-      {/* Tab panel */}
+      {/* Active content panel */}
       <div
         role="tabpanel"
-        id={`tabpanel-${activeTab}`}
-        aria-labelledby={`tab-${activeTab}`}
-        style={{
-          background: COLOR.surface,
-          border: `1px solid ${COLOR.border}`,
-          borderRadius: RADIUS.lg,
-          padding: isMobile ? SPACE.card : SPACE.cardLg,
-        }}
+        id={`tabpanel-${activeStep}`}
+        aria-labelledby={`tab-${activeStep}`}
       >
         {activeContent}
+      </div>
+
+      {/* Demo disclaimer */}
+      <div style={{ textAlign: "center", marginTop: SPACE.cardLg }}>
+        <DemoLabel style={{ fontSize: "0.625rem" }} />
       </div>
     </div>
   );
