@@ -1,20 +1,20 @@
 "use client";
-import { C } from "@/lib/ui";
+import { COLOR, TYPE, SPACE, RADIUS } from "@/components/public/tokens";
 import { PAGE_MAX } from "./styles";
 import { useAuthModal } from "./AuthModalContext";
 
 const FOOTER_COLS = [
   {
-    heading: "Platform",
+    heading: "Product",
     links: [
       { label: "Features", href: "/features" },
-      { label: "Strategy Lab", href: "/strategy-lab" },
       { label: "Market Intelligence", href: "/market-intelligence" },
+      { label: "Strategy Lab", href: "/strategy-lab" },
       { label: "Paper Trading", href: "/paper-trading" },
     ],
   },
   {
-    heading: "Resources",
+    heading: "Learn",
     links: [
       { label: "How It Works", href: "/how-it-works" },
       { label: "About", href: "/about" },
@@ -26,80 +26,124 @@ export default function PublicFooter() {
   const { open: openAuth } = useAuthModal();
 
   return (
-    <footer style={{ borderTop: `1px solid ${C.border}`, background: "rgba(18, 22, 31, 0.4)" }}>
+    <footer
+      role="contentinfo"
+      style={{
+        borderTop: `1px solid ${COLOR.border}`,
+        background: COLOR.surfaceDeep,
+      }}
+    >
       <div
         style={{
           maxWidth: PAGE_MAX,
           margin: "0 auto",
-          padding: "48px 20px 32px",
+          padding: `${SPACE.sectionLg} ${SPACE.compLg} ${SPACE.section}`,
           display: "flex",
           flexWrap: "wrap",
-          gap: 40,
+          gap: SPACE.section,
           justifyContent: "space-between",
           alignItems: "flex-start",
         }}
       >
         {/* Brand */}
-        <div style={{ maxWidth: 300, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <div style={{ maxWidth: 300, minWidth: 200, flex: "1 1 240px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: SPACE.small, marginBottom: SPACE.comp }}>
             <span
               style={{
                 width: 28,
                 height: 28,
-                borderRadius: 7,
-                background: C.gold,
+                borderRadius: RADIUS.sm,
+                background: COLOR.strategy,
                 color: "#0B0E14",
                 display: "grid",
                 placeItems: "center",
                 fontWeight: 900,
-                fontSize: 11,
+                fontSize: 10,
               }}
             >
-              OD
+              SN
             </span>
-            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.2, color: C.text }}>
-              OPTIONS DASHBOARD
+            <span style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1.2, color: COLOR.textPrimary }}>
+              STRIKENOVA
             </span>
           </div>
-          <p style={{ fontSize: 13, color: C.faint, lineHeight: 1.65, margin: 0 }}>
-            A professional options analysis and paper-trading platform for traders
-            who want to turn market data into structured decisions.
+          <p style={{ fontSize: 13, color: COLOR.textMuted, lineHeight: 1.65, margin: 0 }}>
+            Options intelligence for structured decisions.
           </p>
         </div>
 
         {/* Link columns */}
-        <div style={{ display: "flex", gap: 48, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: SPACE.section, flexWrap: "wrap", flex: "2 1 320px" }}>
           {FOOTER_COLS.map((col) => (
-            <div key={col.heading} style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 120 }}>
-              <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, fontWeight: 600, marginBottom: 4 }}>
+            <div key={col.heading.toUpperCase()} style={{ display: "flex", flexDirection: "column", gap: SPACE.small, minWidth: 120 }}>
+              <div
+                style={{
+                  fontSize: TYPE.caption.size,
+                  letterSpacing: TYPE.caption.letterSpacing,
+                  color: COLOR.textFaint,
+                  fontWeight: 600,
+                  marginBottom: SPACE.micro,
+                  textTransform: "uppercase",
+                }}
+              >
                 {col.heading.toUpperCase()}
               </div>
               {col.links.map((link) => (
-                <a key={link.label + link.href} className="od-link" href={link.href}>
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="od-link ds-focus-ring"
+                  style={{ borderRadius: RADIUS.sm }}
+                >
                   {link.label}
                 </a>
               ))}
             </div>
           ))}
 
-          {/* Account column — buttons that open the modal */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 120 }}>
-            <div style={{ fontSize: 11, letterSpacing: 1.5, color: C.faint, fontWeight: 600, marginBottom: 4 }}>
+          {/* ACCOUNT column — buttons that open the modal */}
+          <div style={{ display: "flex", flexDirection: "column", gap: SPACE.small, minWidth: 120 }}>
+            <div
+              style={{
+                fontSize: TYPE.caption.size,
+                letterSpacing: TYPE.caption.letterSpacing,
+                color: COLOR.textFaint,
+                fontWeight: 600,
+                marginBottom: SPACE.micro,
+                textTransform: "uppercase",
+              }}
+            >
               ACCOUNT
             </div>
             <button
               onClick={openAuth}
               data-testid="footer-login-btn"
-              className="od-link"
-              style={{ background: "none", border: "none", textAlign: "left", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+              className="od-link ds-focus-ring"
+              style={{
+                background: "none",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                padding: 0,
+                fontFamily: "inherit",
+                borderRadius: RADIUS.sm,
+              }}
             >
               Log in
             </button>
             <button
               onClick={openAuth}
               data-testid="footer-get-started-btn"
-              className="od-link"
-              style={{ background: "none", border: "none", textAlign: "left", cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+              className="od-link ds-focus-ring"
+              style={{
+                background: "none",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                padding: 0,
+                fontFamily: "inherit",
+                borderRadius: RADIUS.sm,
+              }}
             >
               Get Started
             </button>
@@ -112,17 +156,17 @@ export default function PublicFooter() {
         style={{
           maxWidth: PAGE_MAX,
           margin: "0 auto",
-          padding: "20px 20px",
-          borderTop: `1px solid ${C.border}`,
+          padding: `${SPACE.comp} ${SPACE.compLg}`,
+          borderTop: `1px solid ${COLOR.border}`,
           display: "flex",
           justifyContent: "space-between",
           flexWrap: "wrap",
-          gap: 8,
+          gap: SPACE.small,
           fontSize: 12,
-          color: C.faint,
+          color: COLOR.textFaint,
         }}
       >
-        <span>&copy; {new Date().getFullYear()} Options Dashboard</span>
+        <span>&copy; {new Date().getFullYear()} StrikeNova</span>
         <span>NSE &amp; BSE index derivatives &middot; For education and research only</span>
       </div>
     </footer>

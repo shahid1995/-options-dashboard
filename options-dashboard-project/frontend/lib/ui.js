@@ -1,17 +1,25 @@
 "use client";
 import { useEffect, useState } from "react";
+import { COLOR } from "@/components/public/tokens";
 
-// Shared theme colors
+// =============================================================================
+// Canonical token bridge
+// =============================================================================
+// `C` is a backward-compatible alias for the canonical COLOR tokens defined in
+// `components/public/tokens.js`. All app pages import `C` from this module.
+// Do not add new color definitions here — extend the canonical source.
+// =============================================================================
+
 export const C = {
-  surface: "#12161F",
-  surface2: "#171C27",
-  border: "#242B3A",
-  muted: "#949CB0",
-  faint: "#7B8398",
-  text: "#E7E9EE",
-  gold: "#C9A15A",
-  green: "#4CAF7D",
-  red: "#E15252",
+  surface: COLOR.surface,
+  surface2: COLOR.surfaceElevated,
+  border: COLOR.border,
+  muted: COLOR.textSecondary,
+  faint: COLOR.textMuted,
+  text: COLOR.textPrimary,
+  gold: COLOR.strategy,
+  green: COLOR.positive,
+  red: COLOR.negative,
 };
 
 export const SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", "BANKEX", "SENSEX50"];

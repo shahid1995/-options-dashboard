@@ -25,14 +25,4 @@ describe("PrimaryCTA anatomical interaction", () => {
     expect(html).toContain("Explore the Platform");
     expect(html).toContain('href="/features"');
   });
-
-  it("keeps anatomy labels on a consistent left-aligned right-side rail", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(PrimaryCTA, { href: "/features" }, "Explore the Platform"),
-    );
-
-    expect(html).toContain('text-anchor="start"');
-    expect(html).not.toContain('text-anchor="end"');
-    expect(html).toContain("sn-cta-annotation-rail");
-  });
 });

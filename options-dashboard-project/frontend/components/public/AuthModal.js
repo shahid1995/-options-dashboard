@@ -199,8 +199,15 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setLoading(false);
     setTimeout(() => {
       onClose();
-      if (onAuth) onAuth();
-      else router.push("/dashboard");
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";
+      if (data?.session_id && appUrl) {
+        // Cross-origin handoff: navigate to authenticated app with session in fragment
+        window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);
+      } else {
+        // Fallback: same-origin navigation
+        if (onAuth) onAuth();
+        else router.push("/dashboard");
+      }
     }, 400);
   };
 
@@ -210,10 +217,15 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setSuccess("");
     setLoading(true);
     try {
-      const fn = tab === "signin" ? loginEmail : registerEmail;
-      const args = tab === "signin" ? [email, password] : [email, password, displayName];
-      const data = await fn(...args);
-      handleAuthSuccess(data);
+      if (tab === "signin") {
+        const data = await loginEmail(email, password);
+        handleAuthSuccess(data);
+      } else {
+        // Register first, then auto-login so the user gets a session.
+        await registerEmail(email, password, displayName);
+        const data = await loginEmail(email, password);
+        handleAuthSuccess(data);
+      }
     } catch (err) {
       setError(err.message || "Authentication failed. Please try again.");
       setLoading(false);

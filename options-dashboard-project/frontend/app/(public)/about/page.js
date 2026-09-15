@@ -1,9 +1,9 @@
 import AboutClientPage from "./ClientPage";
 
 export const metadata = {
-  title: "About the Options Trading Platform",
+  title: "About StrikeNova — Options Intelligence for Structured Decisions",
   description:
-    "Built around a simple idea: better trading decisions start with better understanding of the market. Learn about the platform philosophy.",
+    "StrikeNova is built to make options analysis more structured. Learn about the product philosophy, principles and what we are building next.",
 };
 
 export default function AboutPage() {

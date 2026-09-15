@@ -83,12 +83,12 @@ const CTA_CSS = `
   pointer-events: none;
   z-index: 1;
 }
-.sn-cta-annotation-rail {
+.sn-cta-annotation {
   opacity: 0;
   transition: opacity 0.22s ${MOTION.easeOut};
 }
-.sn-cta-wrapper:hover .sn-cta-annotation-rail,
-.sn-cta-wrapper:focus-within .sn-cta-annotation-rail {
+.sn-cta-wrapper:hover .sn-cta-annotation,
+.sn-cta-wrapper:focus-within .sn-cta-annotation {
   opacity: 1;
 }
 .sn-cta-annotation-line {
@@ -126,7 +126,7 @@ const CTA_CSS = `
   .sn-cta-primary,
   .sn-cta-primary .sn-cta-arrow,
   .sn-cta-primary .sn-cta-trajectory,
-  .sn-cta-annotation-rail {
+  .sn-cta-annotation {
     transition-duration: 0.01ms !important;
   }
   .sn-cta-primary:hover .sn-cta-arrow {
@@ -155,12 +155,12 @@ function Annotations({ buttonRef, wrapperRef }) {
 
   useEffect(() => {
     measure();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
-    if (observer && buttonRef.current) observer.observe(buttonRef.current);
-    if (observer && wrapperRef.current) observer.observe(wrapperRef.current);
+    const observer = new ResizeObserver(measure);
+    if (buttonRef.current) observer.observe(buttonRef.current);
+    if (wrapperRef.current) observer.observe(wrapperRef.current);
     window.addEventListener("resize", measure);
     return () => {
-      observer?.disconnect();
+      observer.disconnect();
       window.removeEventListener("resize", measure);
     };
   }, [measure]);
@@ -170,75 +170,72 @@ function Annotations({ buttonRef, wrapperRef }) {
   const { left, top, width, height } = dims;
   const right = left + width;
   const bottom = top + height;
+  const centerX = left + width / 2;
   const centerY = top + height / 2;
-  const railX = right + 42;
-  const labelX = railX + 10;
 
-  const radiusTargetX = right - 8;
-  const radiusTargetY = top + 8;
-  const radiusRailY = top - 18;
+  const iconX = right - 10;
+  const iconY = centerY;
+  const iconLabelX = Math.min(iconX + 32, left + width + 42);
+  const iconLabelY = centerY - 22;
 
-  const iconTargetX = right - 10;
-  const iconTargetY = centerY;
-  const iconRailY = centerY - 18;
+  const spacingX1 = left;
+  const spacingX2 = left + 24;
+  const spacingY = centerY;
+  const spacingLabelX = Math.max(2, left - 44);
+  const spacingLabelY = centerY - 4;
 
-  const spacingTargetX = left + 24;
-  const spacingTargetY = top - 7;
-  const spacingRailY = centerY + 2;
-
-  const directionTargetX = right - Math.min(52, width * 0.2);
-  const directionTargetY = centerY + 1;
-  const directionRailY = centerY + 22;
-
-  const surfaceTargetX = left + width * 0.58;
-  const surfaceTargetY = bottom;
+  const surfaceX = centerX;
+  const surfaceY = bottom;
+  const surfaceLabelX = centerX;
   const surfaceLabelY = bottom + 30;
+
+  const radiusX = right - 8;
+  const radiusY = top + 8;
+  const radiusLabelX = Math.min(right + 38, left + width + 50);
+  const radiusLabelY = top - 10;
+
+  const directionX = right - width * 0.22;
+  const directionY = centerY + 1;
+  const directionLabelX = Math.min(right + 56, left + width + 68);
+  const directionLabelY = bottom + 26;
 
   return (
     <svg className="sn-cta-annotations" aria-hidden="true">
-      <g className="sn-cta-annotation-rail" style={{ transitionDelay: "40ms" }}>
-        {/* Radius — top of the right-side rail */}
-        <g className="sn-cta-annotation sn-cta-annotation--radius">
-          <line className="sn-cta-annotation-line" x1={radiusTargetX} y1={radiusTargetY} x2={railX} y2={radiusRailY} />
-          <circle className="sn-cta-annotation-dot" cx={radiusTargetX} cy={radiusTargetY} r={DOT_R} />
-          <circle className="sn-cta-annotation-dot" cx={railX} cy={radiusRailY} r={DOT_R} />
-          <text className="sn-cta-annotation-label" x={labelX} y={radiusRailY + 3} textAnchor="start">RADIUS</text>
-        </g>
+      <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "40ms" }}>
+        <line className="sn-cta-annotation-line" x1={iconX} y1={iconY} x2={iconLabelX - 8} y2={iconLabelY} />
+        <circle className="sn-cta-annotation-dot" cx={iconX} cy={iconY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={iconLabelX - 8} cy={iconLabelY} r={DOT_R} />
+        <text className="sn-cta-annotation-label" x={iconLabelX} y={iconLabelY + 3}>ICON</text>
+      </g>
 
-        {/* Icon — spaced below radius */}
-        <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "60ms" }}>
-          <line className="sn-cta-annotation-line" x1={iconTargetX} y1={iconTargetY} x2={railX} y2={iconRailY} />
-          <circle className="sn-cta-annotation-dot" cx={iconTargetX} cy={iconTargetY} r={DOT_R} />
-          <circle className="sn-cta-annotation-dot" cx={railX} cy={iconRailY} r={DOT_R} />
-          <text className="sn-cta-annotation-label" x={labelX} y={iconRailY + 3} textAnchor="start">ICON</text>
-        </g>
+      <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "80ms" }}>
+        <line className="sn-cta-annotation-measure" x1={spacingX1} y1={top - 7} x2={spacingX2} y2={top - 7} />
+        <line className="sn-cta-annotation-measure" x1={spacingX1} y1={top - 11} x2={spacingX1} y2={top - 3} />
+        <line className="sn-cta-annotation-measure" x1={spacingX2} y1={top - 11} x2={spacingX2} y2={top - 3} />
+        <line className="sn-cta-annotation-line" x1={spacingX2} y1={top - 7} x2={spacingLabelX + 40} y2={spacingLabelY} />
+        <circle className="sn-cta-annotation-dot" cx={spacingX2} cy={top - 7} r={DOT_R} />
+        <text className="sn-cta-annotation-label" x={spacingLabelX} y={spacingLabelY + 3}>SPACING</text>
+      </g>
 
-        {/* Spacing — measures internal left padding, then joins the rail */}
-        <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "80ms" }}>
-          <line className="sn-cta-annotation-measure" x1={left} y1={spacingTargetY} x2={spacingTargetX} y2={spacingTargetY} />
-          <line className="sn-cta-annotation-measure" x1={left} y1={spacingTargetY - 4} x2={left} y2={spacingTargetY + 4} />
-          <line className="sn-cta-annotation-measure" x1={spacingTargetX} y1={spacingTargetY - 4} x2={spacingTargetX} y2={spacingTargetY + 4} />
-          <line className="sn-cta-annotation-line" x1={spacingTargetX} y1={spacingTargetY} x2={railX} y2={spacingRailY} />
-          <circle className="sn-cta-annotation-dot" cx={spacingTargetX} cy={spacingTargetY} r={DOT_R} />
-          <circle className="sn-cta-annotation-dot" cx={railX} cy={spacingRailY} r={DOT_R} />
-          <text className="sn-cta-annotation-label" x={labelX} y={spacingRailY + 3} textAnchor="start">SPACING</text>
-        </g>
+      <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "120ms" }}>
+        <line className="sn-cta-annotation-line" x1={surfaceX} y1={surfaceY} x2={surfaceX} y2={surfaceLabelY - 10} />
+        <circle className="sn-cta-annotation-dot" cx={surfaceX} cy={surfaceY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={surfaceX} cy={surfaceLabelY - 10} r={DOT_R} />
+        <text className="sn-cta-annotation-label" x={surfaceLabelX} y={surfaceLabelY} textAnchor="middle">SURFACE</text>
+      </g>
 
-        {/* Direction — lower right rail */}
-        <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "100ms" }}>
-          <line className="sn-cta-annotation-line" x1={directionTargetX} y1={directionTargetY} x2={railX} y2={directionRailY} />
-          <circle className="sn-cta-annotation-dot" cx={directionTargetX} cy={directionTargetY} r={DOT_R} />
-          <circle className="sn-cta-annotation-dot" cx={railX} cy={directionRailY} r={DOT_R} />
-          <text className="sn-cta-annotation-label" x={labelX} y={directionRailY + 3} textAnchor="start">DIRECTION</text>
-        </g>
+      <g className="sn-cta-annotation sn-cta-annotation--radius" style={{ transitionDelay: "160ms" }}>
+        <path className="sn-cta-annotation-line" d={`M ${radiusX} ${radiusY} Q ${radiusX + 14} ${radiusY} ${radiusX + 14} ${radiusY - 8} L ${radiusLabelX - 8} ${radiusY - 8}`} />
+        <circle className="sn-cta-annotation-dot" cx={radiusX} cy={radiusY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={radiusLabelX - 8} cy={radiusY - 8} r={DOT_R} />
+        <text className="sn-cta-annotation-label" x={radiusLabelX} y={radiusY - 5}>RADIUS</text>
+      </g>
 
-        {/* Surface — centered beneath the button */}
-        <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "120ms" }}>
-          <line className="sn-cta-annotation-line" x1={surfaceTargetX} y1={surfaceTargetY} x2={surfaceTargetX} y2={surfaceLabelY - 10} />
-          <circle className="sn-cta-annotation-dot" cx={surfaceTargetX} cy={surfaceTargetY} r={DOT_R} />
-          <circle className="sn-cta-annotation-dot" cx={surfaceTargetX} cy={surfaceLabelY - 10} r={DOT_R} />
-          <text className="sn-cta-annotation-label" x={surfaceTargetX} y={surfaceLabelY} textAnchor="middle">SURFACE</text>
-        </g>
+      <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "200ms" }}>
+        <line className="sn-cta-annotation-line" x1={directionX} y1={directionY} x2={directionLabelX - 8} y2={directionLabelY - 10} />
+        <circle className="sn-cta-annotation-dot" cx={directionX} cy={directionY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={directionLabelX - 8} cy={directionLabelY - 10} r={DOT_R} />
+        <text className="sn-cta-annotation-label" x={directionLabelX} y={directionLabelY - 7}>DIRECTION</text>
       </g>
     </svg>
   );
