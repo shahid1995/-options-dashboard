@@ -1064,6 +1064,37 @@ def delete_analytics_token(
 # ---------------------------------------------------------------------------
 
 
+def _popup_target_origins() -> list[str]:
+    """Frontend origins allowed to receive popup postMessages.
+
+    The primary FRONTEND origin plus every additional configured CORS
+    origin. Never a wildcard: the popup loops over EXACT origins so the
+    message is delivered only to the opener's real origin (which may be a
+    preview deployment listed in FRONTEND_URL/ADDITIONAL_CORS_ORIGINS
+    rather than the first entry).
+    """
+    origins: list[str] = []
+    for raw in (settings.FRONTEND_URL, settings.ADDITIONAL_CORS_ORIGINS):
+        for part in (raw or "").split(","):
+            origin = part.strip().rstrip("/")
+            if origin.startswith(("http://", "https://")) and origin not in origins:
+                origins.append(origin)
+    return origins or [settings.FRONTEND_ORIGIN]
+
+
+def _post_message_block(indent: str) -> str:
+    """Render one literal postMessage call per allowed origin.
+
+    Literal quoted origins (never '*') keep the messages inspectable and
+    the security test contract explicit.
+    """
+    lines = [
+        f'{indent}try {{ window.opener.postMessage(payload, "{origin}"); }} catch (_) {{}}'
+        for origin in _popup_target_origins()
+    ]
+    return "\n".join(lines)
+
+
 def _popup_success_response(broker: str) -> HTMLResponse:
     """Return an HTML page that posts a success message to the opener window.
 
@@ -1083,7 +1114,7 @@ def _popup_success_response(broker: str) -> HTMLResponse:
       status: "connected"
     }};
     try {{
-      window.opener.postMessage(payload, "{settings.FRONTEND_ORIGIN}");
+{_post_message_block("      ")}
     }} catch (_) {{}}
     // Close the popup after a brief delay to let the message be received.
     setTimeout(function() {{ window.close(); }}, 300);
@@ -1129,7 +1160,7 @@ def _popup_error_response(message: str) -> HTMLResponse:
       error: "connection_failed"
     }};
     try {{
-      window.opener.postMessage(payload, "{settings.FRONTEND_ORIGIN}");
+{_post_message_block("      ")}
     }} catch (_) {{}}
     setTimeout(function() {{ window.close(); }}, 2000);
   }})();

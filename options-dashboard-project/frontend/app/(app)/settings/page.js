@@ -511,8 +511,13 @@ function BrokerSection() {
       
       // Listen for message from popup
       const handleMessage = (event) => {
-        // Validate origin
-        if (event.origin !== window.location.origin) return;
+        // Validate origin: the popup completes on the API origin (the OAuth
+        // callback page lives there), so THAT origin — not the frontend's —
+        // is the legitimate sender. Same-origin fallback covers dev proxies.
+        const apiOrigin = process.env.NEXT_PUBLIC_API_URL
+          ? new URL(process.env.NEXT_PUBLIC_API_URL).origin
+          : window.location.origin;
+        if (event.origin !== apiOrigin) return;
         // Validate message source
         if (event.data?.source !== "strikenova-broker-oauth") return;
         // Validate broker
