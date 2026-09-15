@@ -4,6 +4,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Security: install the /auth/callback access-log redaction filter on
+# ``uvicorn.access`` BEFORE Uvicorn serves anything (import side effect,
+# idempotent). See app/services/access_log_redaction.py.
+import app.services.access_log_redaction  # noqa: F401
 from app.config import settings
 from app.db import init_db, SessionLocal
 from app.routers import annotations, auth, candles, chains, gex, historical_gex, live_gex, paper, resolve, templates
