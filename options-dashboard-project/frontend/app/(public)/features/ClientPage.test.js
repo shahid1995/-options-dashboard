@@ -27,3 +27,16 @@ describe("Features product story", () => {
     expect(content).toContain("START YOUR WORKFLOW");
   });
 });
+
+describe("Features product evidence", () => {
+  it("presents the six-step evidence sequence", () => {
+    const content = source();
+    expect(content).toContain("One workflow, six useful views");
+    expect(content).toContain('title: "Market View"');
+    expect(content).toContain('title: "Positioning"');
+    expect(content).toContain('title: "Strategy"');
+    expect(content).toContain('title: "Risk"');
+    expect(content).toContain('title: "Rehearsal"');
+    expect(content).toContain('title: "Review"');
+  });
+});
