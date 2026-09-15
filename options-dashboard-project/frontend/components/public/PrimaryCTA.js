@@ -1,9 +1,10 @@
 // StrikeNova Primary CTA — Anatomical interaction
 // Hover/focus reveals the button's construction: icon, spacing, surface, radius
 // Self-contained component for homepage hero CTA.
+// Anchor-driven geometry: connectors attach to measured button positions.
 
 "use client";
-import React from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "./tokens";
 
 const CTA_CSS = `
@@ -78,7 +79,6 @@ const CTA_CSS = `
   z-index: 1;
 }
 .sn-cta-annotation {
-  position: absolute;
   opacity: 0;
   transform: translateY(4px);
   transition: opacity 0.25s ${MOTION.easeOut},
@@ -137,60 +137,217 @@ const CTA_CSS = `
 }
 `;
 
-function Annotations() {
+function Annotations({ buttonRef, wrapperRef, visible }) {
+  const [dims, setDims] = useState(null);
+
+  const measure = useCallback(() => {
+    if (!buttonRef.current || !wrapperRef.current) return;
+
+    const buttonRect = buttonRef.current.getBoundingClientRect();
+    const wrapperRect = wrapperRef.current.getBoundingClientRect();
+
+    const left = buttonRect.left - wrapperRect.left;
+    const top = buttonRect.top - wrapperRect.top;
+    const width = buttonRect.width;
+    const height = buttonRect.height;
+
+    const paddingLeft = 28;
+    const paddingTop = 14;
+    const borderRadius = 8;
+
+    setDims({
+      left,
+      top,
+      width,
+      height,
+      paddingLeft,
+      paddingTop,
+      borderRadius,
+      iconX: left + width - 12,
+      iconY: top + height / 2,
+      spacingX: left + paddingLeft,
+      spacingY: top + height / 2,
+      surfaceX: left + width / 2,
+      surfaceY: top + height / 2,
+      radiusX: left + width - borderRadius,
+      radiusY: top + borderRadius,
+      directionX: left + width + 8,
+      directionY: top + height / 2 + 18,
+    });
+  }, [buttonRef, wrapperRef]);
+
+  useEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
+
+  if (!dims) return null;
+
+  const labelW = 60;
+  const labelH = 16;
+  const labelPad = 4;
+
   return (
-    <svg className="sn-cta-annotations" aria-hidden="true" width="100%" height="100%" viewBox="0 0 320 140" preserveAspectRatio="none">
-      {/* ICON annotation - right side pointing to arrow */}
+    <svg
+      className="sn-cta-annotations"
+      aria-hidden="true"
+      width="100%"
+      height="100%"
+      style={{ overflow: "visible" }}
+    >
+      {/* ICON: connector from arrow icon to label */}
       <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "50ms" }}>
-        <line className="sn-cta-annotation-line" x1="240" y1="70" x2="270" y2="40" />
-        <circle className="sn-cta-annotation-dot" cx="240" cy="70" r="2.5" />
-        <rect className="sn-cta-annotation-bg" x="272" y="28" width="40" height="16" rx="2" />
-        <text className="sn-cta-annotation-label" x="276" y="40">ICON</text>
+        <line
+          className="sn-cta-annotation-line"
+          x1={dims.iconX}
+          y1={dims.iconY}
+          x2={dims.iconX + 30}
+          y2={dims.iconY - 22}
+        />
+        <circle className="sn-cta-annotation-dot" cx={dims.iconX} cy={dims.iconY} r="2.5" />
+        <rect
+          className="sn-cta-annotation-bg"
+          x={dims.iconX + 32}
+          y={dims.iconY - 34}
+          width={labelW}
+          height={labelH}
+          rx="2"
+        />
+        <text
+          className="sn-cta-annotation-label"
+          x={dims.iconX + 32 + labelPad}
+          y={dims.iconY - 22}
+        >
+          ICON
+        </text>
       </g>
 
-      {/* SPACING annotation - left side pointing to padding */}
+      {/* SPACING: connector from internal left padding to label */}
       <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "100ms" }}>
-        <line className="sn-cta-annotation-line" x1="80" y1="70" x2="20" y2="70" />
-        <line className="sn-cta-annotation-line" x1="20" y1="55" x2="20" y2="85" />
-        <circle className="sn-cta-annotation-dot" cx="80" cy="70" r="2.5" />
-        <rect className="sn-cta-annotation-bg" x="0" y="58" width="58" height="16" rx="2" />
-        <text className="sn-cta-annotation-label" x="4" y="70">SPACING</text>
+        <line
+          className="sn-cta-annotation-line"
+          x1={dims.spacingX}
+          y1={dims.spacingY}
+          x2={dims.spacingX - 35}
+          y2={dims.spacingY}
+        />
+        <line
+          className="sn-cta-annotation-line"
+          x1={dims.left}
+          y1={dims.top - 6}
+          x2={dims.left}
+          y2={dims.top + dims.height + 6}
+        />
+        <circle className="sn-cta-annotation-dot" cx={dims.spacingX} cy={dims.spacingY} r="2.5" />
+        <rect
+          className="sn-cta-annotation-bg"
+          x={dims.spacingX - 35 - labelW - labelPad}
+          y={dims.spacingY - labelH / 2}
+          width={labelW}
+          height={labelH}
+          rx="2"
+        />
+        <text
+          className="sn-cta-annotation-label"
+          x={dims.spacingX - 35 - labelW - labelPad + labelPad}
+          y={dims.spacingY + 3}
+        >
+          SPACING
+        </text>
       </g>
 
-      {/* SURFACE annotation - bottom pointing to button body */}
+      {/* SURFACE: connector from button body center to label below */}
       <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "150ms" }}>
-        <line className="sn-cta-annotation-line" x1="160" y1="120" x2="160" y2="138" />
-        <circle className="sn-cta-annotation-dot" cx="160" cy="120" r="2.5" />
-        <rect className="sn-cta-annotation-bg" x="126" y="126" width="68" height="16" rx="2" />
-        <text className="sn-cta-annotation-label" x="130" y="138">SURFACE</text>
+        <line
+          className="sn-cta-annotation-line"
+          x1={dims.surfaceX}
+          y1={dims.surfaceY}
+          x2={dims.surfaceX}
+          y2={dims.surfaceY + 35}
+        />
+        <circle className="sn-cta-annotation-dot" cx={dims.surfaceX} cy={dims.surfaceY} r="2.5" />
+        <rect
+          className="sn-cta-annotation-bg"
+          x={dims.surfaceX - labelW / 2}
+          y={dims.surfaceY + 37}
+          width={labelW}
+          height={labelH}
+          rx="2"
+        />
+        <text
+          className="sn-cta-annotation-label"
+          x={dims.surfaceX - labelW / 2 + labelPad}
+          y={dims.surfaceY + 49}
+        >
+          SURFACE
+        </text>
       </g>
 
-      {/* RADIUS annotation - top-right pointing to corner */}
+      {/* RADIUS: connector from top-right corner to label */}
       <g className="sn-cta-annotation sn-cta-annotation--radius" style={{ transitionDelay: "200ms" }}>
-        <path className="sn-cta-annotation-line" d="M 220 20 L 260 20 Q 268 20 268 28 L 268 38" />
-        <circle className="sn-cta-annotation-dot" cx="220" cy="20" r="2.5" />
-        <rect className="sn-cta-annotation-bg" x="272" y="26" width="46" height="16" rx="2" />
-        <text className="sn-cta-annotation-label" x="276" y="38">RADIUS</text>
+        <path
+          className="sn-cta-annotation-line"
+          d={`M ${dims.radiusX} ${dims.radiusY} L ${dims.radiusX + 25} ${dims.radiusY - 15}`}
+        />
+        <circle className="sn-cta-annotation-dot" cx={dims.radiusX} cy={dims.radiusY} r="2.5" />
+        <rect
+          className="sn-cta-annotation-bg"
+          x={dims.radiusX + 27}
+          y={dims.radiusY - 27}
+          width={labelW}
+          height={labelH}
+          rx="2"
+        />
+        <text
+          className="sn-cta-annotation-label"
+          x={dims.radiusX + 27 + labelPad}
+          y={dims.radiusY - 15}
+        >
+          RADIUS
+        </text>
       </g>
 
-      {/* DIRECTION annotation - bottom-right pointing to arrow direction */}
+      {/* DIRECTION: connector from arrow trajectory to label */}
       <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "175ms" }}>
-        <line className="sn-cta-annotation-line" x1="225" y1="95" x2="255" y2="120" />
-        <circle className="sn-cta-annotation-dot" cx="225" cy="95" r="2.5" />
-        <rect className="sn-cta-annotation-bg" x="257" y="108" width="62" height="16" rx="2" />
-        <text className="sn-cta-annotation-label" x="261" y="120">DIRECTION</text>
+        <line
+          className="sn-cta-annotation-line"
+          x1={dims.directionX}
+          y1={dims.directionY - 10}
+          x2={dims.directionX + 30}
+          y2={dims.directionY + 5}
+        />
+        <circle className="sn-cta-annotation-dot" cx={dims.directionX} cy={dims.directionY - 10} r="2.5" />
+        <rect
+          className="sn-cta-annotation-bg"
+          x={dims.directionX + 32}
+          y={dims.directionY - 7}
+          width={labelW + 8}
+          height={labelH}
+          rx="2"
+        />
+        <text
+          className="sn-cta-annotation-label"
+          x={dims.directionX + 32 + labelPad}
+          y={dims.directionY + 5}
+        >
+          DIRECTION
+        </text>
       </g>
     </svg>
   );
 }
 
 export default function PrimaryCTA({ href = "/features", children }) {
+  const buttonRef = useRef(null);
+  const wrapperRef = useRef(null);
+
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: CTA_CSS }} />
-      <div className="sn-cta-wrapper">
-        <Annotations />
-        <a href={href} className="sn-cta-primary ds-focus-ring">
+      <div className="sn-cta-wrapper" ref={wrapperRef}>
+        <Annotations buttonRef={buttonRef} wrapperRef={wrapperRef} />
+        <a href={href} className="sn-cta-primary ds-focus-ring" ref={buttonRef}>
           <span className="sn-cta-label">{children}</span>
           <svg
             className="sn-cta-arrow"
