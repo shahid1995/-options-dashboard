@@ -35,6 +35,7 @@ from app.identity import (
     revoke_session,
 )
 from app.services import token_store
+from app.services.broker_authorization import persist_connection_authorization
 
 
 # ---------------------------------------------------------------------------
@@ -51,10 +52,29 @@ def _ensure_tables_exist():
 
 @pytest.fixture(autouse=True)
 def clear_token_store():
-    """Clear token store before and after each test."""
+    """Clear token store before and after each test.
+
+    BrokerAuthorization rows are deliberately NOT cleared by
+    token_store.clear_token() (they are connection-owned, not
+    session-scoped), so tests clear the table explicitly here to keep
+    the shared-engine isolation contract (e.g. the empty-DB startup
+    check) intact.
+    """
+    from app.identity import BrokerAuthorization
+
+    def _purge_authorizations():
+        db = _get_db()
+        try:
+            db.query(BrokerAuthorization).delete()
+            db.commit()
+        finally:
+            db.close()
+
     token_store.clear_token()
+    _purge_authorizations()
     yield
     token_store.clear_token()
+    _purge_authorizations()
 
 
 def _get_db():
@@ -262,14 +282,23 @@ class TestStartupDbCheck:
     """Verify startup DB health check (replaces broken rehydrate_cache)."""
 
     def test_db_check_counts_active_tokens(self, user, connection):
-        """startup_db_check() counts active tokens in DB."""
+        """startup_db_check() counts active BrokerAuthorizations (authoritative)."""
         session_id = token_store.set_token(
             "check-me",
             connection_id=connection.id,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
+        # The authoritative source: an active BrokerAuthorization on the
+        # connection (what the OAuth callback now persists).
         db = _get_db()
         try:
+            persist_connection_authorization(
+                db,
+                connection_id=connection.id,
+                broker=connection.broker,
+                access_token="check-me",
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
             create_session_record(db, str(user.id), session_id, broker_connection_id=connection.id)
             db.commit()
         finally:
@@ -559,7 +588,7 @@ class TestTokenPersistenceLifecycle:
         assert token_store.get_token(session_id) is None
 
     def test_startup_db_check_then_get_token(self, user, connection):
-        """startup_db_check is read-only; get_token DB fallback does the real work."""
+        """startup_db_check is read-only; get_token DB fallback (ownership path) does the real work."""
         session_id = token_store.set_token(
             "db-check-lifecycle",
             connection_id=connection.id,
@@ -567,6 +596,13 @@ class TestTokenPersistenceLifecycle:
         )
         db = _get_db()
         try:
+            persist_connection_authorization(
+                db,
+                connection_id=connection.id,
+                broker=connection.broker,
+                access_token="db-check-lifecycle",
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            )
             create_session_record(
                 db, str(user.id), session_id, broker_connection_id=connection.id
             )

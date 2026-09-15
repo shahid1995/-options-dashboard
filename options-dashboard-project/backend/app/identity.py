@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from app.db import Base
 
@@ -167,6 +167,12 @@ class BrokerConnection(Base):
     connected_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     disconnected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+    authorizations: Mapped[list["BrokerAuthorization"]] = relationship(
+        back_populates="connection",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
     __table_args__ = (
         UniqueConstraint("user_id", "broker", "broker_account_id", name="uq_broker_connection"),
         # Partial unique index: at most one default connection per (user, broker).
@@ -180,9 +186,16 @@ class BrokerConnection(Base):
 
 
 class BrokerToken(Base):
-    """Session-scoped broker token. (§5.2)
+    """Session-scoped broker token. (§5.2) — LEGACY, superseded.
 
     One row per (connection, session) pair. Tokens are encrypted at rest.
+
+    DEPRECATED by the BrokerAuthorization architecture: the authoritative
+    authorization source is now :class:`BrokerAuthorization`, which belongs
+    to the BrokerConnection and survives session expiry. The (connection,
+    session) row shape made every broker token hostage to one browser
+    session. Callers must use ``app.services.broker_authorization``;
+    existing rows are carried forward by migration (never destroyed).
     """
 
     __tablename__ = "broker_tokens"
@@ -201,6 +214,92 @@ class BrokerToken(Base):
     __table_args__ = (
         UniqueConstraint("connection_id", "session_hash", name="uq_broker_token_per_session"),
     )
+
+
+class BrokerAuthorization(Base):
+    """Current API authorization for a BrokerConnection — NOT session-owned.
+
+    One BrokerConnection has at most one active authorization at a time
+    (the broker's OAuth token state is singular). Each successful OAuth
+    callback inserts a NEW row and revokes the previous active one, so
+    the history of authorizations is preserved and the lifecycle of the
+    token material is independent of any StrikeNova browser session.
+
+    All token values are encrypted at rest (app.crypto). Token material
+    is NEVER exposed through repr(), str(), API responses, diagnostics,
+    or logging — see public_status() and the masked column reprs.
+    """
+
+    __tablename__ = "broker_authorizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(
+        ForeignKey("broker_connections.id", ondelete="CASCADE"), index=True
+    )
+
+    # Encrypted token material (never logged, never serialized).
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Lifecycle: active | expired | revoked | superseded
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    # How this authorization was obtained: oauth_callback | migration | refresh
+    method: Mapped[str] = mapped_column(String(32), default="oauth_callback")
+
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    connection: Mapped["BrokerConnection"] = relationship(back_populates="authorizations")
+
+    # Column-level repr masking: the explicit __repr__ lists ONLY safe
+    # metadata fields — token columns can never leak through repr()/str().
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return (
+            f"BrokerAuthorization(id={self.id!r}, "
+            f"connection_id={self.connection_id!r}, status={self.status!r}, "
+            f"method={self.method!r}, issued_at={self.issued_at!r})"
+        )
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return repr(self)
+
+    def access_token_plain(self) -> str | None:
+        """Decrypt and return the access token (in-process use only)."""
+        if self.access_token_encrypted is None:
+            return None
+        from app.crypto import decrypt
+
+        return decrypt(self.access_token_encrypted)
+
+    def refresh_token_plain(self) -> str | None:
+        """Decrypt and return the refresh token (in-process use only)."""
+        if self.refresh_token_encrypted is None:
+            return None
+        from app.crypto import decrypt
+
+        return decrypt(self.refresh_token_encrypted)
+
+    def public_status(self) -> dict:
+        """Safe view for API responses/diagnostics — metadata only, no secrets."""
+        return {
+            "id": self.id,
+            "connection_id": self.connection_id,
+            "status": self.status,
+            "method": self.method,
+            "has_access_token": self.access_token_encrypted is not None,
+            "has_refresh_token": self.refresh_token_encrypted is not None,
+            "access_token_expires_at": self.access_token_expires_at,
+            "refresh_token_expires_at": self.refresh_token_expires_at,
+            "issued_at": self.issued_at,
+            "last_refreshed_at": self.last_refreshed_at,
+            "last_used_at": self.last_used_at,
+        }
 
 
 def hash_session_id(session_id: str) -> str:

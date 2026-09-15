@@ -254,40 +254,30 @@ def _get_analytics_token_for_gex(user_id: str, *, connection_id: str) -> str | N
 
 
 def _get_oauth_token_for_gex(user_id: str) -> tuple[str | None, str | None]:
-    """Find an active OAuth session token for a specific user.
+    """Find the active broker authorization for a specific user.
 
-    OAuth tokens expire daily at 3:30 AM IST.
+    Broker-authorization architecture: resolution is pure ownership —
+    user → default BrokerConnection → active BrokerAuthorization. It no
+    longer depends on any live UserSession (background GEX capture must
+    survive logout/browser changes), and no session identifier is
+    returned as provenance.
+
     Returns (token, connection_id) or (None, None).
-    Only resolves tokens belonging to the specified user and broker
-    connection. No session identifier is returned as provenance.
-
-    Uses resolve_broker_token_by_session_hash() to avoid the double-hashing
-    bug of passing session_hash to get_token() which expects plaintext.
     """
     from app.db import SessionLocal
-    from app.identity import UserSession, resolve_broker_token_by_session_hash
-    from datetime import datetime, timezone
+    from app.services.broker_authorization import (
+        resolve_default_broker_authorization,
+    )
 
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
-        session = (
-            db.query(UserSession)
-            .filter(
-                UserSession.user_id == user_id,
-                UserSession.expires_at > now,
-                UserSession.revoked_at.is_(None),
-                UserSession.broker_connection_id.isnot(None),
-            )
-            .order_by(UserSession.created_at.desc())
-            .first()
-        )
-        if session is None or not session.broker_connection_id:
+        conn, authz = resolve_default_broker_authorization(db, user_id)
+        if conn is None or authz is None:
             return None, None
-        token = resolve_broker_token_by_session_hash(session.session_hash)
+        token = authz.access_token_plain()
         if not token:
             return None, None
-        return token, session.broker_connection_id
+        return token, conn.id
     finally:
         db.close()
 

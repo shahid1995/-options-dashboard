@@ -39,6 +39,7 @@ from app.identity import (
 )
 from sqlalchemy.exc import IntegrityError
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
+from app.services.broker_authorization import persist_connection_authorization
 from app.services import token_store
 
 logger = logging.getLogger(__name__)
@@ -386,6 +387,10 @@ async def callback(
             db, user.id, session_id,
             broker_connection_id=connection.id if connection else None,
         )
+        # LEGACY dual-write (transition only): the session-scoped
+        # BrokerToken row is no longer consulted for token resolution —
+        # the authoritative source is BrokerAuthorization below. Kept for
+        # one release for rollback safety; do NOT build on it.
         token_store.persist_broker_token_row(
             db,
             session_id,
@@ -398,8 +403,27 @@ async def callback(
         # remains the baseline (AD-11); this is best-effort persistence,
         # not a session-persistence strategy.
         refresh_token = getattr(adapter, "_refresh_token", None)
-        if isinstance(refresh_token, str) and refresh_token:
+        refresh_token = refresh_token if isinstance(refresh_token, str) and refresh_token else None
+        if refresh_token:
             token_store.persist_fyers_refresh_token(db, session_id, refresh_token)
+        # BrokerAuthorization — AUTHORITATIVE token source (architecture
+        # refactor): belongs to the BrokerConnection, NOT to this browser
+        # session. The initiating session proved WHO connected; the
+        # authorization's lifetime is independent of that session.
+        # Supersedes any previous active authorization for the connection.
+        if connection is not None:
+            persist_connection_authorization(
+                db,
+                connection_id=connection.id,
+                broker=broker_id,
+                access_token=access_token,
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+                refresh_token=refresh_token,
+                refresh_expires_at=(
+                    datetime.now(timezone.utc) + timedelta(days=15)
+                ) if refresh_token else None,
+                method="oauth_callback",
+            )
         db.commit()
 
     try:

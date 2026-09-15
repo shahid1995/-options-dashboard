@@ -325,28 +325,28 @@ def startup_db_check() -> int:
     """Verify DB connectivity and count active tokens at startup.
 
     Returns the number of active (non-expired, non-revoked) tokens in DB.
-    These tokens will be loaded on-demand via get_token() DB fallback.
-    Does NOT populate the in-memory cache.
+    These tokens will be loaded on-demand via get_token() DB fallback
+    (ownership path). Does NOT populate the in-memory cache.
     """
     count = 0
     try:
         from app.db import SessionLocal
-        from app.identity import BrokerToken, UserSession
+        from app.identity import BrokerAuthorization, BrokerConnection
         from datetime import datetime, timezone
 
         db = SessionLocal()
         try:
             now = datetime.now(timezone.utc)
             count = (
-                db.query(BrokerToken)
+                db.query(BrokerAuthorization)
                 .join(
-                    UserSession,
-                    BrokerToken.session_hash == UserSession.session_hash,
+                    BrokerConnection,
+                    BrokerAuthorization.connection_id == BrokerConnection.id,
                 )
                 .filter(
-                    BrokerToken.broker_token_encrypted.isnot(None),
-                    UserSession.revoked_at.is_(None),
-                    UserSession.expires_at > now,
+                    BrokerAuthorization.status == "active",
+                    BrokerAuthorization.access_token_encrypted.isnot(None),
+                    BrokerConnection.status.in_(("connected", "pending")),
                 )
                 .count()
             )
@@ -565,15 +565,21 @@ def _persist_token_to_db(session_id: str, token: str, connection_id: str | None,
 
 
 def _load_token_from_db(session_id: str) -> str | None:
-    """Load token from DB: BrokerToken (broker sessions) or UserSession (platform sessions).
+    """Load the broker access token for a session — ownership path.
 
-    For broker sessions: decrypt the broker access token from broker_tokens.
-    For platform sessions (Google/email): return the session_id as identity marker.
-    Platform sessions never create BrokerToken rows.
+    Broker-authorization architecture: token resolution follows
+    UserSession → user → BrokerConnection → active BrokerAuthorization.
+    The token is owned by the CONNECTION, not by this browser session —
+    so any active session of the connection's user resolves the same
+    broker token, and expiring/revoking one session never disconnects
+    the broker. A legacy session-scoped BrokerToken remains a fallback
+    for rows created before the architecture migration (see the LEGACY
+    dual-write note in auth.py); platform-only sessions return None.
     """
     from datetime import datetime, timezone
     from app.db import SessionLocal
-    from app.identity import BrokerToken, UserSession, hash_session_id
+    from app.identity import BrokerToken, UserSession, hash_session_id, BrokerAuthorization, BrokerConnection
+    from app.services.broker_authorization import resolve_default_broker_authorization
     from app.crypto import decrypt
 
     session_hash = hash_session_id(session_id)
@@ -581,7 +587,67 @@ def _load_token_from_db(session_id: str) -> str | None:
     try:
         now = datetime.now(timezone.utc)
 
-        # Path 1: Broker session — find BrokerToken + valid UserSession
+        # Path 0: platform session validity gate (either style of session).
+        us = (
+            db.query(UserSession)
+            .filter(
+                UserSession.session_hash == session_hash,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > now,
+            )
+            .first()
+        )
+        if us is not None:
+            # PRIMARY (authoritative): ownership path. The authorization
+            # belongs to the BrokerConnection — never to this browser
+            # session. A session's broker_connection_id is only a HINT for
+            # multi-connection users; the connection's user_id must match
+            # the session's user (fail closed otherwise).
+            conn_id = us.broker_connection_id
+            if conn_id:
+                conn = (
+                    db.query(BrokerConnection)
+                    .filter(
+                        BrokerConnection.id == conn_id,
+                        BrokerConnection.user_id == us.user_id,
+                        BrokerConnection.status.in_(("connected", "pending")),
+                    )
+                    .first()
+                )
+            else:
+                conn = None
+            if conn is None:
+                # Fresh session without a broker hint (or a stale hint):
+                # resolve the user's default connection — same connection,
+                # same authorization the consenting session used.
+                _conn_r, authz = resolve_default_broker_authorization(
+                    db, us.user_id, now=now
+                )
+            else:
+                authz = (
+                    db.query(BrokerAuthorization)
+                    .filter(
+                        BrokerAuthorization.connection_id == conn.id,
+                        BrokerAuthorization.status == "active",
+                    )
+                    .order_by(BrokerAuthorization.issued_at.desc())
+                    .first()
+                )
+            if authz is not None and authz.access_token_encrypted:
+                expiry = authz.access_token_expires_at
+                if expiry is None or expiry.tzinfo is None or expiry > now:
+                    return decrypt(authz.access_token_encrypted)
+                # Authorization expired on its own clock.
+                authz.status = "expired"
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    return None
+                return None
+
+        # Path 1 (LEGACY fallback): session-scoped BrokerToken —
+        # pre-migration rows only. Never written for new connections.
         row = (
             db.query(BrokerToken, UserSession)
             .join(
@@ -597,12 +663,8 @@ def _load_token_from_db(session_id: str) -> str | None:
             .first()
         )
         if row is not None:
-            bt, us = row
+            bt, _us = row
             return decrypt(bt.broker_token_encrypted)
-
-        # Path 2: Platform-only session (UserSession exists, no BrokerToken)
-        # get_token() is for BROKER tokens only — return None.
-        # Use has_platform_session() for platform identity checks.
 
         return None
     except Exception:

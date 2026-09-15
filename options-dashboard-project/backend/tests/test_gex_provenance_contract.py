@@ -5,7 +5,15 @@ from types import SimpleNamespace
 
 import app.db
 import app.identity
+import app.services.broker_authorization
 from app.main import _get_oauth_token_for_gex
+
+
+class _DummySessionDb:
+    """Minimal DB double: the ownership resolver is fully mocked out."""
+
+    def close(self):
+        return None
 from app.services.gex_history import (
     DATA_SOURCE_ANALYTICS_TOKEN,
     DATA_SOURCE_API_UPLOAD,
@@ -99,112 +107,57 @@ def test_api_upload_is_the_explicit_null_connection_case():
 
 
 def test_oauth_gex_resolver_returns_exact_connection_id(monkeypatch):
-    session = SimpleNamespace(
-        user_id="user-a",
-        session_hash="session-hash-a",
-        broker_connection_id="connection-a",
-        created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc),
-        revoked_at=None,
-    )
+    """Ownership-path resolution: token + EXACT connection id (never a session hash)."""
+    connection = SimpleNamespace(id="connection-a")
+    authz = SimpleNamespace(access_token_plain=lambda: "REAL_BROKER_TOKEN")
 
-    class _Query:
-        def filter(self, *args):
-            return self
+    seen = {}
 
-        def order_by(self, *args):
-            return self
+    def _fake_resolver(db, user_id):
+        seen["user_id"] = user_id
+        return connection, authz
 
-        def first(self):
-            return session
-
-    class _Db:
-        def query(self, *args):
-            return _Query()
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr(app.db, "SessionLocal", lambda: _Db())
+    monkeypatch.setattr(app.db, "SessionLocal", lambda: _DummySessionDb())
     monkeypatch.setattr(
-        app.identity,
-        "resolve_broker_token_by_session_hash",
-        lambda session_hash: "REAL_BROKER_TOKEN" if session_hash == session.session_hash else None,
+        app.services.broker_authorization,
+        "resolve_default_broker_authorization",
+        _fake_resolver,
     )
 
     token, connection_id = _get_oauth_token_for_gex("user-a")
 
+    assert seen["user_id"] == "user-a"
     assert token == "REAL_BROKER_TOKEN"
     assert connection_id == "connection-a"
 
 
 def test_oauth_gex_requires_broker_connection(monkeypatch):
-    session = SimpleNamespace(
-        user_id="user-a",
-        session_hash="session-hash-a",
-        broker_connection_id=None,
-        created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc),
-        revoked_at=None,
+    """No connected connection / active authorization → no token, no provenance."""
+    monkeypatch.setattr(app.db, "SessionLocal", lambda: _DummySessionDb())
+    monkeypatch.setattr(
+        app.services.broker_authorization,
+        "resolve_default_broker_authorization",
+        lambda db, user_id: (None, None),
     )
-
-    class _Query:
-        def filter(self, *args):
-            return self
-
-        def order_by(self, *args):
-            return self
-
-        def first(self):
-            return session
-
-    class _Db:
-        def query(self, *args):
-            return _Query()
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr(app.db, "SessionLocal", lambda: _Db())
-    monkeypatch.setattr(app.identity, "resolve_broker_token_by_session_hash", lambda _: "REAL_BROKER_TOKEN")
 
     result = _get_oauth_token_for_gex("user-a")
     assert result == (None, None)
 
 
 def test_oauth_capture_contract_is_broker_owned(monkeypatch):
-    """OAuth provenance must carry a broker connection, not a session identifier."""
-    session = SimpleNamespace(
-        user_id="user-a",
-        session_hash="session-hash-a",
-        broker_connection_id="connection-a",
-        created_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc),
-        revoked_at=None,
+    """OAuth provenance must carry a broker connection, never a session identifier."""
+    connection = SimpleNamespace(id="connection-a")
+    authz = SimpleNamespace(access_token_plain=lambda: "REAL_BROKER_TOKEN")
+
+    monkeypatch.setattr(app.db, "SessionLocal", lambda: _DummySessionDb())
+    monkeypatch.setattr(
+        app.services.broker_authorization,
+        "resolve_default_broker_authorization",
+        lambda db, user_id: (connection, authz),
     )
-
-    class _Query:
-        def filter(self, *args):
-            return self
-
-        def order_by(self, *args):
-            return self
-
-        def first(self):
-            return session
-
-    class _Db:
-        def query(self, *args):
-            return _Query()
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr(app.db, "SessionLocal", lambda: _Db())
-    monkeypatch.setattr(app.identity, "resolve_broker_token_by_session_hash", lambda _: "REAL_BROKER_TOKEN")
 
     token, connection_id = _get_oauth_token_for_gex("user-a")
 
     assert token == "REAL_BROKER_TOKEN"
     assert connection_id == "connection-a"
-    assert connection_id != session.session_hash
+    assert connection_id != "session-hash-a"
