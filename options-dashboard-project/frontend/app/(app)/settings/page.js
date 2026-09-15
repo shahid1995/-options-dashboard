@@ -547,16 +547,32 @@ function BrokerSection() {
       
       window.addEventListener("message", handleMessage);
       
-      // Set timeout to handle popup closure
-      setTimeout(() => {
-        if (popupWindow && !popupWindow.closed) {
-          // User closed popup manually
+      // Cancel detection: poll while the flow is in progress; the flow is
+      // only "cancelled" when the popup closes WITHOUT a message having
+      // arrived (manual close, consent denied and window shut, or popup
+      // blocked). Real FYERS login can take minutes — never cap the wait.
+      let messageReceived = false;
+      const markMessage = () => { messageReceived = true; };
+      const originalHandler = handleMessage;
+      const wrappedHandler = (event) => {
+        markMessage();
+        originalHandler(event);
+      };
+      window.removeEventListener("message", handleMessage);
+      window.addEventListener("message", wrappedHandler);
+      const cancelPoll = setInterval(() => {
+        if (messageReceived) {
+          clearInterval(cancelPoll);
+          return;
+        }
+        if (!popupWindow || popupWindow.closed) {
+          clearInterval(cancelPoll);
           setMessage(`${broker} connection cancelled.`);
           setPopup(null);
           setPopupLoading(false);
-          window.removeEventListener("message", handleMessage);
+          window.removeEventListener("message", wrappedHandler);
         }
-      }, 30000); // 30 second timeout
+      }, 500);
     } catch (err) {
       setMessage(err?.response?.data?.detail || err.message || "Failed to store credentials");
       setIsError(true);
