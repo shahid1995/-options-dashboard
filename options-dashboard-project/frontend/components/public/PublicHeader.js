@@ -97,12 +97,15 @@ export default function PublicHeader() {
             padding: `0 ${SPACE.compLg}`,
             height: 60,
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: SPACE.compLg,
-          }}
-        >
-          {/* Logo */}
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: SPACE.compLg,
+              boxSizing: "border-box",
+              width: "100%",
+              overflowX: "hidden",
+            }}
+            >
+            {/* Logo */}
           <a
             href="/"
             aria-label="StrikeNova — Home"
@@ -296,7 +299,7 @@ export default function PublicHeader() {
           position: "fixed",
           top: 60,
           left: 0,
-          right: 0,
+          width: "100vw",
           bottom: 0,
           zIndex: 99,
           background: "rgba(11, 14, 20, 0.96)",
@@ -309,7 +312,7 @@ export default function PublicHeader() {
           pointerEvents: mobileOpen ? "auto" : "none",
         }}
       >
-          <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: `${SPACE.cardLg} ${SPACE.compLg}`, display: "flex", flexDirection: "column", gap: SPACE.xs }}>
+          <div style={{ maxWidth: PAGE_MAX, margin: "0 auto", padding: `${SPACE.cardLg} ${SPACE.compLg}`, display: "flex", flexDirection: "column", gap: SPACE.xs, boxSizing: "border-box", width: "100%" }}>
             {NAV_LINKS.map((group) => {
               const groupActive = group.children.some((child) => isActive(pathname, child.href));
               return (

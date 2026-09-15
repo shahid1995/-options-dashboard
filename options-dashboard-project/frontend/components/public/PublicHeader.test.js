@@ -68,4 +68,19 @@ describe("PublicHeader — P6 Tests", () => {
     const html = renderHeader();
     expect(html).toContain("pub-nav-links");
   });
+
+  // Regression test for mobile overflow fix
+  it("mobile menu inner has box-sizing border-box to prevent overflow", () => {
+    const html = renderHeader();
+    const menuInnerMatch = html.match(/class="pub-mobile-menu"[^>]*>[\s\S]*?style="([^"]*box-sizing[^"]*)"/);
+    if (menuInnerMatch) {
+      expect(menuInnerMatch[1]).toContain("border-box");
+    }
+  });
+
+  it("header inner container has box-sizing border-box", () => {
+    const html = renderHeader();
+    const headerInnerMatch = html.match(/display:\s*flex[^}]*box-sizing:\s*border-box/);
+    expect(headerInnerMatch).toBeTruthy();
+  });
 });

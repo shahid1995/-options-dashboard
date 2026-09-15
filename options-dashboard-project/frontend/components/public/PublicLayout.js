@@ -51,8 +51,8 @@ export default function PublicLayout({ children }) {
     <AuthModalProvider>
       <GoogleRedirectHandler />
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-        <style>{PUBLIC_CSS}</style>
-        <style>{PUBLIC_DS_CSS}</style>
+        <style dangerouslySetInnerHTML={{ __html: PUBLIC_CSS }} />
+        <style dangerouslySetInnerHTML={{ __html: PUBLIC_DS_CSS }} />
         <PublicHeader />
         <main style={{ flex: 1 }}>{children}</main>
         <PublicFooter />

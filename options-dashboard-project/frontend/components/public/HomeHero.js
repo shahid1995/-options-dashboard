@@ -6,6 +6,8 @@ import React from "react";
 import { COLOR, TYPE, SPACE, RADIUS } from "@/components/public/tokens";
 import { LinkButton } from "@/components/public/buttons";
 import { useIsMobile } from "@/lib/ui";
+import PrimaryCTA from "./PrimaryCTA";
+import SecondaryCTA from "./SecondaryCTA";
 
 function HeroSignal({ label, value, detail, emphasis }) {
   return (
@@ -133,12 +135,12 @@ export default function HomeHero({ onGetStarted }) {
               marginTop: SPACE.cardLg,
             }}
           >
-            <LinkButton variant="primary" size="lg" href="/features" className="ds-focus-ring">
-              Explore the Platform <span aria-hidden="true">→</span>
-            </LinkButton>
-            <LinkButton variant="secondary" size="lg" href="/how-it-works" className="ds-focus-ring">
+            <PrimaryCTA href="/features">
+              Explore the Platform
+            </PrimaryCTA>
+            <SecondaryCTA href="/how-it-works">
               See How It Works
-            </LinkButton>
+            </SecondaryCTA>
           </div>
 
           <div

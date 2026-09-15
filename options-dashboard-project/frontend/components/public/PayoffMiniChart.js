@@ -50,7 +50,7 @@ export default function PayoffMiniChart() {
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
-        height="auto"
+        height={height}
         role="img"
         aria-label="Payoff diagram. Max profit ₹3,250. Max loss -₹9,750. Breakevens at 25,250 and 25,750."
         style={{ overflow: "visible" }}
