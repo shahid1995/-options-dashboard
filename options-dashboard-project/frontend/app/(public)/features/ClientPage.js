@@ -482,7 +482,7 @@ export default function FeaturesClientPage() {
           />
 
           {/* Primary capability grid */}
-          <CardGrid minItemWidth={320} gap={SPACE.compLg}>
+          <CardGrid minItemWidth={480} gap={SPACE.compLg}>
             {CAPABILITIES.map((cap) => (
               <CapabilityModule key={cap.id} cap={cap} />
             ))}
