@@ -1,46 +1,16 @@
-// StrikeNova Primary CTA — with destination preview on hover/focus
-// Signal → Direction → Decision → Destination revealed
+// StrikeNova Primary CTA — Anatomical interaction
+// Hover/focus reveals the button's construction: icon, spacing, surface, radius
 // Self-contained component for homepage hero CTA.
 
 "use client";
 import React from "react";
 import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "./tokens";
 
-const PREVIEW_ITEMS = [
-  {
-    index: "01",
-    label: "Market Intelligence",
-    href: "/market-intelligence",
-    color: COLOR.intelligence,
-    tagline: "See what the market is doing — in real time.",
-  },
-  {
-    index: "02",
-    label: "Strategy Lab",
-    href: "/strategy-lab",
-    color: COLOR.strategy,
-    tagline: "Build. Analyze. Test.",
-  },
-  {
-    index: "03",
-    label: "Risk & Scenarios",
-    href: "/strategy-lab",
-    color: COLOR.negative,
-    tagline: "Know your downside before you commit.",
-  },
-  {
-    index: "04",
-    label: "Paper Trading",
-    href: "/paper-trading",
-    color: COLOR.positive,
-    tagline: "Rehearse without risk.",
-  },
-];
-
 const CTA_CSS = `
 .sn-cta-wrapper {
   position: relative;
   display: inline-block;
+  padding: 48px 60px;
 }
 .sn-cta-primary {
   display: inline-flex;
@@ -58,10 +28,11 @@ const CTA_CSS = `
   text-decoration: none;
   cursor: pointer;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   transition: background ${MOTION.fast} ${MOTION.easeOut},
               border-color ${MOTION.fast} ${MOTION.easeOut},
               box-shadow ${MOTION.fast} ${MOTION.easeOut};
+  z-index: 2;
 }
 .sn-cta-primary:hover {
   background: #D9B36A;
@@ -100,81 +71,58 @@ const CTA_CSS = `
   width: 14px;
   opacity: 0.5;
 }
-.sn-cta-preview {
+.sn-cta-annotations {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 10;
-  width: 280px;
-  background: ${COLOR.surface};
-  border: 1px solid ${COLOR.border};
-  border-radius: ${RADIUS.md};
-  padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  opacity: 0;
-  transform: translateY(-4px);
+  inset: 0;
   pointer-events: none;
-  transition: opacity 0.2s ${MOTION.easeOut},
-              transform 0.2s ${MOTION.easeOut};
+  z-index: 1;
 }
-.sn-cta-wrapper:hover .sn-cta-preview,
-.sn-cta-wrapper:focus-within .sn-cta-preview {
+.sn-cta-annotation {
+  position: absolute;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.25s ${MOTION.easeOut},
+              transform 0.25s ${MOTION.easeOut};
+}
+.sn-cta-wrapper:hover .sn-cta-annotation,
+.sn-cta-wrapper:focus-within .sn-cta-annotation {
   opacity: 1;
   transform: translateY(0);
-  pointer-events: auto;
 }
-.sn-cta-preview-header {
-  padding: 0.25rem 0.25rem 0.5rem;
-  border-bottom: 1px solid ${COLOR.borderSubtle};
-  margin-bottom: 0.125rem;
+.sn-cta-annotation-line {
+  stroke: ${COLOR.textFaint};
+  stroke-width: 1;
+  fill: none;
 }
-.sn-cta-preview-title {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: ${COLOR.textPrimary};
-  font-family: inherit;
-  letter-spacing: 0.02em;
+.sn-cta-annotation-dot {
+  fill: ${COLOR.strategy};
 }
-.sn-cta-preview-sub {
-  font-size: 0.6875rem;
-  color: ${COLOR.textMuted};
-  font-family: inherit;
-}
-.sn-cta-preview-item {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.25rem;
-  border-radius: ${RADIUS.sm};
-  transition: background ${MOTION.fast} ${MOTION.easeOut};
-}
-.sn-cta-preview-item:hover {
-  background: ${COLOR.surfaceElevated};
-}
-.sn-cta-preview-index {
-  font-size: 0.625rem;
-  font-weight: 700;
+.sn-cta-annotation-label {
   font-family: ${TYPE.data};
-  width: 1.25rem;
-  flex-shrink: 0;
-}
-.sn-cta-preview-label {
-  font-size: 0.75rem;
+  font-size: 9px;
   font-weight: 600;
-  color: ${COLOR.textPrimary};
-  font-family: inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  fill: ${COLOR.textSecondary};
 }
-.sn-cta-preview-tagline {
-  display: none;
+.sn-cta-annotation-bg {
+  fill: ${COLOR.surface};
+  opacity: 0.9;
+}
+@media (max-width: 768px) {
+  .sn-cta-wrapper {
+    padding: 36px 40px;
+  }
+  .sn-cta-annotation--spacing,
+  .sn-cta-annotation--radius {
+    display: none;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .sn-cta-primary,
   .sn-cta-primary .sn-cta-arrow,
   .sn-cta-primary .sn-cta-trajectory,
-  .sn-cta-preview {
+  .sn-cta-annotation {
     transition-duration: 0.01ms !important;
   }
   .sn-cta-primary:hover .sn-cta-arrow {
@@ -183,17 +131,65 @@ const CTA_CSS = `
   .sn-cta-primary:hover .sn-cta-trajectory {
     display: none;
   }
-  .sn-cta-preview {
+  .sn-cta-annotation {
     transform: none;
   }
 }
 `;
+
+function Annotations() {
+  return (
+    <svg className="sn-cta-annotations" aria-hidden="true" width="100%" height="100%" viewBox="0 0 320 140" preserveAspectRatio="none">
+      {/* ICON annotation - right side pointing to arrow */}
+      <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "50ms" }}>
+        <line className="sn-cta-annotation-line" x1="240" y1="70" x2="270" y2="40" />
+        <circle className="sn-cta-annotation-dot" cx="240" cy="70" r="2.5" />
+        <rect className="sn-cta-annotation-bg" x="272" y="28" width="40" height="16" rx="2" />
+        <text className="sn-cta-annotation-label" x="276" y="40">ICON</text>
+      </g>
+
+      {/* SPACING annotation - left side pointing to padding */}
+      <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "100ms" }}>
+        <line className="sn-cta-annotation-line" x1="80" y1="70" x2="20" y2="70" />
+        <line className="sn-cta-annotation-line" x1="20" y1="55" x2="20" y2="85" />
+        <circle className="sn-cta-annotation-dot" cx="80" cy="70" r="2.5" />
+        <rect className="sn-cta-annotation-bg" x="0" y="58" width="58" height="16" rx="2" />
+        <text className="sn-cta-annotation-label" x="4" y="70">SPACING</text>
+      </g>
+
+      {/* SURFACE annotation - bottom pointing to button body */}
+      <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "150ms" }}>
+        <line className="sn-cta-annotation-line" x1="160" y1="120" x2="160" y2="138" />
+        <circle className="sn-cta-annotation-dot" cx="160" cy="120" r="2.5" />
+        <rect className="sn-cta-annotation-bg" x="126" y="126" width="68" height="16" rx="2" />
+        <text className="sn-cta-annotation-label" x="130" y="138">SURFACE</text>
+      </g>
+
+      {/* RADIUS annotation - top-right pointing to corner */}
+      <g className="sn-cta-annotation sn-cta-annotation--radius" style={{ transitionDelay: "200ms" }}>
+        <path className="sn-cta-annotation-line" d="M 220 20 L 260 20 Q 268 20 268 28 L 268 38" />
+        <circle className="sn-cta-annotation-dot" cx="220" cy="20" r="2.5" />
+        <rect className="sn-cta-annotation-bg" x="272" y="26" width="46" height="16" rx="2" />
+        <text className="sn-cta-annotation-label" x="276" y="38">RADIUS</text>
+      </g>
+
+      {/* DIRECTION annotation - bottom-right pointing to arrow direction */}
+      <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "175ms" }}>
+        <line className="sn-cta-annotation-line" x1="225" y1="95" x2="255" y2="120" />
+        <circle className="sn-cta-annotation-dot" cx="225" cy="95" r="2.5" />
+        <rect className="sn-cta-annotation-bg" x="257" y="108" width="62" height="16" rx="2" />
+        <text className="sn-cta-annotation-label" x="261" y="120">DIRECTION</text>
+      </g>
+    </svg>
+  );
+}
 
 export default function PrimaryCTA({ href = "/features", children }) {
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: CTA_CSS }} />
       <div className="sn-cta-wrapper">
+        <Annotations />
         <a href={href} className="sn-cta-primary ds-focus-ring">
           <span className="sn-cta-label">{children}</span>
           <svg
@@ -214,18 +210,6 @@ export default function PrimaryCTA({ href = "/features", children }) {
           </svg>
           <span className="sn-cta-trajectory" aria-hidden="true" />
         </a>
-        <div className="sn-cta-preview" aria-hidden="true">
-          <div className="sn-cta-preview-header">
-            <div className="sn-cta-preview-title">Explore StrikeNova</div>
-            <div className="sn-cta-preview-sub">Follow the decision workflow</div>
-          </div>
-          {PREVIEW_ITEMS.map((item) => (
-            <a key={item.index} href={item.href} className="sn-cta-preview-item" tabIndex={-1}>
-              <span className="sn-cta-preview-index" style={{ color: item.color }}>{item.index}</span>
-              <span className="sn-cta-preview-label">{item.label}</span>
-            </a>
-          ))}
-        </div>
       </div>
     </>
   );
