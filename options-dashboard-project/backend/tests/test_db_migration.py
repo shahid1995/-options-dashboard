@@ -103,7 +103,7 @@ def test_init_db_uses_alembic(monkeypatch, temp_engine):
     assert "positions" in tables
     assert "paper_orders" in tables
     assert "alembic_version" in tables
-    assert len(tables) == 37  # 36 app tables + alembic_version (Day41 added broker_raw_observation + 4 fill-ledger tables; was 27 at 10.2B-1)
+    assert len(tables) == 39  # 38 app tables + alembic_version (Day41.2 order_family_sync_lock + BrokerAuthorization broker_authorizations now apply via the merge head; was 37 under the single-branch head)
 
 
 def test_init_db_creates_legacy_columns_via_baseline(monkeypatch, temp_engine):
