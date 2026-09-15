@@ -115,6 +115,7 @@ def mock_fyers_adapter(monkeypatch: object, profile: dict) -> None:
     adapter._refresh_token = "fyers-refresh-token-value"
 
     monkeypatch.setattr("app.routers.auth.gateway.create", lambda *a, **kw: adapter)
+    return adapter
 
 
 # ---------------------------------------------------------------------------
@@ -619,3 +620,106 @@ def test_popup_kick_is_broker_bound(client: TestClient, db_session: object):
         follow_redirects=False,
     )
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Test L: REAL FYERS redirect shape — code (status) AND auth_code (JWT) together
+#
+# Staging incident (2026-09-15, live consent): FYERS v3 redirects back with
+# `s=ok&code=200&auth_code=<JWT>&state=...` — `code` is a NUMERIC STATUS, not
+# the authorization code. The old `code = code or auth_code` alias bound
+# code="200" (truthy) and exchanged the literal string "200", which FYERS
+# rejected (UPSTREAM_ERROR: invalid auth code). Regression: with the REAL
+# shape, the JWT must reach validate-authcode and "200" must NEVER be sent.
+# ---------------------------------------------------------------------------
+def test_callback_fyers_real_redirect_shape_exchanges_auth_code_jwt(
+    client: TestClient,
+    db_session: object,
+    monkeypatch: object,
+):
+    """FYERS callback with BOTH code=200 and auth_code=<JWT> exchanges the JWT."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_byob(db_session, user, "FYERS")
+    adapter = mock_fyers_adapter(monkeypatch, fyers_profile())
+
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
+    resp = client.get(
+        "/auth/callback",
+        params={
+            "s": "ok",
+            "code": "200",  # FYERS status code, NOT the authorization code
+            "auth_code": "real-fyers-auth-code-jwt",  # the actual JWT
+            "state": state,
+        },
+        follow_redirects=False,
+    )
+
+    # The exchange succeeded (popup success HTML, not the error page).
+    assert resp.status_code == 200
+    assert "Unable to connect" not in resp.text
+    exchanged = adapter.exchange_authorization_code.call_args[0][0]
+    assert exchanged == "real-fyers-auth-code-jwt"
+    assert exchanged != "200"
+
+
+def test_callback_fyers_auth_code_absent_falls_back_to_code(
+    client: TestClient,
+    db_session: object,
+    monkeypatch: object,
+):
+    """Without auth_code, FYERS still exchanges the `code` param (compat fallback)."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_byob(db_session, user, "FYERS")
+    adapter = mock_fyers_adapter(monkeypatch, fyers_profile())
+
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
+    resp = client.get(
+        "/auth/callback",
+        params={"code": "legacy-code-value", "state": state},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 200
+    assert "Unable to connect" not in resp.text
+    assert adapter.exchange_authorization_code.call_args[0][0] == "legacy-code-value"
+
+
+def test_callback_upstox_preserves_code_parameter_behavior(
+    client: TestClient,
+    db_session: object,
+    monkeypatch: object,
+):
+    """Upstox flow is untouched: `code` is the authorization code as before."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_byob(db_session, user, "UPSTOX")
+
+    upstox_adapter = AsyncMock()
+    upstox_adapter.exchange_authorization_code = AsyncMock(return_value="upstox-token")
+    upstox_adapter.get_profile = AsyncMock(
+        return_value={
+            "data": {
+                "user_id": "upstox-user-1",
+                "email": "test@example.com",
+                "user_name": "Test User",
+                "broker": "UPSTOX",
+                "is_active": True,
+            }
+        }
+    )
+    upstox_adapter.extract_account_id = MagicMock(return_value="upstox-user-1")
+    monkeypatch.setattr(
+        "app.routers.auth.gateway.create", lambda *a, **kw: upstox_adapter
+    )
+
+    state = token_store.create_oauth_state(session_id=session_id, broker="UPSTOX")
+    resp = client.get(
+        "/auth/callback",
+        params={"code": "upstox-auth-code", "state": state},
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 307  # non-popup success redirect
+    assert upstox_adapter.exchange_authorization_code.call_args[0][0] == "upstox-auth-code"

@@ -236,16 +236,24 @@ async def callback(
     because FYERS only preserves ``auth_code`` and ``state`` through its
     redirect — custom query parameters would be lost.
     """
-    # FYERS v3 redirects back with `auth_code` (its own parameter name, see
-    # PHASE_10_2B_CONNECTION_ARCHITECTURE.md §FYERS flow) instead of OAuth's
-    # standard `code`. Accept both — the broker identity comes from the signed
-    # state, so the extra accepted parameter cannot cross broker flows.
-    code = code or auth_code
     # Phase 10.2B-3: Extract session_id + broker + popup from signed OAuth state.
     # This eliminates the race condition — we know EXACTLY which user initiated OAuth.
     state_data = token_store.consume_oauth_state(state)
     if state_data is None:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+    # Resolve the authorization code AFTER consuming the state, because the
+    # choice is broker-specific and the broker identity is ONLY trustworthy
+    # from the signed state (never from the query string). FYERS v3 redirects
+    # back with `s=ok&code=200&auth_code=<JWT>` — its `code` is a NUMERIC
+    # STATUS, while the real authorization code arrives as `auth_code`
+    # (staging incident 2026-09-15: the previous `code = code or auth_code`
+    # alias bound code="200" and exchanged the literal "200", which FYERS
+    # rejected). Upstox uses the standard OAuth `code` parameter.
+    broker_id_for_code = state_data.get("broker", "UPSTOX")
+    if broker_id_for_code == "FYERS":
+        code = auth_code or code
+    # else: keep the standard `code` parameter as-is.
 
     # Extract popup flag from signed state (not query param — broker wouldn't preserve it)
     popup = state_data.get("popup", False)
