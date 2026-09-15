@@ -44,8 +44,11 @@ describe("Context to Strategy Workflow", () => {
     const html = renderPage();
     expect(html).toContain("25,500");
     expect(html).toContain("BALANCED");
-    expect(html).toContain("0.92");
+    expect(html).toContain("1.04");
     expect(html).toContain("14.2%");
+    expect(html).toContain("+18.4M");
+    expect(html).toContain("25,470");
+    expect(html).toContain("13.8");
   });
 
   it("contains supporting labels for each workflow stage", () => {
@@ -54,6 +57,24 @@ describe("Context to Strategy Workflow", () => {
     expect(html).toContain("Choose the structure");
     expect(html).toContain("See how it behaves");
     expect(html).toContain("Know the boundaries");
+  });
+
+  it("contains the enhanced strategy example", () => {
+    const html = renderPage();
+    expect(html).toContain("BULL CALL SPREAD");
+    expect(html).toContain("25,450");
+    expect(html).toContain("25,550");
+    expect(html).toContain("45 pts");
+    expect(html).toContain("+55 pts");
+  });
+
+  it("contains a mathematically consistent reward-to-risk example", () => {
+    const html = renderPage();
+    expect(html).toContain("1.22 : 1");
+    expect(html).toContain("REWARD / RISK");
+    expect(html).toContain("BREAKEVEN 25,495");
+    expect(html).toContain("LOSS ZONE");
+    expect(html).toContain("PROFIT ZONE");
   });
 
   it("contains Strategy Lab CTA linked to /strategy-lab", () => {
@@ -75,16 +96,12 @@ describe("Context to Strategy Workflow", () => {
     expect(html).toContain('role="tabpanel"');
   });
 
-  it("contains MAX PROFIT and MAX LOSS metrics", () => {
+  it("retains the homepage risk example outside the workflow", () => {
     const html = renderPage();
     expect(html).toContain("MAX PROFIT");
     expect(html).toContain("3,250");
     expect(html).toContain("MAX LOSS");
     expect(html).toContain("9,750");
-  });
-
-  it("contains breakeven levels", () => {
-    const html = renderPage();
     expect(html).toContain("25,250");
     expect(html).toContain("25,750");
   });
