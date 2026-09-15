@@ -129,31 +129,40 @@ function StrategyPayoffPanel() {
         <div>
           <div style={{ fontSize: "0.625rem", fontWeight: 600, letterSpacing: "0.08em", color: COLOR.textFaint, marginBottom: SPACE.small }}>ILLUSTRATIVE EXPIRY PAYOFF · BULL CALL SPREAD</div>
           <div style={{ width: "100%", overflow: "hidden" }}>
-            <svg viewBox="0 0 620 250" width="100%" height="250" role="img" aria-label="Illustrative bull call spread payoff. Maximum loss is negative 45 points, breakeven is 25,495, and maximum profit is positive 55 points.">
+            <svg viewBox="0 0 620 250" width="100%" height="250" role="img" aria-label="Illustrative bull call spread payoff. Maximum loss is negative 45 points, breakeven is 25,495, short strike is 25,550, and maximum profit is positive 55 points.">
+              {/* Reference grid */}
               <line x1="48" y1="125" x2="590" y2="125" stroke={COLOR.border} strokeWidth="1.5" />
               <line x1="48" y1="55" x2="590" y2="55" stroke={COLOR.borderSubtle} strokeWidth="1" strokeDasharray="3 4" />
               <line x1="48" y1="195" x2="590" y2="195" stroke={COLOR.borderSubtle} strokeWidth="1" strokeDasharray="3 4" />
 
-              <path d="M48 195 L230 195 L310 125 L590 55 L590 125 L48 125 Z" fill={COLOR.negative} opacity="0.13" />
-              <path d="M310 125 L590 55 L590 125 L310 125 Z" fill={COLOR.positive} opacity="0.13" />
-              <path d="M48 195 L230 195 L310 125 L590 55" fill="none" stroke={COLOR.textPrimary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              {/* Defined downside: flat loss until long strike */}
+              <path d="M48 195 L160 195 L300 125" fill="none" stroke={COLOR.negative} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+              <path d="M48 195 L160 195 L300 125 L48 125 Z" fill={COLOR.negative} opacity="0.09" />
 
-              <line x1="310" y1="38" x2="310" y2="210" stroke={COLOR.strategy} strokeWidth="1" strokeDasharray="4 4" opacity="0.7" />
-              <line x1="244" y1="38" x2="244" y2="210" stroke={COLOR.strategy} strokeWidth="1" strokeDasharray="3 4" opacity="0.45" />
-              <circle cx="278" cy="147" r="4" fill={COLOR.textPrimary} />
+              {/* Rising payoff between strikes, then capped at max profit */}
+              <path d="M300 125 L403 55 L590 55" fill="none" stroke={COLOR.positive} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M300 125 L403 55 L590 55 L590 125 L300 125 Z" fill={COLOR.positive} opacity="0.09" />
 
+              {/* Key levels */}
+              <line x1="300" y1="38" x2="300" y2="210" stroke={COLOR.strategy} strokeWidth="1" strokeDasharray="4 4" opacity="0.8" />
+              <line x1="310" y1="38" x2="310" y2="210" stroke={COLOR.borderSubtle} strokeWidth="1" strokeDasharray="2 5" opacity="0.8" />
+              <line x1="403" y1="38" x2="403" y2="210" stroke={COLOR.strategy} strokeWidth="1" strokeDasharray="4 4" opacity="0.65" />
+              <circle cx="310" cy="118" r="4" fill={COLOR.textPrimary} />
+
+              {/* Value labels */}
               <text x="44" y="48" fill={COLOR.textFaint} fontSize="10" textAnchor="end" fontFamily="monospace">+55</text>
               <text x="44" y="129" fill={COLOR.textFaint} fontSize="10" textAnchor="end" fontFamily="monospace">0</text>
               <text x="44" y="199" fill={COLOR.textFaint} fontSize="10" textAnchor="end" fontFamily="monospace">-45</text>
 
+              {/* Strike / spot labels */}
               <text x="160" y="216" fill={COLOR.textFaint} fontSize="10" textAnchor="middle" fontFamily="monospace">25,450</text>
-              <text x="244" y="229" fill={COLOR.strategy} fontSize="9" textAnchor="middle" fontFamily="monospace">BREAKEVEN 25,495</text>
-              <text x="310" y="216" fill={COLOR.textFaint} fontSize="10" textAnchor="middle" fontFamily="monospace">25,500</text>
+              <text x="300" y="232" fill={COLOR.strategy} fontSize="9" textAnchor="middle" fontFamily="monospace">BREAKEVEN 25,495</text>
+              <text x="310" y="216" fill={COLOR.textPrimary} fontSize="10" textAnchor="middle" fontFamily="monospace">SPOT 25,500</text>
+              <text x="403" y="232" fill={COLOR.strategy} fontSize="9" textAnchor="middle" fontFamily="monospace">SHORT 25,550</text>
               <text x="590" y="216" fill={COLOR.textFaint} fontSize="10" textAnchor="end" fontFamily="monospace">25,650</text>
 
-              <text x="82" y="182" fill={COLOR.negative} fontSize="9" fontWeight="700">LOSS ZONE</text>
-              <text x="495" y="72" fill={COLOR.positive} fontSize="9" fontWeight="700">PROFIT ZONE</text>
-              <text x="278" y="139" fill={COLOR.textPrimary} fontSize="9" textAnchor="middle">SPOT</text>
+              <text x="82" y="182" fill={COLOR.negative} fontSize="9" fontWeight="700">MAX LOSS</text>
+              <text x="467" y="48" fill={COLOR.positive} fontSize="9" fontWeight="700">MAX PROFIT · CAPPED</text>
             </svg>
           </div>
         </div>
@@ -244,7 +253,6 @@ export default function WorkflowTabs({ steps, defaultStep, ariaLabel }) {
 
   return (
     <div>
-      {/* Step progression bar */}
       <div
         role="tablist"
         aria-label={ariaLabel}
@@ -312,7 +320,6 @@ export default function WorkflowTabs({ steps, defaultStep, ariaLabel }) {
         })}
       </div>
 
-      {/* Active content panel */}
       <div role="tabpanel" id={`tabpanel-${activeStep}`} aria-labelledby={`tab-${activeStep}`}>
         {displayedContent}
       </div>
