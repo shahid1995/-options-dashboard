@@ -1,11 +1,19 @@
 // StrikeNova Primary CTA — Anatomical interaction
 // Hover/focus reveals the button's construction: icon, spacing, surface, radius
 // Self-contained component for homepage hero CTA.
-// Anchor-driven geometry: connectors attach to measured button positions.
+// Anchor-driven geometry with refined connector system.
 
 "use client";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { COLOR, TYPE, SPACE, RADIUS, MOTION } from "./tokens";
+
+const DOT_R = 3;
+const STROKE_WIDTH = 2;
+const LABEL_FONT = `${TYPE.data}`;
+const LABEL_SIZE = "9px";
+const LABEL_WEIGHT = "600";
+const LABEL_SPACING = "0.06em";
+const LABEL_COLOR = COLOR.textSecondary;
 
 const CTA_CSS = `
 .sn-cta-wrapper {
@@ -91,23 +99,19 @@ const CTA_CSS = `
 }
 .sn-cta-annotation-line {
   stroke: ${COLOR.textFaint};
-  stroke-width: 1;
+  stroke-width: ${STROKE_WIDTH};
   fill: none;
 }
 .sn-cta-annotation-dot {
   fill: ${COLOR.strategy};
 }
 .sn-cta-annotation-label {
-  font-family: ${TYPE.data};
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  font-family: ${LABEL_FONT};
+  font-size: ${LABEL_SIZE};
+  font-weight: ${LABEL_WEIGHT};
+  letter-spacing: ${LABEL_SPACING};
   text-transform: uppercase;
-  fill: ${COLOR.textSecondary};
-}
-.sn-cta-annotation-bg {
-  fill: ${COLOR.surface};
-  opacity: 0.9;
+  fill: ${LABEL_COLOR};
 }
 @media (max-width: 768px) {
   .sn-cta-wrapper {
@@ -137,7 +141,7 @@ const CTA_CSS = `
 }
 `;
 
-function Annotations({ buttonRef, wrapperRef, visible }) {
+function Annotations({ buttonRef, wrapperRef }) {
   const [dims, setDims] = useState(null);
 
   const measure = useCallback(() => {
@@ -152,7 +156,6 @@ function Annotations({ buttonRef, wrapperRef, visible }) {
     const height = buttonRect.height;
 
     const paddingLeft = 28;
-    const paddingTop = 14;
     const borderRadius = 8;
 
     setDims({
@@ -161,18 +164,11 @@ function Annotations({ buttonRef, wrapperRef, visible }) {
       width,
       height,
       paddingLeft,
-      paddingTop,
       borderRadius,
-      iconX: left + width - 12,
-      iconY: top + height / 2,
-      spacingX: left + paddingLeft,
-      spacingY: top + height / 2,
-      surfaceX: left + width / 2,
-      surfaceY: top + height / 2,
-      radiusX: left + width - borderRadius,
-      radiusY: top + borderRadius,
-      directionX: left + width + 8,
-      directionY: top + height / 2 + 18,
+      centerX: left + width / 2,
+      centerY: top + height / 2,
+      rightEdge: left + width,
+      bottomEdge: top + height,
     });
   }, [buttonRef, wrapperRef]);
 
@@ -184,9 +180,38 @@ function Annotations({ buttonRef, wrapperRef, visible }) {
 
   if (!dims) return null;
 
-  const labelW = 60;
-  const labelH = 16;
-  const labelPad = 4;
+  const labelGap = 8;
+  const labelHeight = 12;
+
+  // ICON: right side, diagonal up-right
+  const iconTargetX = dims.rightEdge - 14;
+  const iconTargetY = dims.centerY;
+  const iconLabelX = iconTargetX + 35;
+  const iconLabelY = iconTargetY - 18;
+
+  // SPACING: left side, horizontal left
+  const spacingTargetX = dims.left + dims.paddingLeft;
+  const spacingTargetY = dims.centerY;
+  const spacingLabelX = spacingTargetX - 38;
+  const spacingLabelY = spacingTargetY;
+
+  // SURFACE: bottom, vertical down
+  const surfaceTargetX = dims.centerX;
+  const surfaceTargetY = dims.centerY;
+  const surfaceLabelX = dims.centerX;
+  const surfaceLabelY = dims.centerY + 42;
+
+  // RADIUS: top-right corner, diagonal up-right
+  const radiusTargetX = dims.rightEdge - dims.borderRadius;
+  const radiusTargetY = dims.top + dims.borderRadius;
+  const radiusLabelX = radiusTargetX + 30;
+  const radiusLabelY = radiusTargetY - 12;
+
+  // DIRECTION: bottom-right, diagonal down-right
+  const directionTargetX = dims.rightEdge + 6;
+  const directionTargetY = dims.centerY + 16;
+  const directionLabelX = directionTargetX + 32;
+  const directionLabelY = directionTargetY + 8;
 
   return (
     <svg
@@ -196,140 +221,111 @@ function Annotations({ buttonRef, wrapperRef, visible }) {
       height="100%"
       style={{ overflow: "visible" }}
     >
-      {/* ICON: connector from arrow icon to label */}
+      {/* ICON */}
       <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "50ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={dims.iconX}
-          y1={dims.iconY}
-          x2={dims.iconX + 30}
-          y2={dims.iconY - 22}
+          x1={iconTargetX}
+          y1={iconTargetY}
+          x2={iconLabelX - labelGap}
+          y2={iconLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={dims.iconX} cy={dims.iconY} r="2.5" />
-        <rect
-          className="sn-cta-annotation-bg"
-          x={dims.iconX + 32}
-          y={dims.iconY - 34}
-          width={labelW}
-          height={labelH}
-          rx="2"
-        />
+        <circle className="sn-cta-annotation-dot" cx={iconTargetX} cy={iconTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={iconLabelX - labelGap} cy={iconLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={dims.iconX + 32 + labelPad}
-          y={dims.iconY - 22}
+          x={iconLabelX}
+          y={iconLabelY + 3}
         >
           ICON
         </text>
       </g>
 
-      {/* SPACING: connector from internal left padding to label */}
+      {/* SPACING */}
       <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "100ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={dims.spacingX}
-          y1={dims.spacingY}
-          x2={dims.spacingX - 35}
-          y2={dims.spacingY}
+          x1={spacingTargetX}
+          y1={spacingTargetY}
+          x2={spacingLabelX + labelGap}
+          y2={spacingLabelY}
         />
         <line
           className="sn-cta-annotation-line"
           x1={dims.left}
-          y1={dims.top - 6}
+          y1={dims.top - 4}
           x2={dims.left}
-          y2={dims.top + dims.height + 6}
+          y2={dims.bottomEdge + 4}
+          strokeDasharray="2 2"
         />
-        <circle className="sn-cta-annotation-dot" cx={dims.spacingX} cy={dims.spacingY} r="2.5" />
-        <rect
-          className="sn-cta-annotation-bg"
-          x={dims.spacingX - 35 - labelW - labelPad}
-          y={dims.spacingY - labelH / 2}
-          width={labelW}
-          height={labelH}
-          rx="2"
-        />
+        <circle className="sn-cta-annotation-dot" cx={spacingTargetX} cy={spacingTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={spacingLabelX + labelGap} cy={spacingLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={dims.spacingX - 35 - labelW - labelPad + labelPad}
-          y={dims.spacingY + 3}
+          x={spacingLabelX}
+          y={spacingLabelY + 3}
+          textAnchor="end"
         >
           SPACING
         </text>
       </g>
 
-      {/* SURFACE: connector from button body center to label below */}
+      {/* SURFACE */}
       <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "150ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={dims.surfaceX}
-          y1={dims.surfaceY}
-          x2={dims.surfaceX}
-          y2={dims.surfaceY + 35}
+          x1={surfaceTargetX}
+          y1={surfaceTargetY}
+          x2={surfaceLabelX}
+          y2={surfaceLabelY - labelGap}
         />
-        <circle className="sn-cta-annotation-dot" cx={dims.surfaceX} cy={dims.surfaceY} r="2.5" />
-        <rect
-          className="sn-cta-annotation-bg"
-          x={dims.surfaceX - labelW / 2}
-          y={dims.surfaceY + 37}
-          width={labelW}
-          height={labelH}
-          rx="2"
-        />
+        <circle className="sn-cta-annotation-dot" cx={surfaceTargetX} cy={surfaceTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={surfaceLabelX} cy={surfaceLabelY - labelGap} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={dims.surfaceX - labelW / 2 + labelPad}
-          y={dims.surfaceY + 49}
+          x={surfaceLabelX}
+          y={surfaceLabelY + 3}
+          textAnchor="middle"
         >
           SURFACE
         </text>
       </g>
 
-      {/* RADIUS: connector from top-right corner to label */}
+      {/* RADIUS */}
       <g className="sn-cta-annotation sn-cta-annotation--radius" style={{ transitionDelay: "200ms" }}>
-        <path
+        <line
           className="sn-cta-annotation-line"
-          d={`M ${dims.radiusX} ${dims.radiusY} L ${dims.radiusX + 25} ${dims.radiusY - 15}`}
+          x1={radiusTargetX}
+          y1={radiusTargetY}
+          x2={radiusLabelX - labelGap}
+          y2={radiusLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={dims.radiusX} cy={dims.radiusY} r="2.5" />
-        <rect
-          className="sn-cta-annotation-bg"
-          x={dims.radiusX + 27}
-          y={dims.radiusY - 27}
-          width={labelW}
-          height={labelH}
-          rx="2"
-        />
+        <circle className="sn-cta-annotation-dot" cx={radiusTargetX} cy={radiusTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={radiusLabelX - labelGap} cy={radiusLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={dims.radiusX + 27 + labelPad}
-          y={dims.radiusY - 15}
+          x={radiusLabelX}
+          y={radiusLabelY + 3}
         >
           RADIUS
         </text>
       </g>
 
-      {/* DIRECTION: connector from arrow trajectory to label */}
+      {/* DIRECTION */}
       <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "175ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={dims.directionX}
-          y1={dims.directionY - 10}
-          x2={dims.directionX + 30}
-          y2={dims.directionY + 5}
+          x1={directionTargetX}
+          y1={directionTargetY}
+          x2={directionLabelX - labelGap}
+          y2={directionLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={dims.directionX} cy={dims.directionY - 10} r="2.5" />
-        <rect
-          className="sn-cta-annotation-bg"
-          x={dims.directionX + 32}
-          y={dims.directionY - 7}
-          width={labelW + 8}
-          height={labelH}
-          rx="2"
-        />
+        <circle className="sn-cta-annotation-dot" cx={directionTargetX} cy={directionTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={directionLabelX - labelGap} cy={directionLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={dims.directionX + 32 + labelPad}
-          y={dims.directionY + 5}
+          x={directionLabelX}
+          y={directionLabelY + 3}
         >
           DIRECTION
         </text>
