@@ -523,3 +523,99 @@ def test_popup_callback_sends_correct_broker_in_postmessage(
     assert '"connected"' in body or "'connected'" in body
     # Must contain source marker
     assert "strikenova-broker-oauth" in body
+
+
+# ---------------------------------------------------------------------------
+# Seamless popup kickoff (2026-09-15 staging finding): the popup is a
+# TOP-LEVEL navigation to the API origin — no X-Session-Id header and, for
+# first-time email/google users, no session cookie either. POST
+# /auth/oauth/popup-kick mints a single-use kick cookie that /auth/login
+# accepts as session evidence for the popup's navigation only.
+# ---------------------------------------------------------------------------
+
+def test_popup_kick_requires_authentication(client: TestClient):
+    """Unauthenticated callers cannot mint a kick cookie."""
+    resp = client.post("/auth/oauth/popup-kick", json={"broker": "FYERS"})
+    assert resp.status_code == 401
+
+
+def test_popup_kick_mints_single_use_cookie_for_valid_session(
+    client: TestClient,
+    db_session: object,
+):
+    """Authenticated opener gets an HttpOnly kick cookie scoped to /auth."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    resp = client.post(
+        "/auth/oauth/popup-kick",
+        json={"broker": "FYERS"},
+        headers={"X-Session-Id": session_id},
+    )
+    assert resp.status_code == 200
+    cookie = resp.headers.get("set-cookie", "")
+    assert "sn_oauth_kick=" in cookie
+    assert "HttpOnly" in cookie
+    assert "Secure" in cookie
+    assert "samesite=none" in cookie.lower()
+    assert "Path=/auth" in cookie
+
+
+def test_popup_kick_lets_popup_login_pass_then_replay_fails(
+    client: TestClient,
+    db_session: object,
+):
+    """Popup /auth/login succeeds with ONLY the kick cookie; replay is rejected."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_credentials(
+        db_session, user.id, "FYERS", "fyers-key", "fyers-secret",
+        redirect_uri="https://frontend.example.com/auth/callback",
+    )
+    db_session.commit()
+
+    mint = client.post(
+        "/auth/oauth/popup-kick",
+        json={"broker": "FYERS"},
+        headers={"X-Session-Id": session_id},
+    )
+    cookie_value = mint.headers["set-cookie"].split(";")[0]  # name=value
+
+    # Popup navigation: kick cookie only, no session header/cookie.
+    first = client.get(
+        "/auth/login",
+        params={"broker": "FYERS", "popup": "true"},
+        headers={"Cookie": cookie_value},
+        follow_redirects=False,
+    )
+    assert first.status_code == 307
+    assert first.headers["location"].startswith("https://api-t1.fyers.in/")
+
+    # Single use: the same cookie can never authorize a second navigation.
+    replay = client.get(
+        "/auth/login",
+        params={"broker": "FYERS", "popup": "true"},
+        headers={"Cookie": cookie_value},
+        follow_redirects=False,
+    )
+    assert replay.status_code == 401
+
+
+def test_popup_kick_is_broker_bound(client: TestClient, db_session: object):
+    """A kick minted for one broker cannot authorize another broker's popup."""
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_byob(db_session, user, "FYERS")
+
+    mint = client.post(
+        "/auth/oauth/popup-kick",
+        json={"broker": "UPSTOX"},
+        headers={"X-Session-Id": session_id},
+    )
+    cookie_value = mint.headers["set-cookie"].split(";")[0]
+    resp = client.get(
+        "/auth/login",
+        params={"broker": "FYERS", "popup": "true"},
+        headers={"Cookie": cookie_value},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 401

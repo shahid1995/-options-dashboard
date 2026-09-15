@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/useAuth";
 import {
   loginUrl,
   connectBroker,
+  mintPopupKick,
   connectAnalyticsToken,
   getAnalyticsTokenStatus,
   removeAnalyticsToken,
@@ -462,22 +463,95 @@ function AccountSection({ user, onLogout }) {
 // ─── Broker connection section ─────────────────────────────────────────────
 
 function BrokerSection() {
+  const [broker, setBroker] = useState("UPSTOX");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  // BYOB: the redirect URL must match the broker app's registered callback.
+  // Defaults to this deployment's own API callback so the round-trip works.
+  const [redirectUrl, setRedirectUrl] = useState(
+    process.env.NEXT_PUBLIC_API_URL
+      ? `${process.env.NEXT_PUBLIC_API_URL}/auth/callback`
+      : ""
+  );
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [isError, setIsError] = useState(false);
+  const [popup, setPopup] = useState(null);
+  const [popupLoading, setPopupLoading] = useState(false);
 
-  const handleConnect = async (e) => {
+  const handleSaveAndConnect = async (e) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
     setIsError(false);
     try {
-      const result = await connectBroker("UPSTOX", apiKey, apiSecret);
+      // Store credentials first (redirect_uri binds the OAuth round-trip)
+      const result = await connectBroker(broker, apiKey, apiSecret, redirectUrl || null);
       setMessage(`Credentials stored. Status: ${result.status}`);
-      setApiKey("");
-      setApiSecret("");
+
+      // Seamless popup flow: mint the single-use kick cookie (authenticated
+      // XHR → API-origin cookie jar), then open the popup. The popup's
+      // top-level navigation presents that cookie to /auth/login, which
+      // redirects to the broker with the popup flag inside the signed state.
+      setPopupLoading(true);
+      await mintPopupKick(broker);
+      const loginUrlWithPopup = `${loginUrl(broker)}&popup=true`;
+      const popupWindow = window.open(
+        loginUrlWithPopup,
+        "strikenova_broker_oauth",
+        "width=500,height=700"
+      );
+      
+      if (!popupWindow) {
+        setMessage("Your browser blocked the connection window. Allow popups for StrikeNova and try again.");
+        setIsError(true);
+        setPopupLoading(false);
+        return;
+      }
+      
+      // Listen for message from popup
+      const handleMessage = (event) => {
+        // Validate origin
+        if (event.origin !== window.location.origin) return;
+        // Validate message source
+        if (event.data?.source !== "strikenova-broker-oauth") return;
+        // Validate broker
+        if (event.data?.broker !== broker) return;
+        
+        if (event.data?.status === "connected") {
+          setMessage(`✓ ${broker} Connected`);
+          // Trigger a refresh of broker data
+          window.dispatchEvent(new Event('broker-connected'));
+        } else if (event.data?.status === "error") {
+          setMessage(`Unable to connect ${broker}. Please check your credentials.`);
+          setIsError(true);
+        }
+        
+        // Close popup after a short delay to allow message processing
+        setTimeout(() => {
+          if (popupWindow && !popupWindow.closed) {
+            popupWindow.close();
+          }
+          setPopup(null);
+          setPopupLoading(false);
+        }, 1000);
+        
+        // Remove listener
+        window.removeEventListener("message", handleMessage);
+      };
+      
+      window.addEventListener("message", handleMessage);
+      
+      // Set timeout to handle popup closure
+      setTimeout(() => {
+        if (popupWindow && !popupWindow.closed) {
+          // User closed popup manually
+          setMessage(`${broker} connection cancelled.`);
+          setPopup(null);
+          setPopupLoading(false);
+          window.removeEventListener("message", handleMessage);
+        }
+      }, 30000); // 30 second timeout
     } catch (err) {
       setMessage(err?.response?.data?.detail || err.message || "Failed to store credentials");
       setIsError(true);
@@ -498,10 +572,10 @@ function BrokerSection() {
         }}
       >
         <div style={sectionTitle}>Broker Connection</div>
-        <StatusChip active={false} label="NOT CONNECTED" />
+        <StatusChip active={false} label={broker === "UPSTOX" ? "NOT CONNECTED" : "NOT CONNECTED"} />
       </div>
 
-      {/* Broker card */}
+      {/* Broker selector */}
       <div
         style={{
           background: C.surface2,
@@ -514,14 +588,27 @@ function BrokerSection() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
           <span style={{ fontSize: 16 }}>🔗</span>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Upstox</div>
-            <div style={{ fontSize: 11, color: C.muted }}>OAuth connection · Trading + Market Data</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+              {broker === "UPSTOX" ? "Upstox" : "FYERS"}
+            </div>
+            <div style={{ fontSize: 11, color: C.muted }}>
+              {broker === "UPSTOX" ? "OAuth connection · Trading + Market Data" : "OAuth connection · Trading + Market Data"}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Credentials form */}
-      <form onSubmit={handleConnect} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <form onSubmit={handleSaveAndConnect} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <select
+          value={broker}
+          onChange={(e) => setBroker(e.target.value)}
+          style={{ ...inputBase, cursor: "pointer" }}
+          aria-label="Broker"
+        >
+          <option value="UPSTOX">Upstox</option>
+          <option value="FYERS">FYERS</option>
+        </select>
         <input
           type="text"
           placeholder="API Key"
@@ -542,16 +629,25 @@ function BrokerSection() {
           onFocus={(e) => { e.target.style.borderColor = C.gold; }}
           onBlur={(e) => { e.target.style.borderColor = C.border; }}
         />
+        <input
+          type="text"
+          placeholder="Redirect URL"
+          value={redirectUrl}
+          onChange={(e) => setRedirectUrl(e.target.value)}
+          style={inputBase}
+          onFocus={(e) => { e.target.style.borderColor = C.gold; }}
+          onBlur={(e) => { e.target.style.borderColor = C.border; }}
+        />
 
         <FlashMessage text={message} isError={isError} />
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
             type="submit"
-            disabled={loading}
-            style={{ ...btnPrimary, flex: "1 1 160px", opacity: loading ? 0.6 : 1 }}
+            disabled={loading || popupLoading}
+            style={{ ...btnPrimary, flex: "1 1 160px", opacity: (loading || popupLoading) ? 0.6 : 1 }}
           >
-            {loading ? "Storing…" : "Store Credentials"}
+            {loading || popupLoading ? "Working…" : "Save & Connect"}
           </button>
           <a
             href={loginUrl()}

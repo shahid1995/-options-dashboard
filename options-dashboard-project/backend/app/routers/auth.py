@@ -1,12 +1,13 @@
 import json
 import logging
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 import html as html_module
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Cookie, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -59,6 +60,82 @@ router = APIRouter()
 
 SESSION_COOKIE = "session_id"
 
+# ---------------------------------------------------------------------------
+# Popup OAuth kickoff — one-time pre-authorized kick token for the seamless
+# popup flow. The popup is a TOP-LEVEL navigation to this API origin: it
+# carries no X-Session-Id header and (for first-time email/google users) no
+# session cookie either, so /auth/login would 401 before the broker page
+# loads (verified live in staging 2026-09-15). The authenticated opener page
+# mints a single-use kick token (POST /auth/oauth/popup-kick); the popup
+# presents it via the sn_oauth_kick cookie. The token is bound to
+# (session_id, broker), TTL-bounded, in-memory only, and consumed on first
+# successful use — it NEVER creates, extends, or replaces a session.
+# ---------------------------------------------------------------------------
+
+POPUP_KICK_COOKIE = "sn_oauth_kick"
+_POPUP_KICK_TTL_SECONDS = 600  # never outlives the OAuth state window
+_popup_kick_tokens: dict[str, dict] = {}
+
+
+def _mint_popup_kick(response: Response, session_id: str, broker_id: str) -> None:
+    """Issue a single-use kick token bound to (session_id, broker)."""
+    now = time.time()
+    for tok, meta in list(_popup_kick_tokens.items()):
+        if now - meta["ts"] > _POPUP_KICK_TTL_SECONDS:
+            del _popup_kick_tokens[tok]
+    token = uuid4().hex
+    _popup_kick_tokens[token] = {"ts": now, "sid": session_id, "brk": broker_id}
+    response.set_cookie(
+        POPUP_KICK_COOKIE,
+        token,
+        max_age=_POPUP_KICK_TTL_SECONDS,
+        secure=True,
+        httponly=True,
+        samesite="none",  # set from a cross-site XHR; must be None to be stored
+        path="/auth",
+    )
+
+
+def _consume_popup_kick_session(cookie_value: str | None, broker_id: str) -> str | None:
+    """Consume a kick token and return its bound session_id (single use).
+
+    Fail-closed: unknown/expired/wrong-broker tokens yield None. The token
+    is removed on first presentation — it can never be replayed, and it
+    never creates, extends, or replaces a real session.
+    """
+    if not cookie_value:
+        return None
+    meta = _popup_kick_tokens.pop(str(cookie_value).strip(), None)
+    if meta is None:
+        return None
+    if time.time() - meta["ts"] > _POPUP_KICK_TTL_SECONDS:
+        return None
+    if meta["brk"] != broker_id:
+        return None
+    return meta["sid"]
+
+
+@router.post("/oauth/popup-kick")
+def oauth_popup_kick(
+    broker: str = Body(..., embed=True),
+    session_id: str | None = Depends(get_session_id),
+):
+    """Mint the popup kick cookie for an authenticated session.
+
+    Called by the opener page (fetch with X-Session-Id) right before
+    ``window.open(...)`` so the popup's navigation to /auth/login can prove
+    which session initiated it. Fail-closed: unauthenticated callers get 401.
+    """
+    broker_id = broker.upper()
+    if not session_id or token_store.get_token(session_id) is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Log in first to connect a broker.",
+        )
+    resp = JSONResponse({"ok": True})
+    _mint_popup_kick(resp, session_id, broker_id)
+    return resp
+
 
 # ---------------------------------------------------------------------------
 # GET /auth/login — Phase 10.2B-2: BYOB-aware login
@@ -68,6 +145,7 @@ SESSION_COOKIE = "session_id"
 def login(
     broker: str = Query(default="UPSTOX"),
     session_id: str | None = Depends(get_session_id),
+    popup_kick_cookie: str | None = Cookie(default=None, alias=POPUP_KICK_COOKIE),
     popup: bool = False,
 ):
     """Redirect the browser to the broker's OAuth login page.
@@ -81,11 +159,19 @@ def login(
     broker_id = broker.upper()
 
     # Day 3: Require authenticated session — no anonymous OAuth initiation.
+    # Seamless-popup exception: the popup is a top-level navigation with no
+    # header transport, so it presents the single-use kick token minted by
+    # the authenticated opener (POST /auth/oauth/popup-kick). Consumed here
+    # on first presentation (never replays); the session itself is still
+    # fully validated below, and the token never creates or extends one.
+    kick_session_id = _consume_popup_kick_session(popup_kick_cookie, broker_id)
     if not session_id or token_store.get_token(session_id) is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required. Log in first to connect a broker.",
-        )
+        if kick_session_id is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required. Log in first to connect a broker.",
+            )
+        session_id = kick_session_id
 
     # Resolve user's per-user credentials (BYOB path).
     # Day 3: No platform key fallback — user must have stored credentials.
@@ -119,7 +205,8 @@ def login(
     state = token_store.create_oauth_state(session_id=session_id, broker=broker_id, popup=popup)
 
     adapter = gateway.create(broker_id, **user_credentials)
-    return RedirectResponse(adapter.get_authorization_url(state))
+    redirect = RedirectResponse(adapter.get_authorization_url(state))
+    return redirect
 
 
 # ---------------------------------------------------------------------------

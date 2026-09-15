@@ -30,7 +30,15 @@ api.interceptors.response.use(
   }
 );
 
-export const loginUrl = () => `${process.env.NEXT_PUBLIC_API_URL}/auth/login`;
+export const loginUrl = (broker = "UPSTOX") =>
+  `${process.env.NEXT_PUBLIC_API_URL}/auth/login?broker=${encodeURIComponent(broker)}`;
+
+// Seamless popup kickoff: mint the single-use, API-origin kick cookie an
+// authenticated opener hands to the OAuth popup (the popup's top-level
+// navigation carries no X-Session-Id header). Returns the axios promise;
+// the Set-Cookie lands in the browser jar for the API origin.
+export const mintPopupKick = (broker) =>
+  api.post("/auth/oauth/popup-kick", { broker });
 
 export const isAuthError = (e) => e?.response?.status === 401;
 
@@ -71,8 +79,7 @@ export const connectBroker = (broker, apiKey, apiSecret, redirectUri, displayLab
       broker,
       api_key: apiKey,
       api_secret: apiSecret,
-      redirect_uri: redirectUri,
-      display_label: displayLabel,
+      redirect_uri: redirectUri,      display_label: displayLabel,
     })
     .then((r) => r.data);
 

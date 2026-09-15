@@ -134,15 +134,17 @@ describe("SettingsPage — logged in state (polished sections)", () => {
     expect(html).toContain("Sign Out");
   });
 
-  it("shows Broker Connection section with Upstox card", () => {
+  it("shows Broker Connection section with broker selector", () => {
     const html = renderToStaticMarkup(React.createElement(SettingsPage));
     expect(html).toContain("Broker Connection");
     expect(html).toContain("Upstox");
+    expect(html).toContain("FYERS");
     expect(html).toContain("OAuth connection");
     expect(html).toContain("NOT CONNECTED");
     expect(html).toContain("API Key");
     expect(html).toContain("API Secret");
-    expect(html).toContain("Store Credentials");
+    expect(html).toContain("Redirect URL");
+    expect(html).toContain("Save &amp; Connect");
     expect(html).toContain("Connect via OAuth");
   });
 
