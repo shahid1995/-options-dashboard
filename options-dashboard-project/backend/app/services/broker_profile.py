@@ -285,6 +285,16 @@ async def get_broker_profile_summary(
             BROKER_AUTH_REQUIRED, "Broker login required — log in to Upstox first."
         )
 
+    # Platform session identifiers (email:..., google:...) are NOT broker tokens.
+    # If the session store returned a platform ID instead of a real broker token,
+    # report "not connected" rather than attempting a doomed broker API call.
+    if isinstance(access_token, str) and (
+        access_token.startswith("email:") or access_token.startswith("google:")
+    ):
+        return _unavailable_summary(
+            BROKER_AUTH_REQUIRED, "Broker login required — log in to Upstox first."
+        )
+
     cache_key = f"profile:{user_id}"
     if not refresh:
         cached = cache_store.get(cache_key)

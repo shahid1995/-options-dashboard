@@ -78,6 +78,7 @@ class UpstoxAdapter:
         chain_fetcher=None,
         contracts_fetcher=None,
         market_status_fetcher=None,
+        quote_fetcher=None,
         now=None,
     ):
         self._access_token = access_token
@@ -95,6 +96,7 @@ class UpstoxAdapter:
         self._chain_fetcher = chain_fetcher
         self._contracts_fetcher = contracts_fetcher
         self._market_status_fetcher = market_status_fetcher
+        self._quote_fetcher = quote_fetcher
         self._now = now or (lambda: datetime.now(timezone.utc))
 
     def __repr__(self) -> str:  # never include the access token
@@ -352,11 +354,94 @@ class UpstoxAdapter:
             raise self._map_error(exc) from exc
         return mapper.transform_chain(identity.symbol, expiry_date, raw)
 
-    async def get_quote(self, instrument: InstrumentIdentity) -> dict:
-        raise self._not_wired("quote")
+    # ---- MARKET QUOTES (wired Day 10) -------------------------------------
 
-    async def get_quotes(self, instruments: list[InstrumentIdentity]) -> dict:
-        raise self._not_wired("bulk quotes")
+    @staticmethod
+    def _quote_broker_key(instrument: InstrumentIdentity) -> str:
+        """Resolve the Upstox instrument key needed for a market quote.
+
+        Only index/underlying identities have a static broker-key mapping.
+        A concrete option/future contract's key is only discoverable from
+        chain/contract data, so quoting it directly from its canonical
+        identity is impossible here — fail with a canonical error rather
+        than inventing a key.
+        """
+        if instrument.is_concrete_contract:
+            raise BrokerError(
+                BrokerErrorCode.INVALID_INSTRUMENT,
+                "Quote requires a chain-resolved broker instrument key; "
+                "concrete contract identities cannot be quoted directly.",
+            )
+        return mapper.broker_key_for(instrument.symbol)
+
+    @staticmethod
+    def _extract_quote_payload(raw: dict, broker_key: str) -> dict:
+        """Locate one instrument's quote payload inside the response body.
+
+        The Upstox ``data`` map is normally keyed by the requested
+        instrument key, but the documented examples show symbol-style keys
+        (e.g. ``NSE_EQ:NHPC``), so we fall back to matching the payload's
+        ``instrument_token`` and finally to the single-entry case.
+        """
+        data = raw.get("data") if isinstance(raw, dict) else None
+        if not isinstance(data, dict) or not data:
+            raise BrokerError(
+                BrokerErrorCode.INVALID_MARKET_DATA,
+                "Upstox quote response contained no data payload.",
+            )
+        if broker_key in data:
+            return data[broker_key]
+        for key, payload in data.items():
+            if isinstance(payload, dict) and payload.get("instrument_token") == broker_key:
+                return payload
+        if len(data) == 1:
+            return next(iter(data.values()))
+        raise BrokerError(
+            BrokerErrorCode.INVALID_MARKET_DATA,
+            f"Upstox quote unavailable for {broker_key}.",
+        )
+
+    async def get_quote(self, instrument: InstrumentIdentity):
+        """Single canonical market quote (Day 10, wired).
+
+        Returns a :class:`QuoteObservation` — the Day-9 canonical market-data
+        contract — never a raw Upstox payload.
+        """
+        broker_key = self._quote_broker_key(instrument)
+        fetcher = self._quote_fetcher or upstox.get_market_quotes
+        try:
+            raw = await fetcher(self._require_token(), [broker_key])
+        except UpstoxError as exc:
+            raise self._map_error(exc) from exc
+        payload = self._extract_quote_payload(raw, broker_key)
+        normalized = mapper.instrument_identity_to_normalized(instrument)
+        return mapper.upstox_quote_to_observation(
+            payload, normalized, received_at=self._now()
+        )
+
+    async def get_quotes(self, instruments: list[InstrumentIdentity]):
+        """Batch canonical market quotes (Day 10, wired).
+
+        Returns one :class:`QuoteObservation` per requested instrument, in
+        request order — never raw Upstox payloads.
+        """
+        keys = [self._quote_broker_key(inst) for inst in instruments]
+        fetcher = self._quote_fetcher or upstox.get_market_quotes
+        try:
+            raw = await fetcher(self._require_token(), keys)
+        except UpstoxError as exc:
+            raise self._map_error(exc) from exc
+        observations = []
+        for instrument in instruments:
+            broker_key = self._quote_broker_key(instrument)
+            payload = self._extract_quote_payload(raw, broker_key)
+            normalized = mapper.instrument_identity_to_normalized(instrument)
+            observations.append(
+                mapper.upstox_quote_to_observation(
+                    payload, normalized, received_at=self._now()
+                )
+            )
+        return observations
 
     # ---- ORDERS (prepared, NOT wired) -------------------------------------
 
@@ -427,7 +512,7 @@ def upstox_capability_matrix() -> list[tuple[str, CapabilityState, bool, str | N
         ("option_chain", CapabilityState.SUPPORTED, True, "GET /v2/option/chain"),
         ("option_contracts", CapabilityState.SUPPORTED, True, "GET /v2/option/contract"),
         # ---- supported by API but NOT wired this phase ----
-        ("quotes", CapabilityState.SUPPORTED, False, "Upstox market-quote API — not wired in Phase 6.5.0.2"),
+        ("quotes", CapabilityState.SUPPORTED, True, "GET /v2/market-quote/quotes — wired Day 10 (canonical QuoteObservation)"),
         ("websocket_market_data", CapabilityState.SUPPORTED, False, "Upstox market feed socket — platform uses HTTP polling"),
         ("positions", CapabilityState.SUPPORTED, False, "GET /v2/positions — not wired"),
         ("holdings", CapabilityState.SUPPORTED, False, "GET /v2/portfolio/short-term-holdings — not wired"),

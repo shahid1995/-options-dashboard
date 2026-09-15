@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+// Mock next/navigation
+const mockRouterPush = vi.fn();
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockRouterPush }),
+}));
+
 // Mock the useAuth hook and API modules
 vi.mock("@/lib/useAuth", () => ({
   useAuth: vi.fn(),

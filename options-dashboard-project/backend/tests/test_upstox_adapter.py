@@ -13,7 +13,7 @@ import pytest
 from app.brokers.adapters.upstox.adapter import UpstoxAdapter
 from app.brokers.adapters.upstox.mapper import UPSTOX_INSTRUMENT_KEYS
 from app.brokers.domain.capabilities import CapabilityState
-from app.brokers.domain.enums import BROKER_ID_UPSTOX, OrderType, Side
+from app.brokers.domain.enums import BROKER_ID_UPSTOX, OptionType, OrderType, Side
 from app.brokers.domain.errors import BrokerError, BrokerErrorCode
 from app.brokers.domain.models import BrokerOrderRequest, InstrumentIdentity
 from app.brokers.gateway import gateway
@@ -243,18 +243,30 @@ def test_order_operations_raise_capability_unsupported():
         assert "NOT wired" in exc.value.message
 
 
-async def test_quote_operations_raise_capability_unsupported():
-    adapter = UpstoxAdapter("tok")
-    identity = InstrumentIdentity(
+async def test_quote_operations_are_wired_and_fail_safely():
+    """Quotes are WIRED (Day 10): the adapter returns canonical market-data
+    contracts — and still fails safely with canonical errors when the
+    instrument cannot be quoted or the session is missing."""
+    # Concrete option identities cannot be quoted directly (no chain-issued
+    # broker key on the canonical identity) — never a fabricated quote.
+    option_identity = InstrumentIdentity(
         exchange="NSE", segment="INDEX_DERIVATIVES", underlying="NIFTY",
-        symbol="NIFTY", instrument_type="INDEX", lot_size=65,
+        symbol="NIFTY", instrument_type="OPTION", expiry="2026-09-11",
+        strike=24500.0, option_type=OptionType.CALL,
     )
+    adapter = UpstoxAdapter("tok")
     with pytest.raises(BrokerError) as exc:
-        await adapter.get_quote(identity)
-    assert exc.value.code is BrokerErrorCode.CAPABILITY_UNSUPPORTED
+        await adapter.get_quote(option_identity)
+    assert exc.value.code is BrokerErrorCode.INVALID_INSTRUMENT
+
+    # No session → AUTH_REQUIRED before any fetch attempt.
+    no_token = UpstoxAdapter()
     with pytest.raises(BrokerError) as exc:
-        await adapter.get_quotes([identity])
-    assert exc.value.code is BrokerErrorCode.CAPABILITY_UNSUPPORTED
+        await no_token.get_quotes([InstrumentIdentity(
+            exchange="NSE", segment="INDEX_DERIVATIVES", underlying="NIFTY",
+            symbol="NIFTY", instrument_type="INDEX",
+        )])
+    assert exc.value.code is BrokerErrorCode.AUTH_REQUIRED
 
 
 # ---- Security ----------------------------------------------------------------

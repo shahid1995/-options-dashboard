@@ -272,9 +272,8 @@ def create_oauth_state(
 ) -> str:
     """Create a signed OAuth state value.
 
-    When session_id is provided (authenticated-first flow), the state carries
-    a signed {session_id, broker, timestamp} payload.  When omitted, falls back
-    to CSRF-only state for backward compatibility.
+    Day 3 security fix: always produces HMAC-signed state with session binding.
+    Unsigned fallback is removed.
 
     Old states are garbage-collected on each call.
     """
@@ -284,18 +283,14 @@ def create_oauth_state(
         if now - created_at > _STATE_TTL_SECONDS:
             del _pending_states[state_val]
 
-    if session_id:
-        # Signed state with session binding
-        payload = json.dumps(
-            {"sid": session_id, "brk": broker.upper(), "ts": int(now)},
-            separators=(",", ":"),
-        )
-        b64 = base64.urlsafe_b64encode(payload.encode()).decode()
-        sig = hmac.new(_get_state_hmac_key(), b64.encode(), hashlib.sha256).hexdigest()[:32]
-        state = f"{b64}.{sig}"
-    else:
-        # Fallback: random CSRF-only state (backward compat)
-        state = secrets.token_urlsafe(32)
+    # Always produce signed state with session binding
+    payload = json.dumps(
+        {"sid": session_id or "", "brk": broker.upper(), "ts": int(now)},
+        separators=(",", ":"),
+    )
+    b64 = base64.urlsafe_b64encode(payload.encode()).decode()
+    sig = hmac.new(_get_state_hmac_key(), b64.encode(), hashlib.sha256).hexdigest()[:32]
+    state = f"{b64}.{sig}"
 
     _pending_states[state] = now
     return state
@@ -307,41 +302,37 @@ def consume_oauth_state(state: str | None) -> dict | None:
     Returns {"session_id": "...", "broker": "UPSTOX"} on success.
     Returns None if state is invalid, expired, or already consumed.
 
-    Backward compatible: falls back to old CSRF-only format if signed
-    format is not detected.
+    Day 3 security fix: legacy unsigned states are rejected.
+    All states must be HMAC-signed with session binding.
     """
     if not state:
         return None
 
-    # Dot-containing states are ALWAYS treated as signed (HMAC) states.
-    # They must NOT silently downgrade to the legacy unsigned path.
-    if "." in state:
-        b64, sig = state.rsplit(".", 1)
-        try:
-            expected_sig = hmac.new(
-                _get_state_hmac_key(), b64.encode(), hashlib.sha256
-            ).hexdigest()[:32]
-            if not hmac.compare_digest(sig, expected_sig):
-                return None  # Tampered — reject, do NOT fall through
-            payload = json.loads(base64.urlsafe_b64decode(b64))
-            if time.time() - payload.get("ts", 0) > _STATE_TTL_SECONDS:
-                return None  # Expired
-            created_at = _pending_states.pop(state, None)
-            if created_at is None:
-                return None  # Already consumed or not from us
-            return {
-                "session_id": payload.get("sid", ""),
-                "broker": payload.get("brk", "UPSTOX"),
-            }
-        except Exception:
-            # Corrupted signed state — reject, do NOT fall through to legacy
-            return None
+    # Only HMAC-signed states (containing a dot separator) are accepted.
+    # Day 3: Legacy unsigned states are rejected outright.
+    if "." not in state:
+        return None
 
-    # Legacy: unsigned CSRF-only state (no dot separator)
-    created_at = _pending_states.pop(state, None)
-    if created_at is not None and time.time() - created_at <= _STATE_TTL_SECONDS:
-        return {"session_id": "", "broker": "UPSTOX"}
-    return None
+    b64, sig = state.rsplit(".", 1)
+    try:
+        expected_sig = hmac.new(
+            _get_state_hmac_key(), b64.encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_sig):
+            return None  # Tampered — reject
+        payload = json.loads(base64.urlsafe_b64decode(b64))
+        if time.time() - payload.get("ts", 0) > _STATE_TTL_SECONDS:
+            return None  # Expired
+        created_at = _pending_states.pop(state, None)
+        if created_at is None:
+            return None  # Already consumed or not from us
+        return {
+            "session_id": payload.get("sid", ""),
+            "broker": payload.get("brk", "UPSTOX"),
+        }
+    except Exception:
+        # Corrupted signed state — reject
+        return None
 
 
 # ---------------------------------------------------------------------------

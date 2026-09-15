@@ -222,6 +222,6 @@ def test_auth_callback_does_not_call_ensure_identity_schema(monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {"logged_in": False}
 
-    # Test /auth/logout without session - should return 401, no DDL
+    # Test /auth/logout without session - idempotent (200), no DDL
     resp = client.post("/auth/logout")
-    assert resp.status_code == 401
+    assert resp.status_code == 200

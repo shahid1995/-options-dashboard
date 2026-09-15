@@ -25,6 +25,7 @@ from app.brokers.domain.errors import BrokerError, BrokerErrorCode
 from app.brokers.gateway import gateway
 from app.routers.deps import get_session_id
 from app.services import token_store
+from app.services.platform_session import is_platform_session_token
 from app.services.live_gex import LiveGexService
 
 router = APIRouter()
@@ -84,7 +85,11 @@ async def _fetch_chain(symbol: str, expiry_date: str, token: str, session_id: st
         return await adapter.get_option_chain(symbol, expiry_date)
     except BrokerError as e:
         if e.code in BrokerErrorCode.SESSION_CODES:
-            token_store.clear_token(session_id)
+            # Defense-in-depth: only clear real broker tokens.
+            # Platform session tokens (email:..., google:...) must survive broker failures.
+            existing = token_store.get_token(session_id)
+            if not is_platform_session_token(existing):
+                token_store.clear_token(session_id)
             raise HTTPException(
                 status_code=401,
                 detail="Upstox session expired. Please log in again.",

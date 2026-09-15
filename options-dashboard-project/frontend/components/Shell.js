@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { C, useIsMobile } from "@/lib/ui";
 
 /**
@@ -373,6 +373,8 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
     })();
   }, []);
 
+  const router = useRouter();
+
   const handleLogout = useCallback(async () => {
     try {
       const { logoutUser } = await import("@/lib/api");
@@ -383,7 +385,8 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
       // Ignore
     }
     setAuthUser(null);
-  }, []);
+    router.replace("/");
+  }, [router]);
 
   const activeKey = getActiveKey(pathname);
 

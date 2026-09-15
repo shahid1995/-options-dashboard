@@ -75,11 +75,11 @@ export function useChainFeed(symbol, expiry, enabled) {
       ws.onclose = (event) => {
         if (cancelled) return;
         if (event.code === 4401) {
-          // Phase A fix: If HTTP endpoint already determined the auth state,
-          // respect it.  Otherwise default to sessionExpired (backward compat).
-          if (!authStateDetermined.current) {
-            setSessionExpired(true);
-          }
+          // 4401 means no broker token — could be expired session OR
+          // platform-only session (Google/email without broker).
+          // Do NOT immediately set sessionExpired; let the HTTP fallback
+          // determine the correct state (401=expired, 403=no broker).
+          startPolling();
         } else {
           startPolling();
         }
