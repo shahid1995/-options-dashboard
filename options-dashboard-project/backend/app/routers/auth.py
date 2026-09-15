@@ -2,12 +2,13 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+import html as html_module
 from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.brokers.domain.enums import BROKER_ID_UPSTOX
 from app.brokers.domain.errors import BrokerError
@@ -67,6 +68,7 @@ SESSION_COOKIE = "session_id"
 def login(
     broker: str = Query(default="UPSTOX"),
     session_id: str | None = Depends(get_session_id),
+    popup: bool = False,
 ):
     """Redirect the browser to the broker's OAuth login page.
 
@@ -129,13 +131,22 @@ async def callback(
     error: str | None = None,
     state: str | None = None,
     broker: str = Query(default="UPSTOX"),
+    popup: bool = False,
 ):
     """Complete broker OAuth using USER's per-user credentials (BYOB).
 
     Both the authorization-code exchange AND the profile fetch use the
     SAME user's API key/secret.  No shared platform credentials in BYOB path.
+
+    Popup mode: when ``popup=true``, returns an HTML page that sends
+    ``postMessage`` to the opener window instead of redirecting.  This
+    enables a seamless "Save & Connect" UX while keeping the same OAuth
+    state validation and token exchange flow.  The popup page exposes
+    NO tokens, secrets or auth_codes — only a minimal status message.
     """
     if error:
+        if popup:
+            return _popup_error_response(error)
         return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(error)}")
     # FYERS v3 redirects back with `auth_code` (its own parameter name, see
     # PHASE_10_2B_CONNECTION_ARCHITECTURE.md §FYERS flow) instead of OAuth's
@@ -200,6 +211,8 @@ async def callback(
         ).get_profile()
     except BrokerError as e:
         logger.error("Token/profile exchange failed: %s", e)
+        if popup:
+            return _popup_error_response(e.message)
         return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(e.message)}")
 
     # Session-bound linking (UPSTOX_IDENTITY_LINKING_DESIGN.md §7/§17):
@@ -322,6 +335,8 @@ async def callback(
         )
         if owner_id is not None and owner_id != user.id:
             db.rollback()
+            if popup:
+                return _popup_error_response("This broker account is connected to another StrikeNova user.")
             return RedirectResponse(
                 f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
             )
@@ -332,6 +347,8 @@ async def callback(
     except BrokerIdentityInUse as e:
         db.rollback()
         logger.warning("Broker identity ownership conflict: %s", e)
+        if popup:
+            return _popup_error_response("This broker account is connected to another StrikeNova user.")
         return RedirectResponse(
             f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
         )
@@ -352,6 +369,8 @@ async def callback(
                 "Broker identity %s/%s owned by user %s; rejected for user %s",
                 broker_id, broker_account_id, owner_id, user.id,
             )
+            if popup:
+                return _popup_error_response("This broker account is connected to another StrikeNova user.")
             return RedirectResponse(
                 f"{settings.FRONTEND_ORIGIN}?login_error=broker_identity_in_use"
             )
@@ -363,6 +382,8 @@ async def callback(
             db.rollback()
             session_id = None
             logger.exception("Failed to persist StrikeNova identity/session")
+            if popup:
+                return _popup_error_response("Account setup failed. Please try again.")
             return RedirectResponse(
                 f"{settings.FRONTEND_ORIGIN}?login_error=account_setup_failed"
             )
@@ -370,6 +391,8 @@ async def callback(
         db.rollback()
         session_id = None
         logger.exception("Failed to persist StrikeNova identity/session")
+        if popup:
+            return _popup_error_response("Account setup failed. Please try again.")
         return RedirectResponse(
             f"{settings.FRONTEND_ORIGIN}?login_error=account_setup_failed"
         )
@@ -380,6 +403,9 @@ async def callback(
     # link transaction committed. Idempotent; a rollback path never reaches
     # this line, so no cached session can reference a rolled-back connection.
     token_store.cache_broker_session(session_id, access_token)
+
+    if popup:
+        return _popup_success_response(broker_id)
 
     # Send the user back to the dashboard. The session ID is passed in the
     # URL fragment because it is not sent to servers as a query parameter.
@@ -935,3 +961,83 @@ def delete_analytics_token(
         )
 
     return {"ok": True, "broker": broker.upper(), "message": "Analytics Token removed"}
+
+
+# ---------------------------------------------------------------------------
+# Popup OAuth helpers — return HTML postMessage pages for seamless UX
+# ---------------------------------------------------------------------------
+
+
+def _popup_success_response(broker: str) -> HTMLResponse:
+    """Return an HTML page that posts a success message to the opener window.
+
+    The page intentionally exposes NO tokens, secrets, or auth_codes —
+    only a minimal status marker.  The opener's listener updates the UI.
+    """
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Broker Connected</title></head>
+<body>
+<p id="status">Connection complete. You can close this window.</p>
+<script>
+  (function() {{
+    var payload = {{
+      source: "strikenova-broker-oauth",
+      broker: "{broker.upper()}",
+      status: "connected"
+    }};
+    try {{
+      window.opener.postMessage(payload, "{settings.FRONTEND_ORIGIN}");
+    }} catch (_) {{}}
+    // Close the popup after a brief delay to let the message be received.
+    setTimeout(function() {{ window.close(); }}, 300);
+  }})();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+def _popup_error_response(message: str) -> HTMLResponse:
+    """Return a safe error page for the popup.
+
+    Never exposes tokens, secrets, auth_codes or raw OAuth payloads.
+    A user-friendly message (e.g. "access_denied") is shown sanitized.
+    """
+    # Map known OAuth/broker error codes to user-friendly messages
+    # Never expose raw error codes that could confuse users
+    error_map = {
+        "access_denied": "Authorization was denied. Please try again and approve the connection.",
+        "invalid_request": "Invalid request. Please check your app configuration.",
+        "invalid_client": "Invalid app credentials. Please check your App ID and Secret.",
+        "invalid_grant": "Authorization expired. Please try again.",
+        "unauthorized_client": "This app is not authorized for this operation.",
+        "unsupported_response_type": "Unsupported authorization type.",
+        "invalid_scope": "Invalid permissions requested.",
+        "server_error": "The broker's server encountered an error. Please try again later.",
+        "temporarily_unavailable": "The broker is temporarily unavailable. Please try again later.",
+    }
+    # Get user-friendly message or use a generic one
+    safe_message = error_map.get(message.lower().strip(), "Unable to connect. Please try again.")
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Connection Failed</title></head>
+<body>
+<p id="status">Unable to connect.</p>
+<p style="color:#666;font-size:0.9em;">{safe_message}</p>
+<script>
+  (function() {{
+    var payload = {{
+      source: "strikenova-broker-oauth",
+      status: "error",
+      error: "connection_failed"
+    }};
+    try {{
+      window.opener.postMessage(payload, "{settings.FRONTEND_ORIGIN}");
+    }} catch (_) {{}}
+    setTimeout(function() {{ window.close(); }}, 2000);
+  }})();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content)
