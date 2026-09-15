@@ -41,19 +41,24 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api-t1.fyers.in"
 API_BASE = f"{BASE_URL}/api/v3"
-DATA_BASE = f"{API_BASE}/data"
+DATA_BASE = BASE_URL  # /data endpoints are served at the HOST ROOT (proven live
+# against api-t1.fyers.in on 2026-09-15: /data/* exists, /api/v3/data/* 404s)
 
-AUTH_GENERATE_PATH = "/api/v3/generate-authcode"
-AUTH_VALIDATE_PATH = "/api/v3/validate-authcode"
-PROFILE_PATH = "/api/v3/profile"
-FUNDS_PATH = "/api/v3/funds"
-POSITIONS_PATH = "/api/v3/positions"
-HOLDINGS_PATH = "/api/v3/holdings"
-ORDERS_PATH = "/api/v3/orders"
-ORDERS_SWEEP_PATH = "/api/v3/orders-simplified"
-TRADEBOOK_PATH = "/api/v3/tradebook"
-QUOTES_PATH = "/data/quotes"
-OPTION_CHAIN_PATH = "/data/options-chain-v3"
+# REST paths are RELATIVE to API_BASE (https://api-t1.fyers.in/api/v3) —
+# a full-prefix path here would double it into /api/v3/api/v3/* (404).
+# Discovered live during staging OAuth validation (2026-09-15): the first
+# real auth-code exchange returned FYERS' router 404 for exactly this reason.
+AUTH_GENERATE_PATH = "/api/v3/generate-authcode"  # used with BASE_URL (no prefix)
+AUTH_VALIDATE_PATH = "/validate-authcode"
+PROFILE_PATH = "/profile"
+FUNDS_PATH = "/funds"
+POSITIONS_PATH = "/positions"
+HOLDINGS_PATH = "/holdings"
+ORDERS_PATH = "/orders"
+ORDERS_SWEEP_PATH = "/orders-simplified"
+TRADEBOOK_PATH = "/tradebook"
+QUOTES_PATH = "/data/quotes"          # used with DATA_BASE (host root)
+OPTION_CHAIN_PATH = "/data/options-chain-v3"  # used with DATA_BASE (host root)
 
 
 class FyersError(Exception):
@@ -120,6 +125,16 @@ async def _request(
     json: dict | None = None,
     params: dict | None = None,
 ) -> dict:
+    """One FYERS HTTP call.
+
+    ``path`` is relative to ``base_url`` (default ``API_BASE`` —
+    ``https://api-t1.fyers.in/api/v3``). The `/data/*` endpoints pass
+    ``base_url=DATA_BASE`` (host root) because FYERS serves them at the
+    root, NOT under ``/api/v3``. Path constants here must therefore be
+    RELATIVE; a full-prefix path would double the prefix into
+    ``/api/v3/api/v3/...`` which FYERS' router 404s (found live on
+    staging, 2026-09-15).
+    """
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.request(
