@@ -373,13 +373,16 @@ def startup_db_check() -> int:
 def create_oauth_state(
     session_id: str | None = None,
     broker: str = "UPSTOX",
+    popup: bool = False,
 ) -> str:
     """Create a signed OAuth state value.
 
     Day 3 security fix: always produces HMAC-signed state with session binding.
     Unsigned fallback is removed.
 
-    Old states are garbage-collected on each call.
+    The ``popup`` flag is embedded in the signed state itself so it survives
+    the broker's redirect back to the callback URL — the broker only preserves
+    ``auth_code`` and ``state``, not custom query parameters.
     """
     # Garbage-collect old pending states
     now = time.time()
@@ -389,7 +392,7 @@ def create_oauth_state(
 
     # Always produce signed state with session binding
     payload = json.dumps(
-        {"sid": session_id or "", "brk": broker.upper(), "ts": int(now)},
+        {"sid": session_id or "", "brk": broker.upper(), "popup": bool(popup), "ts": int(now)},
         separators=(",", ":"),
     )
     b64 = base64.urlsafe_b64encode(payload.encode()).decode()
@@ -401,9 +404,9 @@ def create_oauth_state(
 
 
 def consume_oauth_state(state: str | None) -> dict | None:
-    """Validate and extract session_id + broker from signed OAuth state.
+    """Validate and extract session_id + broker + popup from signed OAuth state.
 
-    Returns {"session_id": "...", "broker": "UPSTOX"} on success.
+    Returns {"session_id": "...", "broker": "UPSTOX", "popup": True/False} on success.
     Returns None if state is invalid, expired, or already consumed.
 
     Day 3 security fix: legacy unsigned states are rejected.
@@ -433,6 +436,7 @@ def consume_oauth_state(state: str | None) -> dict | None:
         return {
             "session_id": payload.get("sid", ""),
             "broker": payload.get("brk", "UPSTOX"),
+            "popup": bool(payload.get("popup", False)),
         }
     except Exception:
         # Corrupted signed state — reject

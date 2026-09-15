@@ -132,11 +132,11 @@ def test_popup_callback_returns_html_with_exact_origin(
     store_byob(db_session, user, "FYERS")
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
-    # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    # Act - popup flag is embedded in signed state, not query param
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -164,10 +164,10 @@ def test_popup_callback_never_uses_wildcard_target_origin(
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -201,10 +201,10 @@ def test_popup_callback_no_access_token_exposure(
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -233,10 +233,10 @@ def test_popup_callback_no_auth_code_exposure(
 
     # Act
     auth_code_used = "super-secret-auth-code-xyz"
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": auth_code_used, "state": state, "popup": "true"},
+        params={"code": auth_code_used, "state": state},
         follow_redirects=False,
     )
 
@@ -266,10 +266,10 @@ def test_popup_callback_no_app_secret_exposure(
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -296,10 +296,10 @@ def test_popup_callback_creates_broker_connection_and_token(
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -361,10 +361,10 @@ def test_popup_callback_failure_no_partial_state(
     monkeypatch.setattr("app.routers.auth.gateway.create", lambda *a, **kw: adapter)
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "invalid-auth-code", "state": state, "popup": "true"},
+        params={"code": "invalid-auth-code", "state": state},
         follow_redirects=False,
     )
 
@@ -404,10 +404,10 @@ def test_popup_callback_does_not_switch_user_based_on_message(
     # In real scenario, the state is signed so forgery would be detected
     # But we test that even if state is valid, the broker connection goes to the
     # session owner, not someone claiming to be a different user
-    state_a = token_store.create_oauth_state(session_id=session_a, broker="FYERS")
+    state_a = token_store.create_oauth_state(session_id=session_a, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state_a, "popup": "true"},
+        params={"code": "test-auth-code", "state": state_a},
         follow_redirects=False,
     )
 
@@ -442,7 +442,7 @@ def test_popup_callback_requires_signed_oauth_state(
     # Act - try with forged state
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": "forged-state", "popup": "true"},
+        params={"code": "test-auth-code", "state": "forged-state"},
         follow_redirects=False,
     )
 
@@ -458,13 +458,23 @@ def test_popup_callback_requires_signed_oauth_state(
 # ---------------------------------------------------------------------------
 def test_popup_callback_error_returns_safe_html(
     client: TestClient,
+    db_session: object,
+    monkeypatch: object,
 ):
     """OAuth error (user denies consent) must return safe error popup HTML."""
+    # Arrange - need valid state with popup flag to trigger popup mode
+    user = make_platform_user(db_session)
+    session_id = login_initiator(db_session, user)
+    store_byob(db_session, user, "FYERS")
+    mock_fyers_adapter(monkeypatch, fyers_profile())
+
+    # Create state with popup flag embedded
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
 
     # Act
     resp = client.get(
         "/auth/callback",
-        params={"error": "access_denied", "popup": "true"},
+        params={"error": "access_denied", "state": state},
         follow_redirects=False,
     )
 
@@ -497,10 +507,10 @@ def test_popup_callback_sends_correct_broker_in_postmessage(
     mock_fyers_adapter(monkeypatch, fyers_profile())
 
     # Act
-    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS")
+    state = token_store.create_oauth_state(session_id=session_id, broker="FYERS", popup=True)
     resp = client.get(
         "/auth/callback",
-        params={"code": "test-auth-code", "state": state, "popup": "true"},
+        params={"code": "test-auth-code", "state": state},
         follow_redirects=False,
     )
 

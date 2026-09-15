@@ -114,7 +114,9 @@ def login(
         db.close()
 
     # Phase 10.2B-3: Embed session_id in signed OAuth state for callback binding.
-    state = token_store.create_oauth_state(session_id=session_id, broker=broker_id)
+    # The popup flag is also embedded in the state so it survives the broker's
+    # redirect — FYERS only preserves auth_code and state, not custom params.
+    state = token_store.create_oauth_state(session_id=session_id, broker=broker_id, popup=popup)
 
     adapter = gateway.create(broker_id, **user_credentials)
     return RedirectResponse(adapter.get_authorization_url(state))
@@ -131,33 +133,40 @@ async def callback(
     error: str | None = None,
     state: str | None = None,
     broker: str = Query(default="UPSTOX"),
-    popup: bool = False,
 ):
     """Complete broker OAuth using USER's per-user credentials (BYOB).
 
     Both the authorization-code exchange AND the profile fetch use the
     SAME user's API key/secret.  No shared platform credentials in BYOB path.
 
-    Popup mode: when ``popup=true``, returns an HTML page that sends
-    ``postMessage`` to the opener window instead of redirecting.  This
-    enables a seamless "Save & Connect" UX while keeping the same OAuth
-    state validation and token exchange flow.  The popup page exposes
-    NO tokens, secrets or auth_codes — only a minimal status message.
+    Popup mode: when the signed OAuth state carries ``popup=true``, returns
+    an HTML page that sends ``postMessage`` to the opener window instead of
+    redirecting.  This enables a seamless "Save & Connect" UX while keeping
+    the same OAuth state validation and token exchange flow.  The popup page
+    exposes NO tokens, secrets or auth_codes — only a minimal status message.
+
+    The popup flag is embedded in the signed OAuth state (not a query param)
+    because FYERS only preserves ``auth_code`` and ``state`` through its
+    redirect — custom query parameters would be lost.
     """
-    if error:
-        if popup:
-            return _popup_error_response(error)
-        return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(error)}")
     # FYERS v3 redirects back with `auth_code` (its own parameter name, see
     # PHASE_10_2B_CONNECTION_ARCHITECTURE.md §FYERS flow) instead of OAuth's
     # standard `code`. Accept both — the broker identity comes from the signed
     # state, so the extra accepted parameter cannot cross broker flows.
     code = code or auth_code
-    # Phase 10.2B-3: Extract session_id + broker from signed OAuth state.
+    # Phase 10.2B-3: Extract session_id + broker + popup from signed OAuth state.
     # This eliminates the race condition — we know EXACTLY which user initiated OAuth.
     state_data = token_store.consume_oauth_state(state)
     if state_data is None:
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+
+    # Extract popup flag from signed state (not query param — broker wouldn't preserve it)
+    popup = state_data.get("popup", False)
+
+    if error:
+        if popup:
+            return _popup_error_response(error)
+        return RedirectResponse(f"{settings.FRONTEND_ORIGIN}?login_error={quote(error)}")
     if not code:
         raise HTTPException(status_code=400, detail="Missing authorization code")
 

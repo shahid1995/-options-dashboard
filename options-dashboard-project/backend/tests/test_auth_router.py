@@ -89,11 +89,24 @@ def test_login_redirects_to_upstox_with_state(client, db_session):
     assert "client_id=user-api-key" in location
 
 
-def test_callback_with_error_redirects_to_frontend(client):
-    resp = client.get("/auth/callback", params={"error": "access_denied"}, follow_redirects=False)
+def test_callback_with_error_redirects_to_frontend(client, db_session):
+    """Error without popup flag → redirect (dashboard mode)."""
+    # Create a valid state (non-popup) so the error can be processed
+    state = token_store.create_oauth_state(session_id="some-session", broker="UPSTOX", popup=False)
+    resp = client.get("/auth/callback", params={"error": "access_denied", "state": state}, follow_redirects=False)
     assert resp.status_code == 307
     assert resp.headers["location"] == f"{settings.FRONTEND_URL}?login_error=access_denied"
     assert client.get("/auth/status").json() == {"logged_in": False}
+
+
+def test_callback_with_error_in_popup_mode_returns_html(client, db_session):
+    """Error with popup flag → HTML postMessage response."""
+    # Create a valid state WITH popup flag
+    state = token_store.create_oauth_state(session_id="some-session", broker="UPSTOX", popup=True)
+    resp = client.get("/auth/callback", params={"error": "access_denied", "state": state}, follow_redirects=False)
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")
+    assert "strikenova-broker-oauth" in resp.text
 
 
 def test_callback_without_state_returns_400(client):
