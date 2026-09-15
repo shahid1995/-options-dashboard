@@ -76,6 +76,20 @@ describe("Context to Strategy Workflow", () => {
     expect(html).not.toContain("25,250 / 25,750");
   });
 
+  it("renders Paper Execution as a decision-to-review workflow", () => {
+    const html = renderPage();
+    expect(html).toContain("PAPER EXECUTION");
+    expect(html).toContain("DECIDE");
+    expect(html).toContain("EXECUTE");
+    expect(html).toContain("MANAGE");
+    expect(html).toContain("REVIEW");
+    expect(html).toContain("BULL CALL SPREAD");
+    expect(html).toContain("FILLED");
+    expect(html).toContain("+13.5 pts");
+    expect(html).toContain("Every paper trade becomes evidence for the next decision.");
+    expect(html).toContain("SIMULATED EXECUTION · NO REAL BROKER ORDER");
+  });
+
   it("preserves the homepage strategy CTA and demo semantics", () => {
     const html = renderPage();
     expect(html).toContain("/strategy-lab");
