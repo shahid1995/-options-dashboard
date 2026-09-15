@@ -1,5 +1,5 @@
 // StrikeNova Primary CTA — Anatomical interaction
-// Hover/focus reveals the button's construction: icon, spacing, surface, radius
+// Hover/focus reveals the button's workflow anatomy: market state → strategy → risk → paper execution
 // Self-contained component for homepage hero CTA.
 // Anchor-driven geometry with refined connector system.
 
@@ -117,8 +117,8 @@ const CTA_CSS = `
   .sn-cta-wrapper {
     padding: 36px 40px;
   }
-  .sn-cta-annotation--spacing,
-  .sn-cta-annotation--radius {
+  .sn-cta-annotation--market-structure,
+  .sn-cta-annotation--risk {
     display: none;
   }
 }
@@ -183,35 +183,35 @@ function Annotations({ buttonRef, wrapperRef }) {
   const labelGap = 8;
   const labelHeight = 12;
 
-  // ICON: right side, diagonal up-right
-  const iconTargetX = dims.rightEdge - 14;
-  const iconTargetY = dims.centerY;
-  const iconLabelX = iconTargetX + 35;
-  const iconLabelY = iconTargetY - 18;
+  // Market state: upper-right, diagonal up-right from top edge
+  const msTargetX = dims.centerX + 30;
+  const msTargetY = dims.top + 4;
+  const msLabelX = msTargetX + 30;
+  const msLabelY = msTargetY - 16;
 
-  // SPACING: left side, horizontal left
-  const spacingTargetX = dims.left + dims.paddingLeft;
-  const spacingTargetY = dims.centerY;
-  const spacingLabelX = spacingTargetX - 38;
-  const spacingLabelY = spacingTargetY;
+  // Market structure: right side, horizontal right from mid-body
+  const mstTargetX = dims.rightEdge - 8;
+  const mstTargetY = dims.centerY - 4;
+  const mstLabelX = mstTargetX + 30;
+  const mstLabelY = mstTargetY;
 
-  // SURFACE: bottom, vertical down
-  const surfaceTargetX = dims.centerX;
-  const surfaceTargetY = dims.centerY;
-  const surfaceLabelX = dims.centerX;
-  const surfaceLabelY = dims.centerY + 42;
+  // Strategy: bottom-right area, clearly on right side
+  const stratTargetX = dims.rightEdge - 30;
+  const stratTargetY = dims.centerY;
+  const stratLabelX = stratTargetX + 30;
+  const stratLabelY = dims.centerY + 42;
 
-  // RADIUS: top-right corner, diagonal up-right
-  const radiusTargetX = dims.rightEdge - dims.borderRadius;
-  const radiusTargetY = dims.top + dims.borderRadius;
-  const radiusLabelX = radiusTargetX + 30;
-  const radiusLabelY = radiusTargetY - 12;
+  // Risk: lower-right, diagonal down-right from right edge
+  const riskTargetX = dims.rightEdge - 4;
+  const riskTargetY = dims.top + dims.height * 0.7;
+  const riskLabelX = riskTargetX + 30;
+  const riskLabelY = riskTargetY + 18;
 
-  // DIRECTION: bottom-right, diagonal down-right
-  const directionTargetX = dims.rightEdge + 6;
-  const directionTargetY = dims.centerY + 16;
-  const directionLabelX = directionTargetX + 32;
-  const directionLabelY = directionTargetY + 8;
+  // Paper execution: far lower-right, diagonal from arrow trajectory
+  const peTargetX = dims.rightEdge + 6;
+  const peTargetY = dims.bottomEdge + 4;
+  const peLabelX = peTargetX + 30;
+  const peLabelY = peTargetY + 16;
 
   return (
     <svg
@@ -221,113 +221,104 @@ function Annotations({ buttonRef, wrapperRef }) {
       height="100%"
       style={{ overflow: "visible" }}
     >
-      {/* ICON */}
-      <g className="sn-cta-annotation sn-cta-annotation--icon" style={{ transitionDelay: "50ms" }}>
+      {/* Market state: upper-right */}
+      <g className="sn-cta-annotation sn-cta-annotation--market-state" style={{ transitionDelay: "50ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={iconTargetX}
-          y1={iconTargetY}
-          x2={iconLabelX - labelGap}
-          y2={iconLabelY}
+          x1={msTargetX}
+          y1={msTargetY}
+          x2={msLabelX - labelGap}
+          y2={msLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={iconTargetX} cy={iconTargetY} r={DOT_R} />
-        <circle className="sn-cta-annotation-dot" cx={iconLabelX - labelGap} cy={iconLabelY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={msTargetX} cy={msTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={msLabelX - labelGap} cy={msLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={iconLabelX}
-          y={iconLabelY + 3}
+          x={msLabelX}
+          y={msLabelY + 3}
         >
-          ICON
+          Market state
         </text>
       </g>
 
-      {/* SPACING */}
-      <g className="sn-cta-annotation sn-cta-annotation--spacing" style={{ transitionDelay: "100ms" }}>
+      {/* Market structure: right side */}
+      <g className="sn-cta-annotation sn-cta-annotation--market-structure" style={{ transitionDelay: "100ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={spacingTargetX}
-          y1={spacingTargetY}
-          x2={spacingLabelX + labelGap}
-          y2={spacingLabelY}
+          x1={mstTargetX}
+          y1={mstTargetY}
+          x2={mstLabelX - labelGap}
+          y2={mstLabelY}
         />
-        <line
-          className="sn-cta-annotation-line"
-          x1={dims.left}
-          y1={dims.top - 4}
-          x2={dims.left}
-          y2={dims.bottomEdge + 4}
-          strokeDasharray="2 2"
-        />
-        <circle className="sn-cta-annotation-dot" cx={spacingTargetX} cy={spacingTargetY} r={DOT_R} />
-        <circle className="sn-cta-annotation-dot" cx={spacingLabelX + labelGap} cy={spacingLabelY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={mstTargetX} cy={mstTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={mstLabelX - labelGap} cy={mstLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={spacingLabelX}
-          y={spacingLabelY + 3}
-          textAnchor="end"
+          x={mstLabelX}
+          y={mstLabelY + 3}
         >
-          SPACING
+          Market structure
         </text>
       </g>
 
-      {/* SURFACE */}
-      <g className="sn-cta-annotation sn-cta-annotation--surface" style={{ transitionDelay: "150ms" }}>
+      {/* Strategy: bottom-center */}
+      <g className="sn-cta-annotation sn-cta-annotation--strategy" style={{ transitionDelay: "150ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={surfaceTargetX}
-          y1={surfaceTargetY}
-          x2={surfaceLabelX}
-          y2={surfaceLabelY - labelGap}
+          x1={stratTargetX}
+          y1={stratTargetY}
+          x2={stratLabelX}
+          y2={stratLabelY - labelGap}
         />
-        <circle className="sn-cta-annotation-dot" cx={surfaceTargetX} cy={surfaceTargetY} r={DOT_R} />
-        <circle className="sn-cta-annotation-dot" cx={surfaceLabelX} cy={surfaceLabelY - labelGap} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={stratTargetX} cy={stratTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={stratLabelX} cy={stratLabelY - labelGap} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={surfaceLabelX}
-          y={surfaceLabelY + 3}
+          x={stratLabelX}
+          y={stratLabelY + 3}
           textAnchor="middle"
         >
-          SURFACE
+          Strategy
         </text>
       </g>
 
-      {/* RADIUS */}
-      <g className="sn-cta-annotation sn-cta-annotation--radius" style={{ transitionDelay: "200ms" }}>
+      {/* Risk: lower-right */}
+      <g className="sn-cta-annotation sn-cta-annotation--risk" style={{ transitionDelay: "175ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={radiusTargetX}
-          y1={radiusTargetY}
-          x2={radiusLabelX - labelGap}
-          y2={radiusLabelY}
+          x1={riskTargetX}
+          y1={riskTargetY}
+          x2={riskLabelX - labelGap}
+          y2={riskLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={radiusTargetX} cy={radiusTargetY} r={DOT_R} />
-        <circle className="sn-cta-annotation-dot" cx={radiusLabelX - labelGap} cy={radiusLabelY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={riskTargetX} cy={riskTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={riskLabelX - labelGap} cy={riskLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={radiusLabelX}
-          y={radiusLabelY + 3}
+          x={riskLabelX}
+          y={riskLabelY + 3}
         >
-          RADIUS
+          Risk
         </text>
       </g>
 
-      {/* DIRECTION */}
-      <g className="sn-cta-annotation sn-cta-annotation--direction" style={{ transitionDelay: "175ms" }}>
+      {/* Paper execution: far lower-right */}
+      <g className="sn-cta-annotation sn-cta-annotation--paper-execution" style={{ transitionDelay: "200ms" }}>
         <line
           className="sn-cta-annotation-line"
-          x1={directionTargetX}
-          y1={directionTargetY}
-          x2={directionLabelX - labelGap}
-          y2={directionLabelY}
+          x1={peTargetX}
+          y1={peTargetY}
+          x2={peLabelX - labelGap}
+          y2={peLabelY}
         />
-        <circle className="sn-cta-annotation-dot" cx={directionTargetX} cy={directionTargetY} r={DOT_R} />
-        <circle className="sn-cta-annotation-dot" cx={directionLabelX - labelGap} cy={directionLabelY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={peTargetX} cy={peTargetY} r={DOT_R} />
+        <circle className="sn-cta-annotation-dot" cx={peLabelX - labelGap} cy={peLabelY} r={DOT_R} />
         <text
           className="sn-cta-annotation-label"
-          x={directionLabelX}
-          y={directionLabelY + 3}
+          x={peLabelX}
+          y={peLabelY + 3}
         >
-          DIRECTION
+          Paper execution
         </text>
       </g>
     </svg>
