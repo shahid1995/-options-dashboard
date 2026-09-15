@@ -34,6 +34,12 @@ import {
   Eyebrow,
   SectionTitle,
 } from "@/components/public/truth";
+import {
+  IntelligenceStack,
+  DeepCapabilityGrid,
+  ProductEvidenceGrid,
+  WhyStrikeNova,
+} from "@/components/public/FeatureIntelligenceSections";
 
 // =============================================================================
 // Features Page — Organized Around User Outcomes
@@ -490,6 +496,12 @@ export default function FeaturesClientPage() {
         </Container>
       </Section>
 
+      {/* Expanded intelligence story */}
+      <IntelligenceStack />
+      <DeepCapabilityGrid />
+      <ProductEvidenceGrid />
+      <WhyStrikeNova />
+
       {/* ─────────────────────────────────────────────────────────────────────
           VISUALIZATION DEMO — Signal Field
           ───────────────────────────────────────────────────────────────────── */}
@@ -580,7 +592,7 @@ export default function FeaturesClientPage() {
               align="center"
               style={{ position: "relative", zIndex: 1 }}
             >
-              <Eyebrow color={COLOR.strategy}>START YOUR WORKFLOW</Eyebrow>
+              <Eyebrow color={COLOR.strategy}>FROM MARKET DATA TO DECISIONS</Eyebrow>
 
               <h2
                 style={{
@@ -592,7 +604,7 @@ export default function FeaturesClientPage() {
                   lineHeight: TYPE.h2.lineHeight,
                 }}
               >
-                Choose where to begin
+                See the market beneath the option chain.
               </h2>
 
               <p
@@ -604,8 +616,8 @@ export default function FeaturesClientPage() {
                   margin: 0,
                 }}
               >
-                Start with market data, strategy design, or paper trading — every
-                entry point connects to the full workflow.
+                Start with market context, move into strategy and risk, then rehearse
+                the decision in a paper environment.
               </p>
 
               <FlexRow
@@ -613,14 +625,11 @@ export default function FeaturesClientPage() {
                 justify="center"
                 style={{ flexWrap: "wrap" }}
               >
-                <LinkButton href="/market-intelligence" variant="primary" size="lg">
-                  Market Intelligence →
+                <LinkButton href="/features" variant="primary" size="lg">
+                  Explore the Platform →
                 </LinkButton>
-                <LinkButton href="/strategy-lab" variant="secondary" size="lg">
-                  Strategy Lab →
-                </LinkButton>
-                <LinkButton href="/paper-trading" variant="ghost" size="lg">
-                  Paper Trading →
+                <LinkButton href="/how-it-works" variant="secondary" size="lg">
+                  See How It Works
                 </LinkButton>
               </FlexRow>
             </FlexColumn>
