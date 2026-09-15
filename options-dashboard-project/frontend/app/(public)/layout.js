@@ -2,14 +2,14 @@ import PublicLayout from "@/components/public/PublicLayout";
 
 export const metadata = {
   title: {
-    default: "Options Dashboard — Options Trading & Analysis Platform",
-    template: "%s | Options Dashboard",
+    default: "StrikeNova — Options Intelligence for Structured Decisions",
+    template: "%s | StrikeNova",
   },
   description:
-    "A professional options analysis and paper-trading platform for traders who want to turn market data into structured decisions.",
+    "StrikeNova is an options intelligence platform. Analyze market data, build strategies, paper trade, and review decisions in one structured workflow.",
   openGraph: {
     type: "website",
-    siteName: "Options Dashboard",
+    siteName: "StrikeNova",
   },
 };
 
