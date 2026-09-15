@@ -1,5 +1,6 @@
 // =============================================================================
-// SignalMetricOverview — Key indicators + Greeks + demo labeling
+// Market State Console — Premium financial intelligence presentation
+// Data → Relationship → Interpretation
 // =============================================================================
 "use client";
 import React from "react";
@@ -7,19 +8,17 @@ import { COLOR, TYPE, SPACE, RADIUS } from "@/components/public/tokens";
 import { DemoLabel } from "@/components/public/truth";
 import { useIsMobile } from "@/lib/ui";
 
-const KEY_METRICS = [
-  { label: "SPOT", value: "25,500" },
-  { label: "PCR", value: "0.92" },
-  { label: "ATM IV", value: "14.2%" },
-  { label: "ΔOI", value: "+8.4%" },
-];
+// Market state metadata
+const MARKET_STATE = {
+  label: "BALANCED",
+  strength: 68,
+  direction: "NEUTRAL",
+  volatility: "MODERATE",
+  positioning: "BALANCED",
+  risk: "CONTROLLED",
+};
 
-const GREEKS = [
-  { name: "Delta", label: "DELTA", value: "-0.02", desc: "Price sensitivity" },
-  { name: "Gamma", label: "GAMMA", value: "0.0003", desc: "Delta change" },
-  { name: "Theta", label: "THETA", value: "+42.15", desc: "Time decay" },
-  { name: "Vega", label: "VEGA", value: "-18.40", desc: "Volatility sensitivity" },
-];
+const MARKET_READ = "Balanced positioning with positive gamma and moderate implied volatility. Price remains above the gamma flip, suggesting a relatively contained near-term structure.";
 
 export default function SignalMetricOverview() {
   const isMobile = useIsMobile();
@@ -31,156 +30,524 @@ export default function SignalMetricOverview() {
         border: `1px solid ${COLOR.border}`,
         borderRadius: RADIUS.xl,
         padding: isMobile ? SPACE.card : SPACE.cardLg,
+        display: "flex",
+        flexDirection: "column",
+        gap: SPACE.cardLg,
       }}
     >
-      {/* Key indicators */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
-          gap: SPACE.comp,
-          marginBottom: SPACE.cardLg,
-        }}
-      >
-        {KEY_METRICS.map((m) => (
-          <div
-            key={m.label}
-            style={{
-              background: COLOR.baseElevated,
-              border: `1px solid ${COLOR.borderSubtle}`,
-              borderRadius: RADIUS.md,
-              padding: SPACE.comp,
-            }}
-          >
-            <div
-              style={{
-                fontSize: TYPE.caption.size,
-                fontWeight: 600,
-                letterSpacing: "0.06em",
-                color: COLOR.textFaint,
-                textTransform: "uppercase",
-                marginBottom: SPACE.xs,
-              }}
-            >
-              {m.label}
-            </div>
-            <div
-              style={{
-                fontSize: TYPE.data.size,
-                fontWeight: 700,
-                color: COLOR.textPrimary,
-                fontFamily: TYPE.data,
-              }}
-            >
-              {m.value}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Signal visualization area */}
-      <div
-        style={{
-          background: COLOR.baseElevated,
-          border: `1px solid ${COLOR.borderSubtle}`,
-          borderRadius: RADIUS.md,
-          padding: SPACE.card,
-          marginBottom: SPACE.cardLg,
-          textAlign: "center",
-        }}
-      >
+      {/* ═══ DOMINANT MARKET STATE ═══ */}
+      <div>
         <div
           style={{
             fontSize: TYPE.caption.size,
             fontWeight: 600,
-            letterSpacing: "0.06em",
+            letterSpacing: "0.08em",
             color: COLOR.textFaint,
+            textTransform: "uppercase",
             marginBottom: SPACE.comp,
           }}
         >
-          SIGNAL VISUALIZATION
+          Market State
         </div>
-        {/* Mini OI bars */}
         <div
           style={{
             display: "flex",
-            alignItems: "flex-end",
-            gap: "0.25rem",
-            height: 80,
-            justifyContent: "center",
+            alignItems: "baseline",
+            gap: SPACE.comp,
+            marginBottom: SPACE.small,
           }}
         >
-          {[40, 65, 85, 70, 55, 90, 75, 50].map((h, i) => (
+          <span
+            style={{
+              fontSize: "clamp(1.75rem, 3vw, 2.25rem)",
+              fontWeight: 700,
+              color: COLOR.textPrimary,
+              fontFamily: TYPE.data,
+              letterSpacing: "-0.02em",
+              lineHeight: 1,
+            }}
+          >
+            {MARKET_STATE.label}
+          </span>
+          <span
+            style={{
+              fontSize: TYPE.bodySmall.size,
+              color: COLOR.textMuted,
+              fontFamily: TYPE.data,
+            }}
+          >
+            strength {MARKET_STATE.strength}/100
+          </span>
+        </div>
+        {/* Spectrum */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: SPACE.small,
+          }}
+        >
+          <span
+            style={{
+              fontSize: "0.625rem",
+              color: COLOR.textFaint,
+              fontFamily: TYPE.data,
+              letterSpacing: "0.04em",
+            }}
+          >
+            BEARISH
+          </span>
+          <div
+            style={{
+              flex: 1,
+              height: 2,
+              background: `linear-gradient(to right, ${COLOR.textFaint}, ${COLOR.strategy}, ${COLOR.textFaint})`,
+              position: "relative",
+            }}
+          >
             <div
-              key={i}
               style={{
-                width: "100%",
-                height: `${h}%`,
-                background: i < 4 ? COLOR.negative : COLOR.positive,
-                opacity: 0.7,
-                borderRadius: "2px 2px 0 0",
+                position: "absolute",
+                left: `${MARKET_STATE.strength}%`,
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                background: COLOR.strategy,
+                border: `2px solid ${COLOR.surface}`,
               }}
             />
-          ))}
+          </div>
+          <span
+            style={{
+              fontSize: "0.625rem",
+              color: COLOR.textFaint,
+              fontFamily: TYPE.data,
+              letterSpacing: "0.04em",
+            }}
+          >
+            BULLISH
+          </span>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: COLOR.borderSubtle }} />
+
+      {/* ═══ MARKET STRUCTURE ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          Market Structure
         </div>
         <div
           style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: SPACE.xs,
+            display: "grid",
+            gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+            gap: 0,
           }}
         >
-          {[25.3, 25.4, 25.5, 25.6, 25.7].map((s) => (
-            <span
-              key={s}
-              style={{ fontSize: "0.625rem", color: COLOR.textFaint, fontFamily: TYPE.data }}
+          {[
+            { label: "CALL OI", value: "12.4M" },
+            { label: "PUT OI", value: "11.1M" },
+            { label: "PCR", value: "1.04" },
+            { label: "OI IMBALANCE", value: "+5.8%" },
+          ].map((m, i) => (
+            <div
+              key={m.label}
+              style={{
+                padding: SPACE.comp,
+                borderRight: i < 3 ? `1px solid ${COLOR.borderSubtle}` : "none",
+                borderRightWidth: isMobile && i % 2 === 1 ? 0 : undefined,
+              }}
             >
-              {s}k
-            </span>
+              <div
+                style={{
+                  fontSize: "0.625rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  color: COLOR.textFaint,
+                  marginBottom: SPACE.xs,
+                }}
+              >
+                {m.label}
+              </div>
+              <div
+                style={{
+                  fontSize: "1.125rem",
+                  fontWeight: 700,
+                  color: COLOR.textPrimary,
+                  fontFamily: TYPE.data,
+                }}
+              >
+                {m.value}
+              </div>
+            </div>
           ))}
         </div>
       </div>
 
-      {/* Greeks */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
-          gap: SPACE.comp,
-          marginBottom: SPACE.cardLg,
-        }}
-      >
-        {GREEKS.map((g) => (
-          <div key={g.label}>
+      {/* ═══ VOLATILITY REGIME ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          Volatility Regime
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: SPACE.cardLg,
+            flexWrap: "wrap",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          <div>
             <div
               style={{
-                fontSize: TYPE.caption.size,
+                fontSize: "0.625rem",
                 fontWeight: 600,
                 letterSpacing: "0.06em",
                 color: COLOR.textFaint,
-                textTransform: "uppercase",
                 marginBottom: SPACE.xs,
               }}
             >
-              {g.name}
+              ATM IV
             </div>
             <div
               style={{
-                fontSize: TYPE.data.size,
+                fontSize: "1rem",
                 fontWeight: 700,
                 color: COLOR.textPrimary,
                 fontFamily: TYPE.data,
               }}
             >
-              {g.value}
+              14.2%
             </div>
-            <div style={{ fontSize: "0.6875rem", color: COLOR.textFaint }}>{g.desc}</div>
           </div>
-        ))}
+          <div>
+            <div
+              style={{
+                fontSize: "0.625rem",
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                color: COLOR.textFaint,
+                marginBottom: SPACE.xs,
+              }}
+            >
+              INDIA VIX
+            </div>
+            <div
+              style={{
+                fontSize: "1rem",
+                fontWeight: 700,
+                color: COLOR.textPrimary,
+                fontFamily: TYPE.data,
+              }}
+            >
+              13.8
+            </div>
+          </div>
+          <div>
+            <div
+              style={{
+                fontSize: "0.625rem",
+                fontWeight: 600,
+                letterSpacing: "0.06em",
+                color: COLOR.textFaint,
+                marginBottom: SPACE.xs,
+              }}
+            >
+              IV REGIME
+            </div>
+            <div
+              style={{
+                fontSize: "1rem",
+                fontWeight: 700,
+                color: COLOR.textPrimary,
+                fontFamily: TYPE.data,
+              }}
+            >
+              NORMAL
+            </div>
+          </div>
+        </div>
+        {/* Volatility scale */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: SPACE.small,
+          }}
+        >
+          <span
+            style={{
+              fontSize: "0.625rem",
+              color: COLOR.textFaint,
+              fontFamily: TYPE.data,
+              letterSpacing: "0.04em",
+            }}
+          >
+            LOW
+          </span>
+          <div
+            style={{
+              flex: 1,
+              height: 2,
+              background: `linear-gradient(to right, ${COLOR.textFaint}, ${COLOR.strategy}, ${COLOR.textFaint})`,
+              position: "relative",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: "45%",
+                top: "50%",
+                transform: "translate(-50%, -50%)",
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: COLOR.strategy,
+                border: `2px solid ${COLOR.surface}`,
+              }}
+            />
+          </div>
+          <span
+            style={{
+              fontSize: "0.625rem",
+              color: COLOR.textFaint,
+              fontFamily: TYPE.data,
+              letterSpacing: "0.04em",
+            }}
+          >
+            HIGH
+          </span>
+        </div>
+      </div>
+
+      {/* ═══ GAMMA / POSITIONING ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          Gamma & Positioning
+        </div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: SPACE.small,
+            flexWrap: "wrap",
+            fontFamily: TYPE.data,
+            fontSize: "0.875rem",
+            color: COLOR.textMuted,
+          }}
+        >
+          <span style={{ color: COLOR.textFaint }}>25,400</span>
+          <span style={{ color: COLOR.borderSubtle }}>────────</span>
+          <span style={{ color: COLOR.strategy, fontWeight: 700 }}>25,470</span>
+          <span style={{ color: COLOR.borderSubtle }}>──────</span>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: COLOR.textPrimary,
+              display: "inline-block",
+            }}
+          />
+          <span style={{ color: COLOR.textPrimary, fontWeight: 700 }}>25,500</span>
+          <span style={{ color: COLOR.borderSubtle }}>──────</span>
+          <span style={{ color: COLOR.textFaint }}>25,600</span>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: SPACE.small,
+            marginTop: SPACE.xs,
+            fontFamily: TYPE.data,
+            fontSize: "0.625rem",
+            color: COLOR.textFaint,
+            letterSpacing: "0.04em",
+          }}
+        >
+          <span marginLeft="25,400" />
+          <span style={{ color: COLOR.strategy }}>GAMMA FLIP</span>
+          <span flex={1} />
+          <span>SPOT</span>
+        </div>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: COLOR.borderSubtle }} />
+
+      {/* ═══ MARKET READ ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.small,
+          }}
+        >
+          Market Read
+        </div>
+        <p
+          style={{
+            fontSize: TYPE.bodySmall.size,
+            color: COLOR.textSecondary,
+            lineHeight: 1.65,
+            margin: 0,
+          }}
+        >
+          {MARKET_READ}
+        </p>
+      </div>
+
+      {/* ═══ DECISION CONTEXT ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          Decision Context
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+            gap: SPACE.comp,
+          }}
+        >
+          {[
+            { label: "DIRECTION", value: "NEUTRAL" },
+            { label: "VOLATILITY", value: "MODERATE" },
+            { label: "POSITIONING", value: "BALANCED" },
+            { label: "RISK", value: "CONTROLLED" },
+          ].map((d) => (
+            <div
+              key={d.label}
+              style={{
+                padding: `${SPACE.small} ${SPACE.comp}`,
+                background: COLOR.baseElevated,
+                border: `1px solid ${COLOR.borderSubtle}`,
+                borderRadius: RADIUS.sm,
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.5625rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  color: COLOR.textFaint,
+                  marginBottom: SPACE.xs,
+                }}
+              >
+                {d.label}
+              </div>
+              <div
+                style={{
+                  fontSize: "0.8125rem",
+                  fontWeight: 700,
+                  color: COLOR.textPrimary,
+                  fontFamily: TYPE.data,
+                }}
+              >
+                {d.value}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ GREEKS ═══ */}
+      <div>
+        <div
+          style={{
+            fontSize: TYPE.caption.size,
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: COLOR.textFaint,
+            textTransform: "uppercase",
+            marginBottom: SPACE.comp,
+          }}
+        >
+          Greeks
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+            gap: SPACE.comp,
+          }}
+        >
+          {[
+            { name: "Delta", value: "-0.02" },
+            { name: "Gamma", value: "0.0003" },
+            { name: "Theta", value: "+42.15" },
+            { name: "Vega", value: "-18.40" },
+          ].map((g) => (
+            <div key={g.name}>
+              <div
+                style={{
+                  fontSize: "0.625rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  color: COLOR.textFaint,
+                  marginBottom: SPACE.xs,
+                }}
+              >
+                {g.name}
+              </div>
+              <div
+                style={{
+                  fontSize: "1rem",
+                  fontWeight: 700,
+                  color: COLOR.textPrimary,
+                  fontFamily: TYPE.data,
+                }}
+              >
+                {g.value}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Demo label */}
-      <div style={{ textAlign: "center" }}>
+      <div style={{ textAlign: "center", paddingTop: SPACE.small }}>
         <DemoLabel style={{ fontSize: "0.625rem" }} />
       </div>
     </div>
