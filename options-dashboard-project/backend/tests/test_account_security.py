@@ -381,3 +381,63 @@ class TestAccountSecurityMigration:
         finally:
             # Return any DB to head for later tests
             command.upgrade(cfg, "head")
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — application logs never contain secret material (plan requirement)
+# ---------------------------------------------------------------------------
+
+
+def test_account_flows_never_log_secrets(db_session, caplog):
+    """Raw passwords, raw tokens, reset URLs, OAuth codes and broker
+    credentials must never appear in application log output during a full
+    account-security journey."""
+    import logging
+
+    from fastapi.testclient import TestClient
+    from app.services.email import clear_sent_messages, get_sent_messages
+
+    def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    client = TestClient(app)
+
+    _user(db_session, email="logleak@example.com")
+
+    clear_sent_messages()
+    try:
+        with caplog.at_level(logging.DEBUG, logger="app"):
+            client.post(
+                "/auth/account/login",
+                json={"email": "logleak@example.com", "password": "WrongAttempt1!"},
+            )
+            client.post(
+                "/auth/account/login",
+                json={"email": "logleak@example.com", "password": "Sup3rSecret!"},
+            )
+            client.post(
+                "/auth/account/forgot-password", json={"email": "logleak@example.com"}
+            )
+            raw_reset = get_sent_messages()[-1].raw_token
+            client.post(
+                "/auth/account/reset-password",
+                json={"token": raw_reset, "new_password": "FreshPass123!"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    secrets = [
+        "Sup3rSecret!",
+        "WrongAttempt1!",
+        "FreshPass123!",
+        raw_reset,
+        f"reset-password?token={raw_reset}",
+    ]
+    log_blob = "\n".join(
+        f"{rec.levelname}:{rec.name}:{rec.getMessage()}" for rec in caplog.records
+    )
+    for secret in secrets:
+        assert secret not in log_blob, (
+            f"secret material leaked into application logs: {secret[:8]}..."
+        )

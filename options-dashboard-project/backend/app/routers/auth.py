@@ -86,6 +86,21 @@ rate_limiter.add_rule("/auth/login-email", RateLimitRule(max_requests=20, window
 rate_limiter.add_rule("/auth/register", RateLimitRule(max_requests=10, window_seconds=60))
 rate_limiter.add_rule("/auth/google", RateLimitRule(max_requests=20, window_seconds=60))
 
+# Account-security abuse controls (2026-09-16 plan Task 5). Keys are scoped
+# per operation: email+IP for unauthenticated login/recovery, user+session
+# for authenticated changes. The limiter stays behind the existing
+# SessionRateLimiter abstraction so a Redis store can replace it later
+# without changing endpoint contracts.
+rate_limiter.add_rule("/auth/account/login", RateLimitRule(max_requests=10, window_seconds=60))
+rate_limiter.add_rule("/auth/account/register", RateLimitRule(max_requests=5, window_seconds=60))
+rate_limiter.add_rule("/auth/account/resend-verification", RateLimitRule(max_requests=3, window_seconds=60))
+rate_limiter.add_rule("/auth/account/forgot-password", RateLimitRule(max_requests=5, window_seconds=60))
+rate_limiter.add_rule("/auth/account/reset-password", RateLimitRule(max_requests=5, window_seconds=60))
+rate_limiter.add_rule("/auth/account/change-password", RateLimitRule(max_requests=5, window_seconds=60))
+rate_limiter.add_rule("/auth/account/change-email", RateLimitRule(max_requests=5, window_seconds=60))
+rate_limiter.add_rule("/auth/account/verify-email-change", RateLimitRule(max_requests=10, window_seconds=60))
+rate_limiter.add_rule("/auth/account/verify-email", RateLimitRule(max_requests=10, window_seconds=60))
+
 
 def _mint_popup_kick(response: Response, session_id: str, broker_id: str) -> None:
     """Issue a single-use kick token bound to (session_id, broker)."""
@@ -1269,16 +1284,41 @@ def account_login(
     no broker credentials are required and the broker gateway is never
     invoked.
     """
+    # Abuse control: per-email+IP key protects one account from brute force
+    # without letting attackers lock out other users (plan Task 5).
+    rate_limiter.check(None, "/auth/account/login", client_id=f"acct-login:{email.strip().lower()}")
+
     email = (email or "").strip().lower()
     if not email or not password:
         raise HTTPException(status_code=422, detail="Email and password are required")
 
     user = db.query(User).filter(User.email == email).one_or_none()
     if user is None or not user.password_hash:
+        account_security.record_security_event(
+            db,
+            user_id=None,
+            event_type="login_failed",
+            metadata={"reason": "unknown_email_or_no_local_password"},
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.status != "active":
+        account_security.record_security_event(
+            db,
+            user_id=user.id,
+            event_type="login_failed",
+            metadata={"reason": "account_not_active"},
+        )
+        db.commit()
         raise HTTPException(status_code=403, detail="StrikeNova account is not active")
     if not verify_password(password, user.password_hash):
+        account_security.record_security_event(
+            db,
+            user_id=user.id,
+            event_type="login_failed",
+            metadata={"reason": "bad_password"},
+        )
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     user.last_login_at = datetime.now(timezone.utc)
@@ -1286,6 +1326,13 @@ def account_login(
     # Server-side recent-authentication state for sensitive-change gating
     # (plan Task 4): tied to (user_id, session_id), TTL-enforced on read.
     account_security.mark_recently_authenticated(db, user.id, session_id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="login_succeeded",
+        session_id=hash_session_id(session_id),
+        metadata={"identity_source": user.identity_source},
+    )
     db.commit()
 
     response.set_cookie(
@@ -1349,6 +1396,14 @@ def account_logout(
     Idempotent: revoking an unknown/already-revoked session still succeeds
     without revealing whether it ever existed.
     """
+    if session_id:
+        resolved = _account_user_from_session(db, session_id)
+        account_security.record_security_event(
+            db,
+            user_id=resolved[0].id if resolved else None,
+            event_type="logout",
+            session_id=hash_session_id(session_id),
+        )
     account_security.revoke_one(db, session_id)
     db.commit()
     if session_id:
@@ -1373,6 +1428,12 @@ def account_logout_all(
     user, _session = resolved
 
     revoked = account_security.revoke_all_for_user(db, user.id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="logout_all",
+        metadata={"revoked_sessions": revoked},
+    )
     db.commit()
     if session_id:
         token_store.clear_token(session_id)
@@ -1392,6 +1453,8 @@ def account_register(
     display_name: str | None = Body(default=None, embed=True),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(None, "/auth/account/register", client_id="unauth:register")
+
     """Register a StrikeNova local (email/password) account.
 
     Per design spec §6: the account is created UNVERIFIED, a single-use
@@ -1435,6 +1498,12 @@ def account_register(
     db.flush()
 
     raw_token, _record = account_security.create_verification_token(db, user.id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="registration_completed",
+        metadata={"identity_source": "email"},
+    )
     db.commit()
 
     account_security.send_verification_email(email, raw_token)
@@ -1476,6 +1545,11 @@ def account_resend_verification(
     email: str = Body(..., embed=True),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(
+        None, "/auth/account/resend-verification",
+        client_id=f"acct-resend:{(email or '').strip().lower()}",
+    )
+
     """Re-issue the verification email, invalidating prior active tokens.
 
     Enumeration-resistant: unknown addresses and already-active accounts get
@@ -1516,6 +1590,11 @@ def account_forgot_password(
     email: str = Body(..., embed=True),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(
+        None, "/auth/account/forgot-password",
+        client_id=f"acct-forgot:{(email or '').strip().lower()}",
+    )
+
     """Request a password-reset email.
 
     Enumeration protection (design spec §6): known and unknown addresses
@@ -1552,6 +1631,9 @@ def account_reset_password(
     new_password: str = Body(..., embed=True),
     db: Session = Depends(get_db),
 ):
+    # Never keyed by the token value: the bucket must not leak token validity.
+    rate_limiter.check(None, "/auth/account/reset-password", client_id="unauth:reset")
+
     """Consume a reset token atomically and set the new password.
 
     Per design spec §5/§6: consumption invalidates the token, revokes ALL
@@ -1604,6 +1686,8 @@ def account_change_password(
     session_id: str | None = Depends(get_session_id),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(session_id, "/auth/account/change-password")
+
     """Change the password for the authenticated account.
 
     Requires an authenticated durable session plus server-side recent
@@ -1637,6 +1721,13 @@ def account_change_password(
     )
     for other in others:
         other.revoked_at = now
+        account_security.record_security_event(
+            db,
+            user_id=user.id,
+            event_type="session_revoked",
+            session_id=other.session_hash,
+            metadata={"scope": "password_change"},
+        )
     account_security.record_security_event(
         db,
         user_id=user.id,
@@ -1661,6 +1752,8 @@ def account_change_email(
     session_id: str | None = Depends(get_session_id),
     db: Session = Depends(get_db),
 ):
+    rate_limiter.check(session_id, "/auth/account/change-email")
+
     """Request an email change.
 
     Requires an authenticated durable session plus server-side recent

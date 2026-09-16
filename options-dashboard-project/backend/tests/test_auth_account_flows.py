@@ -1001,3 +1001,250 @@ class TestRecentAuthentication:
         )
         assert resp.status_code == 401
 
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — Abuse controls (rate limiting) + security audit events
+# ---------------------------------------------------------------------------
+
+
+class TestAccountAbuseControls:
+    """Bounded rate limits on every account-security endpoint (plan Task 5).
+
+    Deterministic time: the limiter reads time.time() from the
+    app.services.rate_limiter module namespace, so tests advance a fake clock
+    instead of sleeping.
+    """
+
+    def _fake_clock(self, monkeypatch):
+        import app.services.rate_limiter as rl_mod
+
+        state = {"now": 1_000_000.0}
+        monkeypatch.setattr(rl_mod.time, "time", lambda: state["now"])
+        return state
+
+    def _post(self, client, path, n, json_body, headers=None):
+        last = None
+        for _ in range(n):
+            last = client.post(path, json=json_body, headers=headers or {})
+        return last
+
+    def test_account_login_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        body = {"email": "recovery@example.com", "password": "Sup3rSecret!"}
+        for _ in range(10):
+            assert client.post(f"{ACCOUNT}/login", json=body).status_code == 200
+        assert client.post(f"{ACCOUNT}/login", json=body).status_code == 429
+
+    def test_account_login_rate_limit_resets_after_window(
+        self, client, db_session, monkeypatch
+    ):
+        state = self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        body = {"email": "recovery@example.com", "password": "Sup3rSecret!"}
+        for _ in range(10):
+            client.post(f"{ACCOUNT}/login", json=body)
+        assert client.post(f"{ACCOUNT}/login", json=body).status_code == 429
+        state["now"] += 61  # window is 60s — deterministic, no sleeps
+        assert client.post(f"{ACCOUNT}/login", json=body).status_code == 200
+
+    def test_account_register_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        for i in range(5):
+            resp = client.post(
+                f"{ACCOUNT}/register",
+                json={"email": f"new{i}@example.com", "password": "Val1dPass!"},
+            )
+            assert resp.status_code == 200, resp.text
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "overflow@example.com", "password": "Val1dPass!"},
+        )
+        assert resp.status_code == 429
+
+    def test_resend_verification_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _local_user(db_session, email="pending@example.com", status="pending_verification")
+        for _ in range(3):
+            assert client.post(
+                f"{ACCOUNT}/resend-verification", json={"email": "pending@example.com"}
+            ).status_code == 200
+        assert client.post(
+            f"{ACCOUNT}/resend-verification", json={"email": "pending@example.com"}
+        ).status_code == 429
+
+    def test_forgot_password_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        for _ in range(5):
+            assert client.post(
+                f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"}
+            ).status_code == 200
+        assert client.post(
+            f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"}
+        ).status_code == 429
+
+    def test_reset_password_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        for _ in range(5):
+            assert client.post(
+                f"{ACCOUNT}/reset-password",
+                json={"token": "junk", "new_password": "N3wPassword!"},
+            ).status_code == 400
+        assert client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": "junk", "new_password": "N3wPassword!"},
+        ).status_code == 429
+
+    def test_change_password_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        session_id = _login(client)
+        headers = auth(session_id)
+        for _ in range(5):
+            resp = client.post(
+                f"{ACCOUNT}/change-password",
+                headers=headers,
+                json={"current_password": "wrong", "new_password": "N3wPassword!"},
+            )
+            assert resp.status_code == 401
+        assert client.post(
+            f"{ACCOUNT}/change-password",
+            headers=headers,
+            json={"current_password": "wrong", "new_password": "N3wPassword!"},
+        ).status_code == 429
+
+    def test_change_email_rate_limited(self, client, db_session, monkeypatch):
+        self._fake_clock(monkeypatch)
+        _verified_user(db_session)
+        session_id = _login(client)
+        headers = auth(session_id)
+        for i in range(5):
+            assert client.post(
+                f"{ACCOUNT}/change-email",
+                headers=headers,
+                json={"new_email": f"move{i}@example.com"},
+            ).status_code == 200
+        assert client.post(
+            f"{ACCOUNT}/change-email",
+            headers=headers,
+            json={"new_email": "overflow@example.com"},
+        ).status_code == 429
+
+
+class TestSecurityEventEmission:
+    """Durable, secret-free SecurityEvent rows for the remaining flows."""
+
+    def _events(self, db_session, event_type):
+        from app.identity import SecurityEvent
+
+        return (
+            db_session.query(SecurityEvent)
+            .filter(SecurityEvent.event_type == event_type)
+            .all()
+        )
+
+    def test_login_success_and_failure_emit_events(self, client, db_session):
+        _verified_user(db_session)
+        # Failure first
+        client.post(
+            f"{ACCOUNT}/login",
+            json={"email": "recovery@example.com", "password": "WrongPass1!"},
+        )
+        # Unknown email failure
+        client.post(
+            f"{ACCOUNT}/login",
+            json={"email": "ghost@example.com", "password": "Whatever1!"},
+        )
+        # Success
+        client.post(
+            f"{ACCOUNT}/login",
+            json={"email": "recovery@example.com", "password": "Sup3rSecret!"},
+        )
+
+        failures = self._events(db_session, "login_failed")
+        successes = self._events(db_session, "login_succeeded")
+        assert len(failures) == 2
+        assert len(successes) == 1
+        # No attempted password material in any event
+        for ev in failures + successes:
+            blob = str(ev.metadata_json)
+            assert "WrongPass1!" not in blob and "Whatever1!" not in blob
+            assert "Sup3rSecret!" not in blob
+
+    def test_registration_emits_event(self, client, db_session):
+        from app.services.email import clear_sent_messages
+
+        clear_sent_messages()
+        client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "fresh@example.com", "password": "Val1dPass!"},
+        )
+        events = self._events(db_session, "registration_completed")
+        assert len(events) == 1
+        assert "Val1dPass!" not in str(events[0].metadata_json)
+
+    def test_logout_and_logout_all_emit_events(self, client, db_session):
+        _verified_user(db_session)
+        sid1 = _login(client)
+        sid2 = _login(client)
+
+        client.post(f"{ACCOUNT}/logout", headers=auth(sid1))
+        logouts = self._events(db_session, "logout")
+        assert len(logouts) == 1
+
+        client.post(f"{ACCOUNT}/logout-all", headers=auth(sid2))
+        logouts_all = self._events(db_session, "logout_all")
+        assert len(logouts_all) == 1
+        # The all-revocation also records per-session revocation events
+        revoked = self._events(db_session, "session_revoked")
+        assert len(revoked) >= 1
+
+    def test_change_password_revocation_emits_session_revoked_events(
+        self, client, db_session
+    ):
+        _verified_user(db_session)
+        _login(client)  # older session — will be revoked
+        session_id = _login(client)  # current session — survives
+        client.post(
+            f"{ACCOUNT}/change-password",
+            headers=auth(session_id),
+            json={"current_password": "Sup3rSecret!", "new_password": "N3wPassword!"},
+        )
+        revoked = self._events(db_session, "session_revoked")
+        assert len(revoked) == 1
+        # Revoked-session audit rows carry the session HASH, not the raw id
+        assert revoked[0].session_id != session_id
+
+    def test_all_security_events_secret_free_after_full_journey(
+        self, client, db_session
+    ):
+        from app.services.email import clear_sent_messages, get_sent_messages
+        from app.identity import SecurityEvent
+
+        _verified_user(db_session)
+        session_id = _login(client)
+        clear_sent_messages()
+        client.post(
+            f"{ACCOUNT}/change-email",
+            headers=auth(session_id),
+            json={"new_email": "moved@example.com"},
+        )
+        raw_change_token = get_sent_messages()[-1].raw_token
+        client.post(f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"})
+        raw_reset = get_sent_messages()[-1].raw_token
+
+        secrets = [raw_change_token, raw_reset, "Sup3rSecret!", "N3wPassword!"]
+        for ev in db_session.query(SecurityEvent).all():
+            blob = (
+                str(ev.metadata_json)
+                + str(ev.event_type)
+                + str(ev.ip_hash or "")
+                + str(ev.user_agent_hash or "")
+            )
+            for secret in secrets:
+                assert secret not in blob, f"secret leaked in {ev.event_type}: {blob}"
+
+

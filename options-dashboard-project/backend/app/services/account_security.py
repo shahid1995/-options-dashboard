@@ -311,7 +311,8 @@ def revoke_one(db: Session, session_id: str | None) -> bool:
 def revoke_all_for_user(db: Session, user_id: str) -> int:
     """Revoke every active (non-revoked, non-expired) session for a user.
 
-    Returns the number of sessions revoked.
+    Returns the number of sessions revoked. Each revocation is recorded as a
+    secret-free ``session_revoked`` security event (session HASH only).
     """
     now = _utcnow()
     active = (
@@ -325,6 +326,13 @@ def revoke_all_for_user(db: Session, user_id: str) -> int:
     )
     for record in active:
         record.revoked_at = now
+        record_security_event(
+            db,
+            user_id=user_id,
+            event_type="session_revoked",
+            session_id=record.session_hash,
+            metadata={"scope": "revoke_all"},
+        )
     if active:
         db.flush()
     return len(active)
