@@ -1,18 +1,25 @@
 // =============================================================================
 // StrikeNova Public Design System — Truth & Label Primitives
 // =============================================================================
+// Demo label, research status badge, and data classification components.
+// Makes it easy to clearly mark illustrative information.
+// =============================================================================
 
 import React from "react";
 import { COLOR, RESEARCH_STATUS, DATA_STATE, TYPE } from "./tokens";
 
+/**
+ * DemoLabel — a reusable "DEMO DATA · ILLUSTRATIVE VALUES ONLY" badge.
+ * Use on any visualization or metric that uses fictional data.
+ */
 export function DemoLabel({ style, ...rest }) {
   return (
     <span
       style={{
         display: "inline-block",
-        fontSize: TYPE.labelSmall.size,
-        fontWeight: TYPE.labelSmall.weight,
-        letterSpacing: TYPE.labelSmall.letterSpacing,
+        fontSize: "0.6875rem",
+        fontWeight: 600,
+        letterSpacing: "0.06em",
         color: COLOR.warning,
         background: COLOR.warningDim,
         border: `1px solid ${COLOR.warning}40`,
@@ -28,15 +35,19 @@ export function DemoLabel({ style, ...rest }) {
   );
 }
 
+/**
+ * ResearchBadge — a badge for future/research capabilities.
+ * Supports: AVAILABLE, COMING_LATER, RESEARCH_DIRECTION
+ */
 export function ResearchBadge({ status = "RESEARCH_DIRECTION", style, ...rest }) {
   const s = RESEARCH_STATUS[status] || RESEARCH_STATUS.RESEARCH_DIRECTION;
   return (
     <span
       style={{
         display: "inline-block",
-        fontSize: TYPE.labelSmall.size,
-        fontWeight: TYPE.labelSmall.weight,
-        letterSpacing: TYPE.labelSmall.letterSpacing,
+        fontSize: "0.6875rem",
+        fontWeight: 600,
+        letterSpacing: "0.06em",
         color: s.color,
         background: `${s.color}15`,
         border: `1px solid ${s.color}30`,
@@ -52,6 +63,10 @@ export function ResearchBadge({ status = "RESEARCH_DIRECTION", style, ...rest })
   );
 }
 
+/**
+ * DataStateBadge — a badge showing the data classification state.
+ * LIVE, DERIVED, DEMO, ILLUSTRATIVE, UNAVAILABLE, RESEARCH
+ */
 export function DataStateBadge({ state, style, ...rest }) {
   const s = DATA_STATE[state];
   if (!s) return null;
@@ -87,6 +102,10 @@ export function DataStateBadge({ state, style, ...rest }) {
   );
 }
 
+/**
+ * Eyebrow — a small uppercase label used above section headings.
+ * Common pattern: "SIGNAL FIELD", "THE PROBLEM", etc.
+ */
 export function Eyebrow({ children, color = COLOR.textFaint, style, ...rest }) {
   return (
     <span
@@ -105,7 +124,17 @@ export function Eyebrow({ children, color = COLOR.textFaint, style, ...rest }) {
   );
 }
 
-export function SectionTitle({ eyebrow, title, subtitle, align = "center", style, ...rest }) {
+/**
+ * SectionTitle — a semantic section heading with optional eyebrow.
+ */
+export function SectionTitle({
+  eyebrow,
+  title,
+  subtitle,
+  align = "center",
+  style,
+  ...rest
+}) {
   return (
     <div
       style={{
@@ -123,12 +152,12 @@ export function SectionTitle({ eyebrow, title, subtitle, align = "center", style
       {title && (
         <h2
           style={{
-            fontSize: TYPE.h2.size,
-            fontWeight: TYPE.h2.weight,
+            fontSize: "clamp(1.75rem, 3.5vw, 2.75rem)",
+            fontWeight: 700,
             color: COLOR.textPrimary,
             margin: 0,
-            letterSpacing: TYPE.h2.letterSpacing,
-            lineHeight: TYPE.h2.lineHeight,
+            letterSpacing: "-0.02em",
+            lineHeight: 1.15,
           }}
         >
           {title}
@@ -137,9 +166,9 @@ export function SectionTitle({ eyebrow, title, subtitle, align = "center", style
       {subtitle && (
         <p
           style={{
-            fontSize: TYPE.body.size,
+            fontSize: "1rem",
             color: COLOR.textMuted,
-            lineHeight: TYPE.body.lineHeight,
+            lineHeight: 1.7,
             margin: 0,
           }}
         >
