@@ -83,4 +83,12 @@ describe("PublicHeader — P6 Tests", () => {
     const headerInnerMatch = html.match(/display:\s*flex[^}]*box-sizing:\s*border-box/);
     expect(headerInnerMatch).toBeTruthy();
   });
+
+  it("header inner container does not clip desktop dropdowns horizontally", () => {
+    const html = renderHeader();
+    const navInnerMatch = html.match(/height:\s*60px[\s\S]*?boxSizing[^}]*}/);
+    expect(navInnerMatch).toBeTruthy();
+    expect(navInnerMatch[0]).not.toContain("overflowX");
+    expect(navInnerMatch[0]).not.toContain("overflow-x");
+  });
 });
