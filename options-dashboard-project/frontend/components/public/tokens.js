@@ -232,6 +232,7 @@ export const RESEARCH_STATUS = {
   RESEARCH_DIRECTION: { label: "RESEARCH DIRECTION", color: COLOR.intelligence },
 };
 
+// Convenience: list of all semantic color keys for test validation
 export const SEMANTIC_COLOR_KEYS = Object.keys(COLOR);
 export const SEMANTIC_SPACE_KEYS = Object.keys(SPACE);
 export const SEMANTIC_TYPE_KEYS = Object.keys(TYPE);
