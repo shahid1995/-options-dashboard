@@ -102,7 +102,6 @@ export default function PublicHeader() {
               gap: SPACE.compLg,
               boxSizing: "border-box",
               width: "100%",
-              overflowX: "hidden",
             }}
             >
             {/* Logo */}
