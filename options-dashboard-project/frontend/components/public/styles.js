@@ -1,9 +1,6 @@
 // Shared style constants and CSS strings for public marketing pages.
-// Uses the same design tokens as the main app (C from lib/ui).
+import { COLOR, TYPE, RADIUS, SPACE, MOTION } from "./tokens";
 
-import { C } from "@/lib/ui";
-
-// Global CSS injected once per public page via <style>
 export const PUBLIC_CSS = `
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -22,35 +19,37 @@ html { scroll-behavior: smooth; }
 .od-pulse { animation: od-pulse 1.6s ease-in-out infinite; }
 .od-bar-fill { animation: od-bar-fill 1s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* Legacy class names retained for compatibility, but now consume canonical tokens. */
 .od-btn-gold {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: ${C.gold}; color: #0B0E14;
-  padding: 12px 24px; border-radius: 8px; font-weight: 700; font-size: 14.5px;
-  text-decoration: none; border: 1px solid ${C.gold};
-  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  display: inline-flex; align-items: center; gap: ${SPACE.small};
+  background: ${COLOR.strategy}; color: ${COLOR.baseElevated};
+  padding: 12px 24px; border-radius: ${RADIUS.md}; font-weight: ${TYPE.label.weight}; font-size: ${TYPE.label.size};
+  line-height: ${TYPE.label.lineHeight}; font-family: ${TYPE.body};
+  text-decoration: none; border: 1px solid ${COLOR.strategy};
+  transition: transform ${MOTION.fast} ease, box-shadow ${MOTION.fast} ease, background ${MOTION.fast} ease;
 }
 .od-btn-gold:hover { background: #D9B36A; box-shadow: 0 6px 24px rgba(201, 161, 90, 0.35); transform: translateY(-1px); }
 .od-btn-ghost {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: transparent; color: ${C.text};
-  padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14.5px;
-  text-decoration: none; border: 1px solid ${C.border};
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  display: inline-flex; align-items: center; gap: ${SPACE.small};
+  background: transparent; color: ${COLOR.textPrimary};
+  padding: 12px 24px; border-radius: ${RADIUS.md}; font-weight: 600; font-size: ${TYPE.label.size};
+  line-height: ${TYPE.label.lineHeight}; font-family: ${TYPE.body};
+  text-decoration: none; border: 1px solid ${COLOR.borderStrong};
+  transition: border-color ${MOTION.fast} ease, background ${MOTION.fast} ease, transform ${MOTION.fast} ease;
 }
-.od-btn-ghost:hover { border-color: ${C.gold}; background: rgba(201, 161, 90, 0.07); transform: translateY(-1px); }
-.od-link { color: ${C.muted}; text-decoration: none; font-size: 14px; transition: color 0.15s ease; }
-.od-link:hover { color: ${C.gold}; }
+.od-btn-ghost:hover { border-color: ${COLOR.strategy}; background: ${COLOR.strategyDim}; transform: translateY(-1px); }
+.od-link { color: ${COLOR.textMuted}; text-decoration: none; font-size: ${TYPE.bodySmall.size}; transition: color ${MOTION.fast} ease; }
+.od-link:hover { color: ${COLOR.strategy}; }
 .od-card { transition: transform 0.18s ease, border-color 0.18s ease; }
 .od-card:hover { transform: translateY(-3px); border-color: rgba(201, 161, 90, 0.45) !important; }
 
-/* Focus-visible ring for all interactive elements */
 a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
-  outline: 2px solid ${C.gold};
+  outline: 2px solid ${COLOR.strategy};
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: ${RADIUS.sm};
 }
 .od-btn-gold:focus-visible, .od-btn-ghost:focus-visible {
-  outline: 2px solid ${C.gold};
+  outline: 2px solid ${COLOR.strategy};
   outline-offset: 2px;
 }
 .od-ticker-track { display: flex; width: max-content; animation: od-ticker 36s linear infinite; }
@@ -65,25 +64,22 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
 }
 `;
 
-// Reusable page container max-width
 export const PAGE_MAX = 1100;
 
-// Shared section padding
 export const sectionPad = (isMobile) => ({
   maxWidth: PAGE_MAX,
   margin: "0 auto",
   padding: isMobile ? "72px 20px" : "96px 20px",
 });
 
-// Common "illustrative data" disclaimer style
 export const DEMO_LABEL_STYLE = {
   display: "inline-block",
-  fontSize: 11,
-  letterSpacing: 1,
-  color: C.faint,
-  background: "rgba(90, 99, 118, 0.2)",
-  border: `1px solid ${C.border}`,
-  borderRadius: 4,
+  fontSize: TYPE.labelSmall.size,
+  letterSpacing: TYPE.labelSmall.letterSpacing,
+  color: COLOR.textFaint,
+  background: "rgba(120, 128, 148, 0.16)",
+  border: `1px solid ${COLOR.border}`,
+  borderRadius: RADIUS.sm,
   padding: "2px 8px",
   marginBottom: 12,
 };

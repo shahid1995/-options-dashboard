@@ -1,3 +1,18 @@
+import { Inter, JetBrains_Mono } from "next/font/google";
+import { COLOR, TYPE } from "@/components/public/tokens";
+
+const inter = Inter({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-inter",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-jetbrains-mono",
+});
+
 export const metadata = {
   title: {
     default: "StrikeNova — Options Intelligence for Structured Decisions",
@@ -9,8 +24,15 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body style={{ margin: 0, background: "#0B0E14", color: "#E7E9EE", fontFamily: "system-ui, sans-serif" }}>
+    <html lang="en" className={`${inter.variable} ${jetBrainsMono.variable}`}>
+      <body
+        style={{
+          margin: 0,
+          background: COLOR.baseElevated,
+          color: COLOR.textPrimary,
+          fontFamily: inter.style.fontFamily,
+        }}
+      >
         {children}
       </body>
     </html>
