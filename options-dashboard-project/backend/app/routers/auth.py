@@ -61,7 +61,9 @@ def _serialize_utc(dt) -> str | None:
 
 router = APIRouter()
 
-SESSION_COOKIE = "session_id"
+# The cookie name used for the HttpOnly session cookie.
+SESSION_COOKIE_NAME = "strikenova_session"
+SESSION_COOKIE_TTL = 60 * 60 * 24  # 24 hours
 
 # ---------------------------------------------------------------------------
 # Popup OAuth kickoff — one-time pre-authorized kick token for the seamless
@@ -542,18 +544,16 @@ async def callback(
     if popup:
         return _popup_success_response(broker_id)
 
-    # Send the user back to the dashboard. The session ID is passed in the
-    # URL fragment because it is not sent to servers as a query parameter.
-    response = RedirectResponse(
-        f"{settings.FRONTEND_ORIGIN}/dashboard#session_id={session_id}"
-    )
+    # Redirect to dashboard — session is in the HttpOnly cookie, not the URL
+    response = RedirectResponse(f"{settings.FRONTEND_ORIGIN}/dashboard")
     response.set_cookie(
-        SESSION_COOKIE,
+        SESSION_COOKIE_NAME,
         session_id,
         httponly=True,
         secure=True,
         samesite="none",
-        max_age=60 * 60 * 24,
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
     )
     return response
 
@@ -691,12 +691,13 @@ def register(
 def login_email(
     email: str = Body(..., embed=True),
     password: str = Body(..., embed=True),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
-    """Authenticate with email/password and return a session.
+    """Authenticate with email/password and set a secure session cookie.
 
-    Returns session_id in the response body (not in a cookie) so the
-    frontend can store it in localStorage and send as X-Session-Id.
+    The session is stored in an HttpOnly Secure SameSite=None cookie.
+    The response body does NOT contain the session identifier.
     """
     # Rate limit: use email as client identifier (unauthenticated endpoint)
     rate_limiter.check(None, "/auth/login-email", client_id=f"unauth:{email.strip().lower()}")
@@ -713,10 +714,7 @@ def login_email(
     if not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    # Create session — generate a unique session-bound token (not a broker
-    # access token; email login has no broker token).  Each login gets a
-    # distinct, non-guessable value so two users cannot share a session
-    # and DB fallback after restart returns the correct per-session value.
+    # Create session
     from app.services.token_store import set_token
 
     user.last_login_at = datetime.now(timezone.utc)
@@ -724,14 +722,24 @@ def login_email(
     session_id = set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        persist_to_db=False,  # Platform sessions use UserSession, not BrokerToken
+        persist_to_db=False,
     )
     create_session_record(db, user.id, session_id)
     db.commit()
 
+    # Set HttpOnly Secure SameSite=None cookie
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
+    )
+
     return {
         "ok": True,
-        "session_id": session_id,
         "user": {
             "user_id": user.id,
             "email": user.email,
@@ -770,6 +778,7 @@ def google_oauth_state():
 def google_auth(
     credential: str = Body(..., embed=True),
     state: str | None = Body(default=None, embed=True),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     """Authenticate via Google Sign-In (One Tap / GIS).
@@ -783,7 +792,7 @@ def google_auth(
     - If a user with this email exists → link Google to existing account.
     - Otherwise → create new account.
 
-    Returns session_id and user info (same shape as /auth/login-email).
+    Session is stored in HttpOnly cookie; response body does NOT contain session_id.
     """
     # Rate limit: use a hash of the credential as client identifier
     # (unauthenticated endpoint, no session yet)
@@ -837,14 +846,24 @@ def google_auth(
     session_id = token_store.set_token(
         session_token,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
-        persist_to_db=False,  # Platform sessions use UserSession, not BrokerToken
+        persist_to_db=False,
     )
     create_session_record(db, user.id, session_id)
     db.commit()
 
+    # Set HttpOnly Secure SameSite=None cookie
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
+    )
+
     return {
         "ok": True,
-        "session_id": session_id,
         "user": {
             "user_id": user.id,
             "email": user.email,
@@ -1023,8 +1042,10 @@ def logout(session_id: str | None = Depends(get_session_id), db: Session = Depen
         token_store.clear_token(session_id)
 
     response = JSONResponse({"ok": True})
-    response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
+    response.delete_cookie(SESSION_COOKIE_NAME, httponly=True, secure=True, samesite="none", path="/")
     return response
+
+
 
 
 # ---------------------------------------------------------------------------

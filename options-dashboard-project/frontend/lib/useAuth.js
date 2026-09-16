@@ -1,12 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import {
-  getSessionId,
-  setSessionId,
-  clearSessionId,
-  captureSessionFromUrl,
-  captureGoogleIdTokenFromUrl,
-} from "./session";
+import { captureGoogleIdTokenFromUrl } from "./session";
 import { getStatus, getMe, logoutUser, loginEmail, registerEmail, loginGoogle } from "./api";
 
 /**
@@ -16,17 +10,17 @@ import { getStatus, getMe, logoutUser, loginEmail, registerEmail, loginGoogle } 
  * - Provides login (email), register, logout
  * - Exposes the authenticated user's identity
  * - Never exposes tokens or credentials
+ *
+ * Session is stored in HttpOnly Secure SameSite=None cookie set by the backend.
+ * The frontend JavaScript CANNOT read the session cookie.
  */
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Capture session from OAuth callback URL fragment on mount
+  // Handle Google OAuth redirect callback on mount
   useEffect(() => {
-    captureSessionFromUrl();
-
-    // Handle Google OAuth redirect callback
     const googleResult = captureGoogleIdTokenFromUrl();
     if (googleResult) {
       // Send the Google id_token to our backend (state is MANDATORY — the
@@ -40,15 +34,8 @@ export function useAuth() {
   // Check auth status on mount and when session changes
   const checkAuth = useCallback(async () => {
     try {
-      const session = getSessionId();
-      if (!session) {
-        setUser(null);
-        setLoading(false);
-        return;
-      }
       const status = await getStatus();
       if (!status.logged_in) {
-        clearSessionId();
         setUser(null);
         setLoading(false);
         return;
@@ -57,7 +44,6 @@ export function useAuth() {
       setUser(me);
       setError(null);
     } catch (e) {
-      clearSessionId();
       setUser(null);
       if (e?.response?.status !== 401) {
         setError(e.message || "Failed to check auth status");
@@ -75,9 +61,6 @@ export function useAuth() {
     setError(null);
     try {
       const result = await loginEmail(email, password);
-      if (result.session_id) {
-        setSessionId(result.session_id);
-      }
       setUser(result.user || null);
       return result;
     } catch (e) {
@@ -103,9 +86,6 @@ export function useAuth() {
     setError(null);
     try {
       const result = await loginGoogle(credential, state);
-      if (result.session_id) {
-        setSessionId(result.session_id);
-      }
       setUser(result.user || null);
       return result;
     } catch (e) {
@@ -121,7 +101,6 @@ export function useAuth() {
     } catch {
       // Ignore logout errors — clear local state regardless
     }
-    clearSessionId();
     setUser(null);
   }, []);
 

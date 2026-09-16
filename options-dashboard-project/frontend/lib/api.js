@@ -1,18 +1,8 @@
 import axios from "axios";
-import { getSessionId } from "./session";
 
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
-  withCredentials: true,
-});
-
-// Authenticate with the session ID captured from the OAuth callback; the
-// session cookie alone doesn't survive third-party cookie blocking because
-// the backend is on a different site.
-api.interceptors.request.use((config) => {
-  const sessionId = getSessionId();
-  if (sessionId) config.headers["X-Session-Id"] = sessionId;
-  return config;
+  withCredentials: true, // Required for cross-origin cookies
 });
 
 // Surface the backend's error detail (or a clear network message) instead of

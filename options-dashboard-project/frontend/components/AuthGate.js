@@ -1,8 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getSessionId } from "@/lib/session";
-import { getMe } from "@/lib/api";
+import { getStatus, getMe } from "@/lib/api";
 
 /**
  * Central auth guard for the (app) route group.
@@ -26,8 +25,8 @@ export default function AuthGate({ children }) {
 
     const verify = async () => {
       try {
-        const session = getSessionId();
-        if (!session) {
+        const status = await getStatus();
+        if (!status.logged_in) {
           if (!cancelled) router.replace("/");
           return;
         }

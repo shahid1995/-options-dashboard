@@ -7,17 +7,20 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 
+# The cookie name used for the HttpOnly session cookie.
+SESSION_COOKIE_NAME = "strikenova_session"
+
 
 def get_session_id(
     x_session_id: str | None = Header(default=None),
-    session_id: str | None = Cookie(default=None),
+    session_id: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> str | None:
-    """Session ID from the X-Session-Id header, falling back to the cookie.
+    """Session ID from the HttpOnly cookie, falling back to the X-Session-Id header.
 
-    The header is the primary transport: the frontend and backend live on
-    different sites (Vercel/Railway), so browsers that block third-party
-    cookies would never send the session cookie cross-site."""
-    return x_session_id or session_id
+    The cookie is the primary transport: HttpOnly Secure SameSite=None cookie
+    set by the backend.  The header is kept for backward compatibility during
+    the transition period and for API clients that cannot use cookies."""
+    return session_id or x_session_id
 
 
 @dataclass(frozen=True)

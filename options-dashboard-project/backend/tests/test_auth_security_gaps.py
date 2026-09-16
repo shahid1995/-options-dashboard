@@ -222,7 +222,7 @@ class TestSessionSecurity:
 
         # Check that Set-Cookie header deletes the cookie
         set_cookie = resp.headers.get("set-cookie", "")
-        assert "session_id=" in set_cookie
+        assert "strikenova_session=" in set_cookie
         # The cookie should be expired (max-age=0) and have secure flags
         assert "httponly" in set_cookie.lower() or "HttpOnly" in set_cookie
 
