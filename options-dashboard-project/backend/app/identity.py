@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac as _hmac
+import json as _json
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
+from sqlalchemy.types import TypeDecorator
 
 from app.db import Base
 
@@ -100,6 +102,105 @@ class UserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     broker_connection_id: Mapped[str | None] = mapped_column(
         ForeignKey("broker_connections.id"), nullable=True
+    )
+
+
+# ---------------------------------------------------------------------------
+# Account-security lifecycle records (2026-09-16 design spec §5).
+#
+# Opaque one-time tokens are stored ONLY as SHA-256 digests; raw token
+# material never reaches the database, logs, or API responses.
+# SecurityEvent rows are append-only (see the before_update guard below):
+# they carry safe metadata only — never passwords, tokens, reset URLs,
+# OAuth codes or broker secrets.
+# ---------------------------------------------------------------------------
+
+
+class JSONText(TypeDecorator):
+    """JSON-serialized Text storage (SQLite/PostgreSQL/CockroachDB portable)."""
+
+    impl = Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        return _json.dumps(value or {})
+
+    def process_result_value(self, value, dialect):
+        return _json.loads(value) if value else {}
+
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class PendingEmailChange(Base):
+    """A requested (not yet verified) email change. The current
+    ``users.email`` remains authoritative until the change token is consumed."""
+
+    __tablename__ = "pending_email_changes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    new_email: Mapped[str] = mapped_column(String(320))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class SecurityEvent(Base):
+    """Durable, append-only security audit record.
+
+    ``user_id`` is nullable for anonymous events (e.g. failed login for an
+    unknown email). It is deliberately NOT a ForeignKey: audit records must
+    survive any later account deletion untouched. ``metadata_json`` carries
+    only sanitized, secret-free metadata (see account_security.py).
+    """
+
+    __tablename__ = "security_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONText, default=dict)
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return (
+            f"SecurityEvent(id={self.id!r}, event_type={self.event_type!r}, "
+            f"occurred_at={self.occurred_at!r})"
+        )
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return repr(self)
+
+
+@event.listens_for(SecurityEvent, "before_update")
+def _security_events_are_immutable(mapper, connection, target):
+    """Fail closed: security-event rows are never updated in place."""
+    raise RuntimeError(
+        "security_events rows are append-only; update attempts are rejected"
     )
 
 

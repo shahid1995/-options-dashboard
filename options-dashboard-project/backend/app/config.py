@@ -63,6 +63,17 @@ class Settings(BaseSettings):
     # Phase 10.2B-6: Optional backend URL for auto-deriving UPSTOX_REDIRECT_URI
     BACKEND_URL: str = ""
 
+    # ---- Account security (2026-09-16 plan Task 2) ----
+    # Token lifecycles are TTL-bounded; recent-authentication gates sensitive
+    # account changes server-side. Email settings feed the provider-neutral
+    # EmailSender (Task 3); credentials, when a real provider is configured,
+    # live ONLY here in backend environment configuration.
+    EMAIL_VERIFICATION_TTL_MINUTES: int = 60 * 24
+    PASSWORD_RESET_TTL_MINUTES: int = 60
+    RECENT_AUTH_TTL_MINUTES: int = 15
+    EMAIL_FROM_ADDRESS: str = "StrikeNova <no-reply@strikenova.local>"
+    EMAIL_BASE_URL: str = "http://localhost:3000"
+
     @property
     def FRONTEND_ORIGIN(self) -> str:
         """Primary frontend URL for OAuth redirects.
