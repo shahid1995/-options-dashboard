@@ -32,6 +32,8 @@ from app.services import token_store
 @pytest.fixture(autouse=True)
 def setup_db():
     """Create all tables before each test."""
+    from app.services.rate_limiter import rate_limiter
+    rate_limiter._hits.clear()
     Base.metadata.create_all(engine)
     yield
     Base.metadata.drop_all(engine)

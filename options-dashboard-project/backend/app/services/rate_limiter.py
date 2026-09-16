@@ -56,22 +56,48 @@ class SessionRateLimiter:
     """
 
     def __init__(self, rules: dict[str, RateLimitRule] | None = None):
-        self._rules = rules or DEFAULT_RULES
-        # session_id → endpoint → list of timestamps
+        self._rules = rules or dict(DEFAULT_RULES)
+        # client_key → endpoint → list of timestamps
         self._hits: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
 
-    def check(self, session_id: str | None, endpoint: str) -> None:
+    def add_rule(self, endpoint: str, rule: RateLimitRule) -> None:
+        """Add or update a rate limit rule for an endpoint.
+
+        Parameters
+        ----------
+        endpoint : str
+            The endpoint path (e.g. ``"/auth/login-email"``).
+        rule : RateLimitRule
+            The rate limit configuration.
+        """
+        self._rules[endpoint] = rule
+
+    def check(self, session_id: str | None, endpoint: str, client_id: str | None = None) -> None:
         """Check rate limit. Raises HTTPException 429 if exceeded.
 
-        Args:
-            session_id: The authenticated session ID.
-            endpoint: The endpoint path (used for rule lookup).
+        For authenticated endpoints, pass ``session_id``.  For unauthenticated
+        endpoints (login, register) where no session exists yet, pass
+        ``client_id`` (typically the request IP or a fingerprint).
 
-        Raises:
-            HTTPException: 429 Too Many Requests if rate limit exceeded.
+        Parameters
+        ----------
+        session_id : str, optional
+            The authenticated session ID.
+        endpoint : str
+            The endpoint path (used for rule lookup).
+        client_id : str, optional
+            A client identifier for unauthenticated requests
+            (e.g. ``"unauth:192.168.1.1"``).  Used as the rate-limit
+            key when ``session_id`` is None.
+
+        Raises
+        ------
+        HTTPException
+            429 Too Many Requests if rate limit exceeded.
         """
-        if not session_id:
-            return  # Unauthenticated requests handled by auth middleware
+        key = session_id or client_id
+        if not key:
+            return  # Cannot rate limit without any identifier
 
         rule = self._get_rule(endpoint)
         if rule is None:
@@ -80,15 +106,15 @@ class SessionRateLimiter:
         now = time.time()
         window_start = now - rule.window_seconds
 
-        # Get hits for this session+endpoint
-        hits = self._hits[session_id][endpoint]
+        # Get hits for this client+endpoint
+        hits = self._hits[key][endpoint]
 
         # Remove expired entries
-        self._hits[session_id][endpoint] = [t for t in hits if t > window_start]
+        self._hits[key][endpoint] = [t for t in hits if t > window_start]
 
         # Check limit
-        if len(self._hits[session_id][endpoint]) >= rule.max_requests:
-            retry_after = int(rule.window_seconds - (now - self._hits[session_id][endpoint][0]))
+        if len(self._hits[key][endpoint]) >= rule.max_requests:
+            retry_after = int(rule.window_seconds - (now - self._hits[key][endpoint][0]))
             raise HTTPException(
                 status_code=429,
                 detail={
@@ -102,7 +128,7 @@ class SessionRateLimiter:
             )
 
         # Record this hit
-        self._hits[session_id][endpoint].append(now)
+        self._hits[key][endpoint].append(now)
 
     def cleanup(self, max_age_seconds: int = 600) -> int:
         """Remove stale entries for sessions inactive beyond max_age.

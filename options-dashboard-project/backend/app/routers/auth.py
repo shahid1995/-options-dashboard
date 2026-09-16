@@ -38,9 +38,11 @@ from app.identity import (
     BrokerIdentityInUse,
 )
 from sqlalchemy.exc import IntegrityError
+from fastapi import Request as FastAPIRequest
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
 from app.services.broker_authorization import persist_connection_authorization
 from app.services import token_store
+from app.services.rate_limiter import rate_limiter, RateLimitRule
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,11 @@ SESSION_COOKIE = "session_id"
 POPUP_KICK_COOKIE = "sn_oauth_kick"
 _POPUP_KICK_TTL_SECONDS = 600  # never outlives the OAuth state window
 _popup_kick_tokens: dict[str, dict] = {}
+
+# Rate limiting rules for auth endpoints (brute-force protection)
+rate_limiter.add_rule("/auth/login-email", RateLimitRule(max_requests=20, window_seconds=60))
+rate_limiter.add_rule("/auth/register", RateLimitRule(max_requests=10, window_seconds=60))
+rate_limiter.add_rule("/auth/google", RateLimitRule(max_requests=20, window_seconds=60))
 
 
 def _mint_popup_kick(response: Response, session_id: str, broker_id: str) -> None:
@@ -626,6 +633,11 @@ def register(
     This is a minimal registration endpoint for manual verification.
     The primary auth flow remains Upstox OAuth.
     """
+    # Rate limit: use a constant key for register (per-endpoint bucket)
+    # Register uses the same key for all clients to prevent mass account
+    # creation; login uses per-email to prevent brute-force on a specific account.
+    rate_limiter.check(None, "/auth/register", client_id="unauth:register")
+
     email = email.strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=422, detail="A valid email address is required")
@@ -642,7 +654,13 @@ def register(
     existing = db.query(User).filter(User.email == email).one_or_none()
     if existing is not None:
         if existing.identity_source == "email" and existing.password_hash:
-            raise HTTPException(status_code=409, detail="An account with this email already exists")
+            # Account enumeration protection: return 200 with generic message
+            # instead of 409 which would leak that the email is registered
+            logger.info(
+                "Registration attempted for existing email",
+                extra={"event": "auth.register.existing_email", "email_domain": email.split("@")[-1]},
+            )
+            return {"ok": True, "message": "If this email is not already registered, your account has been created."}
         # OAuth-created account with same email — link the password
         existing.password_hash = hash_password(password)
         if display_name:
@@ -680,6 +698,9 @@ def login_email(
     Returns session_id in the response body (not in a cookie) so the
     frontend can store it in localStorage and send as X-Session-Id.
     """
+    # Rate limit: use email as client identifier (unauthenticated endpoint)
+    rate_limiter.check(None, "/auth/login-email", client_id=f"unauth:{email.strip().lower()}")
+
     email = email.strip().lower()
     if not email or not password:
         raise HTTPException(status_code=422, detail="Email and password are required")
@@ -764,6 +785,12 @@ def google_auth(
 
     Returns session_id and user info (same shape as /auth/login-email).
     """
+    # Rate limit: use a hash of the credential as client identifier
+    # (unauthenticated endpoint, no session yet)
+    import hashlib as _hashlib
+    cred_hash = _hashlib.sha256(credential.encode()).hexdigest()[:16]
+    rate_limiter.check(None, "/auth/google", client_id=f"unauth:google:{cred_hash}")
+
     if not credential:
         raise HTTPException(status_code=422, detail="Google credential is required")
 
