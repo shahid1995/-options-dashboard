@@ -23,6 +23,7 @@ const BASE_BUTTON = {
   textDecoration: "none",
   transition: `background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s`,
   whiteSpace: "nowrap",
+  boxSizing: "border-box",
 };
 
 // Button variants
