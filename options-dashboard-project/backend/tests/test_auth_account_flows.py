@@ -68,6 +68,18 @@ def _clear_auth_rate_limiter():
     rate_limiter._hits.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_email_sink():
+    """The deterministic test sender keeps a process-global message list;
+    clear it around every test so other files (e.g. the log-leak test in
+    test_account_security.py) cannot leak messages into email assertions."""
+    from app.services.email import clear_sent_messages
+
+    clear_sent_messages()
+    yield
+    clear_sent_messages()
+
+
 @pytest.fixture
 def client(db_session):
     def override_get_db():
