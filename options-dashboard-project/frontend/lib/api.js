@@ -74,6 +74,22 @@ export const logoutAll = () =>
 export const getAccountSession = () =>
   api.get("/auth/account/session").then((r) => r.data);
 
+// Registration requires email verification before login — no auto-login.
+export const registerAccount = (email, password, displayName) =>
+  api
+    .post("/auth/account/register", {
+      email,
+      password,
+      display_name: displayName,
+    })
+    .then((r) => r.data);
+
+export const verifyEmail = (token) =>
+  api.post("/auth/account/verify-email", { token }).then((r) => r.data);
+
+export const resendVerification = (email) =>
+  api.post("/auth/account/resend-verification", { email }).then((r) => r.data);
+
 // ---- Phase A: Google OAuth ----
 
 // Phase A security: Generate HMAC-signed state for nonce binding.

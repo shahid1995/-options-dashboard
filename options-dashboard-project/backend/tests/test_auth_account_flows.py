@@ -394,3 +394,243 @@ class TestBrokerOAuthBoundary:
         assert resp.status_code == 200
         assert "location" not in resp.headers
         assert resp.json().get("session_id")
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — Registration, email verification, resend verification
+# ---------------------------------------------------------------------------
+
+
+class TestAccountRegistration:
+    def test_register_creates_unverified_account_and_sends_verification_email(
+        self, client, db_session
+    ):
+        """Valid registration creates an account in an unverified state,
+        stores a hashed verification token, and delivers the verification
+        email through the configured EmailSender — with no session issued."""
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={
+                "email": "New.Trader@Example.COM",
+                "password": "Sup3rSecret!",
+                "display_name": "New Trader",
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body.get("ok") is True
+        # No auto-login: no session id, no session cookie, no token material
+        assert "session_id" not in body
+        assert "token" not in body
+        assert "verification" not in body or "token" not in str(body.get("verification", ""))
+        assert "Set-Cookie" not in resp.headers or SESSION_COOKIE_NAME not in resp.headers.get(
+            "Set-Cookie", ""
+        )
+
+        # Account exists, normalized, unverified
+        user = (
+            db_session.query(User).filter(User.email == "new.trader@example.com").one_or_none()
+        )
+        assert user is not None
+        assert user.identity_source == "email"
+        assert user.status == "pending_verification"
+        assert user.password_hash and user.password_hash != "Sup3rSecret!"
+
+        # Exactly one verification token, stored hashed only
+        from app.identity import EmailVerificationToken
+
+        tokens = (
+            db_session.query(EmailVerificationToken)
+            .filter(EmailVerificationToken.user_id == user.id)
+            .all()
+        )
+        assert len(tokens) == 1
+        assert tokens[0].used_at is None
+        assert "Sup3rSecret" not in tokens[0].token_hash
+
+        # Verification email was delivered
+        from app.services.email import get_sent_messages
+
+        sent = get_sent_messages()
+        assert len(sent) == 1
+        assert sent[0].to == "new.trader@example.com"
+        assert "verify" in sent[0].subject.lower()
+        # The link carries the token, but the stored record never does
+        assert sent[0].raw_token
+        assert sent[0].raw_token not in tokens[0].token_hash
+
+    def test_register_normalizes_email(self, client, db_session):
+        """Email is stored trimmed and lower-cased."""
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "  MiXeD@ExAmPlE.CoM  ", "password": "Sup3rSecret!"},
+        )
+        assert resp.status_code == 200
+        user = db_session.query(User).filter(User.email == "mixed@example.com").one_or_none()
+        assert user is not None
+
+    def test_register_rejects_weak_password(self, client, db_session):
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "weak@example.com", "password": "short"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_rejects_invalid_email(self, client, db_session):
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "not-an-email", "password": "Sup3rSecret!"},
+        )
+        assert resp.status_code == 422
+
+    def test_register_duplicate_local_account_is_enumeration_resistant(
+        self, client, db_session
+    ):
+        """A duplicate registration must NOT reveal the account exists and
+        must NOT create a second account or a second token."""
+        _local_user(db_session, email="taken@example.com")
+        from app.identity import EmailVerificationToken
+
+        before = db_session.query(EmailVerificationToken).count()
+
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": "taken@example.com", "password": "Sup3rSecret!"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body.get("ok") is True
+
+        users = db_session.query(User).filter(User.email == "taken@example.com").count()
+        assert users == 1
+        after = db_session.query(EmailVerificationToken).count()
+        assert after == before  # no new token for the duplicate attempt
+
+
+class TestEmailVerification:
+    def _register(self, client, email="verify@example.com"):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        clear_sent_messages()
+        resp = client.post(
+            f"{ACCOUNT}/register",
+            json={"email": email, "password": "Sup3rSecret!"},
+        )
+        assert resp.status_code == 200
+        return get_sent_messages()[-1].raw_token
+
+    def test_verify_email_with_valid_token_marks_account_verified(
+        self, client, db_session
+    ):
+        raw_token = self._register(client)
+        user = db_session.query(User).filter(User.email == "verify@example.com").one()
+
+        resp = client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("ok") is True
+        db_session.expire_all()
+        assert user.status == "active"
+
+    def test_verify_email_does_not_create_a_session(self, client, db_session):
+        raw_token = self._register(client)
+        resp = client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+        assert resp.status_code == 200
+        assert "Set-Cookie" not in resp.headers
+        assert not resp.json().get("session_id")
+
+    def test_verify_email_invalid_token_fails_closed(self, client, db_session):
+        resp = client.post(f"{ACCOUNT}/verify-email", json={"token": "junk-token"})
+        assert resp.status_code == 400
+
+    def test_verify_email_replayed_token_fails(self, client, db_session):
+        raw_token = self._register(client)
+        first = client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+        assert first.status_code == 200
+        second = client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+        assert second.status_code == 400
+
+    def test_verify_email_expired_token_fails(self, client, db_session, monkeypatch):
+        raw_token = self._register(client)
+        user = db_session.query(User).filter(User.email == "verify@example.com").one()
+        from app.identity import EmailVerificationToken
+
+        record = (
+            db_session.query(EmailVerificationToken)
+            .filter(EmailVerificationToken.user_id == user.id)
+            .one()
+        )
+        record.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db_session.commit()
+
+        resp = client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+        assert resp.status_code == 400
+        db_session.expire_all()
+        assert user.status == "pending_verification"
+
+    def test_resend_verification_invalidates_prior_token(
+        self, client, db_session
+    ):
+        """Resend must invalidate the previous active token; the old token
+        then fails and only the newest one verifies."""
+        first_token = self._register(client)
+        user = db_session.query(User).filter(User.email == "verify@example.com").one()
+
+        resend = client.post(
+            f"{ACCOUNT}/resend-verification", json={"email": "verify@example.com"}
+        )
+        assert resend.status_code == 200, resend.text
+        assert resend.json().get("ok") is True
+
+        from app.services.email import get_sent_messages
+
+        assert len(get_sent_messages()) == 2
+        second_token = get_sent_messages()[-1].raw_token
+        assert second_token != first_token
+
+        old = client.post(f"{ACCOUNT}/verify-email", json={"token": first_token})
+        assert old.status_code == 400
+        new = client.post(f"{ACCOUNT}/verify-email", json={"token": second_token})
+        assert new.status_code == 200
+        db_session.expire_all()
+        assert user.status == "active"
+
+    def test_resend_for_unknown_email_is_generic(self, client, db_session):
+        """Enumeration resistance: unknown email gets the same public
+        response as a known one."""
+        known = client.post(
+            f"{ACCOUNT}/resend-verification", json={"email": "verify@example.com"}
+        )
+        unknown = client.post(
+            f"{ACCOUNT}/resend-verification", json={"email": "ghost@example.com"}
+        )
+        assert known.status_code == unknown.status_code == 200
+        assert known.json() == unknown.json()
+
+    def test_login_before_verification_is_rejected(self, client, db_session):
+        """Unverified local accounts cannot log in until verified."""
+        self._register(client, email="pending@example.com")
+        resp = client.post(
+            f"{ACCOUNT}/login",
+            json={"email": "pending@example.com", "password": "Sup3rSecret!"},
+        )
+        assert resp.status_code == 403
+        db_session.expire_all()
+        user = (
+            db_session.query(User).filter(User.email == "pending@example.com").one()
+        )
+        assert user.status == "pending_verification"
+
+    def test_login_after_verification_succeeds(self, client, db_session):
+        raw_token = self._register(client, email="verified-login@example.com")
+        client.post(f"{ACCOUNT}/verify-email", json={"token": raw_token})
+
+        resp = client.post(
+            f"{ACCOUNT}/login",
+            json={
+                "email": "verified-login@example.com",
+                "password": "Sup3rSecret!",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json().get("session_id")

@@ -324,3 +324,88 @@ def revoke_all_for_user(db: Session, user_id: str) -> int:
     if active:
         db.flush()
     return len(active)
+
+
+# ---------------------------------------------------------------------------
+# Account registration / verification flows (2026-09-16 plan Task 3)
+# ---------------------------------------------------------------------------
+
+
+def normalize_email(email: str | None) -> str:
+    """Trim and lower-case an email address (canonical storage form)."""
+    return (email or "").strip().lower()
+
+
+def validate_registration(email: str, password: str) -> str | None:
+    """Return a 422-detail string when the input is invalid, else ``None``.
+
+    Password policy mirrors the existing legacy ``/auth/register`` endpoint
+    (8–128 characters) — registration rules are unchanged product behavior.
+    """
+    email = normalize_email(email)
+    if not email or "@" not in email or email.startswith("@") or email.endswith("@"):
+        return "A valid email address is required"
+    if len(email) > 320:
+        return "Email must be 320 characters or fewer"
+    if not password:
+        return "Password must not be empty"
+    if len(password) < 8:
+        return "Password must be at least 8 characters"
+    if len(password) > 128:
+        return "Password must be 128 characters or fewer"
+    return None
+
+
+def send_verification_email(email: str, raw_token: str) -> None:
+    """Deliver the verification email through the provider-neutral transport.
+
+    The raw token exists ONLY in the emailed link — never persisted, never
+    logged, never returned by an API response.
+    """
+    import asyncio
+
+    from app.services.email import send_email, set_test_metadata
+
+    base = settings.EMAIL_BASE_URL.rstrip("/")
+    link = f"{base}/verify-email?token={raw_token}"
+    # Context-local metadata for the deterministic test sink only; production
+    # transports never receive or persist this value.
+    set_test_metadata({"raw_token": raw_token})
+    subject = "Verify your StrikeNova email"
+    text = (
+        "Welcome to StrikeNova.\n\n"
+        f"Confirm your email address: {link}\n\n"
+        "This link is single-use and expires soon. "
+        "If you did not create an account, you can ignore this email."
+    )
+    html = (
+        "<p>Welcome to StrikeNova.</p>"
+        f'<p><a href="{link}">Verify your email address</a></p>'
+        "<p>This link is single-use and expires soon. "
+        "If you did not create an account, you can ignore this email.</p>"
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(send_email(to=email, subject=subject, html=html, text=text))
+    else:
+        loop.create_task(send_email(to=email, subject=subject, html=html, text=text))
+
+
+def send_generic_notification_email(email: str, subject: str, body: str) -> None:
+    """Deliver a security notification (e.g. password changed) with NO token
+    material or URLs — content is static, secret-free text."""
+    import asyncio
+
+    from app.services.email import send_email, set_test_metadata
+
+    set_test_metadata(None)  # security notifications carry no token material
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(send_email(to=email, subject=subject, html=f"<p>{body}</p>", text=body))
+    else:
+        loop.create_task(
+            send_email(to=email, subject=subject, html=f"<p>{body}</p>", text=body)
+        )

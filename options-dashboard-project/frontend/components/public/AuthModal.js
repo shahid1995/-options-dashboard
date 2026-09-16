@@ -1,7 +1,15 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { C } from "@/lib/ui";
-import { loginUrl, registerEmail, loginEmail, loginGoogle, getGoogleState } from "@/lib/api";
+import {
+  loginUrl,
+  registerEmail,
+  loginEmail,
+  loginGoogle,
+  getGoogleState,
+  registerAccount,
+  resendVerification,
+} from "@/lib/api";
 import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
 
@@ -159,6 +167,11 @@ export default function AuthModal({ open, onClose, onAuth }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // 2026-09-16 plan Task 3: after local registration the account is UNVERIFIED.
+  // The modal shows a verification-required state with a resend action instead
+  // of auto-logging in. The pending email is transient component state only.
+  const [verificationPending, setVerificationPending] = useState("");
+  const [resent, setResent] = useState(false);
   const panelRef = useRef(null);
 
   // Reset state on open/close
@@ -171,6 +184,8 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setError("");
     setSuccess("");
     setLoading(false);
+    setVerificationPending("");
+    setResent(false);
   }, [open]);
 
   // Close on Escape
@@ -221,10 +236,13 @@ export default function AuthModal({ open, onClose, onAuth }) {
         const data = await loginEmail(email, password);
         handleAuthSuccess(data);
       } else {
-        // Register first, then auto-login so the user gets a session.
-        await registerEmail(email, password, displayName);
-        const data = await loginEmail(email, password);
-        handleAuthSuccess(data);
+        // 2026-09-16 plan Task 3: registration no longer auto-logins.
+        // The backend creates the account UNVERIFIED and emails a
+        // single-use verification link; the user must verify, then sign in.
+        await registerAccount(email, password, displayName);
+        setVerificationPending(email);
+        setResent(false);
+        setLoading(false);
       }
     } catch (err) {
       setError(err.message || "Authentication failed. Please try again.");
@@ -350,6 +368,63 @@ export default function AuthModal({ open, onClose, onAuth }) {
             </button>
           ))}
         </div>
+
+        {/* Verification-required state (2026-09-16 plan Task 3) */}
+        {verificationPending && (
+          <div
+            data-testid="auth-verification-required"
+            style={{
+              marginBottom: 14,
+              padding: "14px 16px",
+              borderRadius: 8,
+              border: `1px solid ${C.gold}`,
+              background: "rgba(201,161,90,0.08)",
+              color: C.text,
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 700, color: C.gold, marginBottom: 6 }}>
+              Check your email
+            </div>
+            We sent a verification link to
+            {" "}
+            <strong>{verificationPending}</strong>.
+            Click the link to verify your account, then sign in.
+            {!resent && (
+              <button
+                type="button"
+                data-testid="auth-resend-verification"
+                onClick={async () => {
+                  setResent(true);
+                  setError("");
+                  try {
+                    await resendVerification(verificationPending);
+                    setSuccess("Verification email resent.");
+                  } catch {
+                    // Generic failure copy — never reveals account state.
+                    setError("Could not resend right now. Please try again later.");
+                  }
+                }}
+                style={{
+                  display: "block",
+                  marginTop: 8,
+                  background: "none",
+                  border: "none",
+                  color: C.gold,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: 0,
+                  textDecoration: "underline",
+                  fontFamily: "inherit",
+                }}
+              >
+                Resend verification email
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Error */}
         {error && (

@@ -1374,3 +1374,129 @@ def account_logout_all(
         token_store.clear_token(session_id)
 
     return {"ok": True, "revoked_sessions": revoked}
+
+
+# ---------------------------------------------------------------------------
+# Account registration + email verification (2026-09-16 plan Task 3)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/account/register")
+def account_register(
+    email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    display_name: str | None = Body(default=None, embed=True),
+    db: Session = Depends(get_db),
+):
+    """Register a StrikeNova local (email/password) account.
+
+    Per design spec §6: the account is created UNVERIFIED, a single-use
+    hashed verification token is issued, and the verification email is sent
+    through the provider-neutral transport. No session is created — the user
+    must verify their email before logging in.
+
+    Enumeration protection: a duplicate local registration returns the same
+    200 shape as a fresh one without creating accounts or tokens.
+    """
+    email = account_security.normalize_email(email)
+    detail = account_security.validate_registration(email, password)
+    if detail:
+        raise HTTPException(status_code=422, detail=detail)
+
+    existing = db.query(User).filter(User.email == email).one_or_none()
+    if existing is not None:
+        if existing.identity_source == "email" and existing.password_hash:
+            # Enumeration-resistant generic response; no state change.
+            return {
+                "ok": True,
+                "message": "Check your email to verify your account.",
+            }
+        # OAuth-linked account (google/upstox) without a local password:
+        # setting a password follows the legacy /auth/register contract.
+        existing.password_hash = hash_password(password)
+        if display_name:
+            existing.display_name = display_name
+        db.commit()
+        return {"ok": True, "message": "Check your email to verify your account."}
+
+    user = User(
+        id=str(uuid4()),
+        email=email,
+        password_hash=hash_password(password),
+        display_name=display_name or email.split("@")[0],
+        status="pending_verification",
+        identity_source="email",
+    )
+    db.add(user)
+    db.flush()
+
+    raw_token, _record = account_security.create_verification_token(db, user.id)
+    db.commit()
+
+    account_security.send_verification_email(email, raw_token)
+
+    return {"ok": True, "message": "Check your email to verify your account."}
+
+
+@router.post("/account/verify-email")
+def account_verify_email(
+    token: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Consume a single-use verification token and mark the account verified.
+
+    Expired/used/unknown tokens fail closed with 400. No session is created;
+    the user logs in normally afterwards. Emits a security event.
+    """
+    record = account_security.consume_verification_token(db, token)
+    if record is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+
+    user = db.query(User).filter(User.id == record.user_id).one_or_none()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification token")
+
+    user.status = "active"
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="email_verification_completed",
+        metadata={"identity_source": user.identity_source},
+    )
+    db.commit()
+    return {"ok": True, "message": "Email verified. You can now log in."}
+
+
+@router.post("/account/resend-verification")
+def account_resend_verification(
+    email: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Re-issue the verification email, invalidating prior active tokens.
+
+    Enumeration-resistant: unknown addresses and already-active accounts get
+    the identical generic response and no email.
+    """
+    email = account_security.normalize_email(email)
+    generic = {"ok": True, "message": "If your email needs verification, we sent a link."}
+
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if (
+        user is None
+        or user.identity_source != "email"
+        or not user.password_hash
+        or user.status != "pending_verification"
+    ):
+        return generic
+
+    raw_token, _record = account_security.create_verification_token(db, user.id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="email_verification_requested",
+        metadata={"resend": True},
+    )
+    db.commit()
+
+    account_security.send_verification_email(email, raw_token)
+    return generic

@@ -249,3 +249,37 @@ describe("account security API (2026-09-16 plan Task 1)", () => {
     spy.mockRestore();
   });
 });
+
+
+describe("account security API (2026-09-16 plan Task 3)", () => {
+  it("registerAccount posts to /auth/account/register", async () => {
+    const { registerAccount } = await import("./api");
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    const result = await registerAccount("new@example.com", "password123", "New");
+    expect(postSpy).toHaveBeenCalledWith("/auth/account/register", {
+      email: "new@example.com",
+      password: "password123",
+      display_name: "New",
+    });
+    expect(result.ok).toBe(true);
+    postSpy.mockRestore();
+  });
+
+  it("verifyEmail posts the raw token to /auth/account/verify-email", async () => {
+    const { verifyEmail } = await import("./api");
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    const result = await verifyEmail("raw-token-value");
+    expect(postSpy).toHaveBeenCalledWith("/auth/account/verify-email", { token: "raw-token-value" });
+    expect(result.ok).toBe(true);
+    postSpy.mockRestore();
+  });
+
+  it("resendVerification posts email to /auth/account/resend-verification", async () => {
+    const { resendVerification } = await import("./api");
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    const result = await resendVerification("a@example.com");
+    expect(postSpy).toHaveBeenCalledWith("/auth/account/resend-verification", { email: "a@example.com" });
+    expect(result.ok).toBe(true);
+    postSpy.mockRestore();
+  });
+});

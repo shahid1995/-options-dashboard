@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     RECENT_AUTH_TTL_MINUTES: int = 15
     EMAIL_FROM_ADDRESS: str = "StrikeNova <no-reply@strikenova.local>"
     EMAIL_BASE_URL: str = "http://localhost:3000"
+    # Provider-neutral email transport (Task 3): when EMAIL_API_URL is set the
+    # generic HTTP transport is used; otherwise the deterministic in-memory
+    # test sender. Provider credentials live ONLY in backend environment
+    # configuration — never in the frontend, logs, or security events.
+    EMAIL_API_URL: str = ""
+    EMAIL_API_KEY: str = ""
 
     @property
     def FRONTEND_ORIGIN(self) -> str:
