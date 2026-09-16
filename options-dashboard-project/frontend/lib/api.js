@@ -58,6 +58,22 @@ export const getMe = () => api.get("/auth/me").then((r) => r.data);
 
 export const logoutUser = () => api.post("/auth/logout").then((r) => r.data);
 
+// ---- Account security (2026-09-16 plan) — separate from broker OAuth ----
+
+// StrikeNova account login (email/password). Never a broker route: broker
+// OAuth initiation stays on loginUrl() → GET /auth/login.
+export const loginAccount = (email, password) =>
+  api.post("/auth/account/login", { email, password }).then((r) => r.data);
+
+export const logoutAccount = () =>
+  api.post("/auth/account/logout").then((r) => r.data);
+
+export const logoutAll = () =>
+  api.post("/auth/account/logout-all").then((r) => r.data);
+
+export const getAccountSession = () =>
+  api.get("/auth/account/session").then((r) => r.data);
+
 // ---- Phase A: Google OAuth ----
 
 // Phase A security: Generate HMAC-signed state for nonce binding.

@@ -209,3 +209,43 @@ describe("auth API (Phase 10.2B-5)", () => {
     spy.mockRestore();
   });
 });
+
+describe("account security API (2026-09-16 plan Task 1)", () => {
+  it("loginAccount posts to /auth/account/login and keeps loginUrl() for broker OAuth", async () => {
+    const { loginAccount, loginUrl } = await import("./api");
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, session_id: "sess-1", user: { user_id: "u1" } } });
+    const result = await loginAccount("test@example.com", "password123");
+    expect(postSpy).toHaveBeenCalledWith("/auth/account/login", { email: "test@example.com", password: "password123" });
+    expect(result.session_id).toBe("sess-1");
+    // Broker OAuth initiation route is retained, untouched:
+    expect(loginUrl("UPSTOX")).toContain("/auth/login?broker=UPSTOX");
+    postSpy.mockRestore();
+  });
+
+  it("logoutAccount posts to /auth/account/logout", async () => {
+    const { logoutAccount } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    const result = await logoutAccount();
+    expect(spy).toHaveBeenCalledWith("/auth/account/logout");
+    expect(result.ok).toBe(true);
+    spy.mockRestore();
+  });
+
+  it("logoutAll posts to /auth/account/logout-all", async () => {
+    const { logoutAll } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, revoked_sessions: 3 } });
+    const result = await logoutAll();
+    expect(spy).toHaveBeenCalledWith("/auth/account/logout-all");
+    expect(result.revoked_sessions).toBe(3);
+    spy.mockRestore();
+  });
+
+  it("getAccountSession gets /auth/account/session", async () => {
+    const { getAccountSession } = await import("./api");
+    const spy = vi.spyOn(api, "get").mockResolvedValue({ data: { authenticated: true, user: { user_id: "u1" } } });
+    const result = await getAccountSession();
+    expect(spy).toHaveBeenCalledWith("/auth/account/session");
+    expect(result.authenticated).toBe(true);
+    spy.mockRestore();
+  });
+});

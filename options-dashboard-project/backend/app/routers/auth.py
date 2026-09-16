@@ -42,6 +42,7 @@ from fastapi import Request as FastAPIRequest
 from app.routers.deps import CurrentUser, AuthenticatedUser, get_session_id
 from app.services.broker_authorization import persist_connection_authorization
 from app.services import token_store
+from app.services import account_security
 from app.services.rate_limiter import rate_limiter, RateLimitRule
 
 logger = logging.getLogger(__name__)
@@ -1227,3 +1228,149 @@ def _popup_error_response(message: str) -> HTMLResponse:
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
+
+
+# ===========================================================================
+# StrikeNova Account Security — /auth/account/*
+#
+# These endpoints authenticate the StrikeNova User and manage durable
+# UserSessions (account identity). They are deliberately separate from the
+# broker OAuth flow above: GET /auth/login remains the ONLY broker OAuth
+# initiation route and the broker gateway is never involved here.
+# (2026-09-16 account-security design spec §3/§9.)
+# ===========================================================================
+
+
+def _account_user_from_session(db: Session, session_id: str | None) -> tuple[User, UserSession] | None:
+    """Resolve an active durable UserSession to its active User."""
+    if not session_id:
+        return None
+    session = get_active_session(db, session_id)
+    if session is None:
+        return None
+    user = db.query(User).filter(User.id == session.user_id).one_or_none()
+    if user is None or user.status != "active":
+        return None
+    return user, session
+
+
+@router.post("/account/login")
+def account_login(
+    email: str = Body(..., embed=True),
+    password: str = Body(..., embed=True),
+    response: Response = None,
+    db: Session = Depends(get_db),
+):
+    """Authenticate a StrikeNova account with email/password.
+
+    Creates a durable UserSession and applies the existing secure cookie
+    policy (HttpOnly, Secure, SameSite=None). Independent of broker OAuth:
+    no broker credentials are required and the broker gateway is never
+    invoked.
+    """
+    email = (email or "").strip().lower()
+    if not email or not password:
+        raise HTTPException(status_code=422, detail="Email and password are required")
+
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if user is None or not user.password_hash:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if user.status != "active":
+        raise HTTPException(status_code=403, detail="StrikeNova account is not active")
+    if not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    user.last_login_at = datetime.now(timezone.utc)
+    session_id, _record = account_security.issue_account_session(db, user)
+    db.commit()
+
+    response.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=60 * 60 * 24,
+        path="/",
+    )
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "user": {
+            "user_id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+        },
+    }
+
+
+@router.get("/account/session")
+def account_session(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """Return the authenticated account and durable-session state.
+
+    UserSession.revoked_at / expires_at are the authority: revoked or
+    expired sessions are rejected with 401.
+    """
+    resolved = _account_user_from_session(db, session_id)
+    if resolved is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user, session = resolved
+
+    return {
+        "authenticated": True,
+        "user": {
+            "user_id": user.id,
+            "email": user.email,
+            "display_name": user.display_name,
+            "identity_source": user.identity_source,
+        },
+        "session": {
+            "created_at": _serialize_utc(session.created_at),
+            "expires_at": _serialize_utc(session.expires_at),
+        },
+    }
+
+
+@router.post("/account/logout")
+def account_logout(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """Revoke the caller's current account session.
+
+    Idempotent: revoking an unknown/already-revoked session still succeeds
+    without revealing whether it ever existed.
+    """
+    account_security.revoke_one(db, session_id)
+    db.commit()
+    if session_id:
+        token_store.clear_token(session_id)
+
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(
+        SESSION_COOKIE, httponly=True, secure=True, samesite="none", path="/"
+    )
+    return response
+
+
+@router.post("/account/logout-all")
+def account_logout_all(
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """Revoke every active account session for the authenticated user."""
+    resolved = _account_user_from_session(db, session_id)
+    if resolved is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user, _session = resolved
+
+    revoked = account_security.revoke_all_for_user(db, user.id)
+    db.commit()
+    if session_id:
+        token_store.clear_token(session_id)
+
+    return {"ok": True, "revoked_sessions": revoked}
