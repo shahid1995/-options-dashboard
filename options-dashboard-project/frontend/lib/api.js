@@ -25,7 +25,7 @@ export const loginUrl = (broker = "UPSTOX") =>
 
 // Seamless popup kickoff: mint the single-use, API-origin kick cookie an
 // authenticated opener hands to the OAuth popup (the popup's top-level
-// navigation carries no X-Session-Id header). Returns the axios promise;
+
 // the Set-Cookie lands in the browser jar for the API origin.
 export const mintPopupKick = (broker) =>
   api.post("/auth/oauth/popup-kick", { broker });
@@ -200,12 +200,9 @@ export const chainWsUrl = (symbol, expiryDate) => {
   return `${wsBase}/chains/ws/${symbol}?expiry_date=${encodeURIComponent(expiryDate)}`;
 };
 
-// Browsers can't set custom headers on websockets, so the session ID rides
-// along as the second entry of the subprotocol list (matched by the backend).
-export const chainWsProtocols = () => {
-  const sessionId = getSessionId();
-  return sessionId ? ["options-dashboard-session", sessionId] : undefined;
-};
+// WebSocket connections automatically include the HttpOnly strikenova_session cookie.
+// No subprotocol is needed — the backend reads the session from the cookie.
+export const chainWsProtocols = () => undefined;
 
 // ---- Phase 6.7: strategy templates (CRUD) ----
 

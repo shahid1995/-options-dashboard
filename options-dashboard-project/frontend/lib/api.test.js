@@ -154,11 +154,25 @@ describe("auth API (Phase 10.2B-5)", () => {
   });
 
   it("logs in via POST /auth/login-email", async () => {
-    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, session_id: "sess-123" } });
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, user: { user_id: "u1" } } });
     const result = await loginEmail("test@example.com", "password123");
     expect(spy).toHaveBeenCalledWith("/auth/login-email", { email: "test@example.com", password: "password123" });
-    expect(result.session_id).toBe("sess-123");
+    expect(result.ok).toBe(true);
+    expect(result.user.user_id).toBe("u1");
     spy.mockRestore();
+  });
+
+  it("login response does not contain session_id in body", async () => {
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, user: { user_id: "u1" } } });
+    const result = await loginEmail("test@example.com", "password123");
+    expect(result.session_id).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("chainWsProtocols returns undefined (no session ID in JS)", () => {
+    // Session is in HttpOnly cookie, not accessible to JavaScript
+    const { chainWsProtocols } = require("./api");
+    expect(chainWsProtocols()).toBeUndefined();
   });
 
   it("gets current user via GET /auth/me", async () => {

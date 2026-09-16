@@ -33,15 +33,11 @@ WS_SESSION_PROTOCOL = "options-dashboard-session"
 def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:
     """Extracts the session ID from the websocket handshake.
 
-    Browsers can't set custom headers on websockets, so the frontend sends the
-    session ID as the second entry of the Sec-WebSocket-Protocol list (falling
-    back to the session cookie). Returns (session_id, subprotocol_to_accept)."""
-    requested = websocket.headers.get("sec-websocket-protocol")
-    if requested:
-        parts = [p.strip() for p in requested.split(",")]
-        if len(parts) == 2 and parts[0] == WS_SESSION_PROTOCOL:
-            return parts[1], WS_SESSION_PROTOCOL
-    return websocket.cookies.get("session_id"), None
+    The session is obtained from the HttpOnly ``strikenova_session`` cookie.
+    Browsers send cookies automatically on WebSocket connections.
+
+    Returns (session_id, subprotocol_to_accept)."""
+    return websocket.cookies.get("strikenova_session"), None
 
 
 def require_token(session_id: str | None) -> str:

@@ -205,7 +205,7 @@ class TestCurrentUserDependency:
     def test_cookie_fallback(self, client, db_session):
         """Session via cookie (not header) still resolves."""
         session_id, _ = create_test_identity(db_session, "tok-cookie")
-        resp = client.get("/paper/templates", cookies={"session_id": session_id})
+        resp = client.get("/paper/templates", cookies={"strikenova_session": session_id})
         assert resp.status_code == 200
 
 

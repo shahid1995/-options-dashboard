@@ -77,7 +77,7 @@ def _resolve_user(db: Session, sid: str) -> AuthenticatedUser:
 
 def get_current_user(
     x_session_id: str | None = Header(default=None),
-    session_id_cookie: str | None = Cookie(default=None, alias="session_id"),
+    session_id_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> AuthenticatedUser:
     """Resolve session → user identity WITHOUT a shared DB session.
 
@@ -116,7 +116,7 @@ class CurrentUser:
         self,
         db: Session = Depends(get_db),
         x_session_id: str | None = Header(default=None),
-        session_id_cookie: str | None = Cookie(default=None, alias="session_id"),
+        session_id_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     ) -> AuthenticatedUser:
         sid = _extract_session_id(x_session_id, session_id_cookie)
         return _resolve_user(db, sid)
