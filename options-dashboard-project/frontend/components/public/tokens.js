@@ -146,7 +146,7 @@ export const RADIUS = {
 // -----------------------------------------------------------------------------
 // SHADOWS / LAYERING
 // -----------------------------------------------------------------------------
-// Subtle shadows for depth.
+// Subtle shadows for depth. Avoid heavy elevation.
 
 export const SHADOW = {
   none: "none",
