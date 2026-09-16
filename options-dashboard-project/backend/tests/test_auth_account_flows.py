@@ -33,6 +33,7 @@ from app.identity import (
     store_credentials,
 )
 from app.main import app
+from app.config import settings
 from app.routers.auth import SESSION_COOKIE as SESSION_COOKIE_NAME
 from app.services import token_store
 
@@ -634,3 +635,369 @@ class TestEmailVerification:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json().get("session_id")
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — Password recovery, sensitive changes, recent authentication
+# ---------------------------------------------------------------------------
+
+
+def _verified_user(db, email="recovery@example.com", password="Sup3rSecret!"):
+    """A verified local user ready to log in."""
+    user = _local_user(db, email=email, password=password)
+    return user
+
+
+def auth(session_id):
+    """Repo-standard session transport: X-Session-Id header (cookies are
+    Secure in this app, so TestClient over http never replays them)."""
+    return {"X-Session-Id": session_id} if session_id else {}
+
+
+def _login(client, email="recovery@example.com", password="Sup3rSecret!"):
+    resp = client.post(f"{ACCOUNT}/login", json={"email": email, "password": password})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["session_id"]
+
+
+class TestForgotPassword:
+    def test_known_and_unknown_email_get_identical_responses(
+        self, client, db_session
+    ):
+        """Enumeration protection: identical status + body for known and
+        unknown addresses."""
+        _verified_user(db_session)
+        known = client.post(
+            f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"}
+        )
+        unknown = client.post(
+            f"{ACCOUNT}/forgot-password", json={"email": "ghost@example.com"}
+        )
+        assert known.status_code == unknown.status_code == 200
+        assert known.json() == unknown.json()
+        # No token material, no URL in the public response
+        assert "token" not in known.text.lower()
+
+    def test_forgot_password_sends_reset_email_for_eligible_account(
+        self, client, db_session
+    ):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        clear_sent_messages()
+        _verified_user(db_session)
+        client.post(f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"})
+
+        sent = get_sent_messages()
+        assert len(sent) == 1
+        assert sent[0].to == "recovery@example.com"
+        assert "reset" in sent[0].subject.lower()
+        # The reset link carries the raw token — but nothing is persisted
+        assert sent[0].raw_token
+
+    def test_new_request_invalidates_previous_reset_token(self, client, db_session):
+        from app.services.email import clear_sent_messages, get_sent_messages
+        from app.identity import PasswordResetToken
+
+        _verified_user(db_session)
+        clear_sent_messages()
+        client.post(f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"})
+        first = get_sent_messages()[-1].raw_token
+
+        client.post(f"{ACCOUNT}/forgot-password", json={"email": "recovery@example.com"})
+        second = get_sent_messages()[-1].raw_token
+        assert second != first
+
+        user = db_session.query(User).filter(User.email == "recovery@example.com").one()
+        active = (
+            db_session.query(PasswordResetToken)
+            .filter(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+            .count()
+        )
+        assert active == 1
+
+
+class TestResetPassword:
+    def _request_reset(self, client, email="recovery@example.com"):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        clear_sent_messages()
+        client.post(f"{ACCOUNT}/forgot-password", json={"email": email})
+        return get_sent_messages()[-1].raw_token
+
+    def test_valid_reset_updates_password_and_revokes_sessions(
+        self, client, db_session
+    ):
+        user = _verified_user(db_session)
+        # Two active sessions
+        _login(client)
+        _login(client)
+        raw_token = self._request_reset(client)
+
+        resp = client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body.get("ok") is True
+        # No new session is created by reset
+        assert "session_id" not in body
+        assert "Set-Cookie" not in resp.headers
+
+        db_session.expire_all()
+        updated = (
+            db_session.query(User).filter(User.id == user.id).one()
+        )
+        from app.identity import verify_password
+
+        assert verify_password("N3wPassword!", updated.password_hash)
+        assert not verify_password("Sup3rSecret!", updated.password_hash)
+
+        # All existing sessions revoked
+        from app.identity import UserSession as US
+
+        now = datetime.now(timezone.utc)
+        active = (
+            db_session.query(US)
+            .filter(US.user_id == user.id, US.revoked_at.is_(None), US.expires_at > now)
+            .count()
+        )
+        assert active == 0
+
+    def test_user_must_log_in_normally_after_reset(self, client, db_session):
+        _verified_user(db_session)
+        raw_token = self._request_reset(client)
+        client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "N3wPassword!"},
+        )
+        resp = client.post(
+            f"{ACCOUNT}/login",
+            json={"email": "recovery@example.com", "password": "N3wPassword!"},
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("session_id")
+
+    def test_invalid_reset_token_fails(self, client, db_session):
+        _verified_user(db_session)
+        resp = client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": "junk", "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 400
+
+    def test_expired_reset_token_fails(self, client, db_session):
+        _verified_user(db_session)
+        raw_token = self._request_reset(client)
+        from app.identity import PasswordResetToken
+
+        user = db_session.query(User).filter(User.email == "recovery@example.com").one()
+        record = (
+            db_session.query(PasswordResetToken)
+            .filter(PasswordResetToken.user_id == user.id)
+            .one()
+        )
+        record.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db_session.commit()
+
+        resp = client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 400
+
+    def test_replayed_reset_token_fails(self, client, db_session):
+        _verified_user(db_session)
+        raw_token = self._request_reset(client)
+        first = client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "N3wPassword!"},
+        )
+        assert first.status_code == 200
+        second = client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "AnotherPass1!"},
+        )
+        assert second.status_code == 400
+
+    def test_reset_sends_security_notification(self, client, db_session):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        _verified_user(db_session)
+        raw_token = self._request_reset(client)
+        clear_sent_messages()
+        client.post(
+            f"{ACCOUNT}/reset-password",
+            json={"token": raw_token, "new_password": "N3wPassword!"},
+        )
+        sent = get_sent_messages()
+        assert len(sent) == 1
+        assert sent[0].to == "recovery@example.com"
+        # Notification is secret-free
+        assert sent[0].raw_token is None
+
+
+class TestRecentAuthentication:
+    def test_login_records_recent_auth_server_side(self, client, db_session):
+        from app.services.account_security import is_recently_authenticated
+
+        user = _verified_user(db_session)
+        _login(client)
+        session_id = client.cookies.get(SESSION_COOKIE_NAME)
+        assert session_id
+        assert is_recently_authenticated(db_session, user.id, session_id) is True
+
+    def test_no_recent_auth_without_login(self, client, db_session):
+        from app.services.account_security import is_recently_authenticated
+
+        user = _verified_user(db_session)
+        assert is_recently_authenticated(db_session, user.id, "unknown-session") is False
+
+    def test_change_password_requires_recent_auth(self, client, db_session, monkeypatch):
+        user = _verified_user(db_session)
+        session_id = _login(client)
+        # Deterministic staleness: shrink the server-side freshness window to
+        # zero so the login's recent-auth record is outside it (no sleeps).
+        monkeypatch.setattr(settings, "RECENT_AUTH_TTL_MINUTES", 0)
+        resp = client.post(
+            f"{ACCOUNT}/change-password",
+            headers=auth(session_id),
+            json={"current_password": "Sup3rSecret!", "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 403
+        db_session.expire_all()
+        from app.identity import verify_password
+
+        refreshed = db_session.query(User).filter(User.id == user.id).one()
+        assert verify_password("Sup3rSecret!", refreshed.password_hash)
+
+    def test_change_password_validates_current_password(self, client, db_session):
+        _verified_user(db_session)
+        session_id = _login(client)
+        resp = client.post(
+            f"{ACCOUNT}/change-password",
+            headers=auth(session_id),
+            json={"current_password": "WrongPassword1!", "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 401
+
+    def test_change_password_succeeds_with_recent_auth_and_revokes_others(
+        self, client, db_session
+    ):
+        user = _verified_user(db_session)
+        # Two sessions: the first (older) and the current one. The login just
+        # performed records a fresh server-side recent-auth event.
+        session_id = _login(client)
+        current_session = session_id
+
+        resp = client.post(
+            f"{ACCOUNT}/change-password",
+            headers=auth(session_id),
+            json={"current_password": "Sup3rSecret!", "new_password": "N3wPassword!"},
+        )
+        assert resp.status_code == 200, resp.text
+        db_session.expire_all()
+        from app.identity import verify_password
+
+        refreshed = db_session.query(User).filter(User.id == user.id).one()
+        assert verify_password("N3wPassword!", refreshed.password_hash)
+        # Other sessions revoked; the current one survives (session policy)
+        now = datetime.now(timezone.utc)
+        others = (
+            db_session.query(UserSession)
+            .filter(
+                UserSession.user_id == user.id,
+                UserSession.session_hash != hash_session_id(current_session),
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > now,
+            )
+            .count()
+        )
+        assert others == 0
+
+    def test_change_email_requires_recent_auth(self, client, db_session, monkeypatch):
+        user = _verified_user(db_session)
+        session_id = _login(client)
+        monkeypatch.setattr(settings, "RECENT_AUTH_TTL_MINUTES", 0)
+        resp = client.post(
+            f"{ACCOUNT}/change-email",
+            headers=auth(session_id),
+            json={"new_email": "newaddress@example.com"},
+        )
+        assert resp.status_code == 403
+
+    def test_change_email_stores_pending_change_old_email_stays_authoritative(
+        self, client, db_session
+    ):
+        from app.identity import PendingEmailChange
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        user = _verified_user(db_session)
+        session_id = _login(client)
+        clear_sent_messages()
+        resp = client.post(
+            f"{ACCOUNT}/change-email",
+            headers=auth(session_id),
+            json={"new_email": "newaddress@example.com"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        # Old email unchanged; pending record exists, hashed token stored
+        db_session.expire_all()
+        refreshed = db_session.query(User).filter(User.id == user.id).one()
+        assert refreshed.email == "recovery@example.com"
+        pending = (
+            db_session.query(PendingEmailChange)
+            .filter(PendingEmailChange.user_id == user.id)
+            .one()
+        )
+        assert pending.new_email == "newaddress@example.com"
+        assert pending.used_at is None
+        # Confirmation email delivered to the NEW address
+        sent = get_sent_messages()
+        assert len(sent) == 1
+        assert sent[0].to == "newaddress@example.com"
+        assert sent[0].raw_token
+
+    def test_change_email_verification_completes_change(self, client, db_session):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        user = _verified_user(db_session)
+        session_id = _login(client)
+        clear_sent_messages()
+        client.post(f"{ACCOUNT}/change-email", headers=auth(session_id), json={"new_email": "newaddress@example.com"})
+        raw_token = get_sent_messages()[-1].raw_token
+
+        resp = client.post(
+            f"{ACCOUNT}/verify-email-change", json={"token": raw_token}
+        )
+        assert resp.status_code == 200, resp.text
+        db_session.expire_all()
+        refreshed = db_session.query(User).filter(User.id == user.id).one()
+        assert refreshed.email == "newaddress@example.com"
+
+    def test_change_email_verification_rejects_replay(self, client, db_session):
+        from app.services.email import clear_sent_messages, get_sent_messages
+
+        user = _verified_user(db_session)
+        session_id = _login(client)
+        clear_sent_messages()
+        client.post(f"{ACCOUNT}/change-email", headers=auth(session_id), json={"new_email": "newaddress@example.com"})
+        raw_token = get_sent_messages()[-1].raw_token
+
+        first = client.post(f"{ACCOUNT}/verify-email-change", json={"token": raw_token})
+        assert first.status_code == 200
+        second = client.post(f"{ACCOUNT}/verify-email-change", json={"token": raw_token})
+        assert second.status_code == 400
+        db_session.expire_all()
+        refreshed = db_session.query(User).filter(User.id == user.id).one()
+        assert refreshed.email == "newaddress@example.com"  # changed once
+
+    def test_change_email_requires_authenticated_session(self, client, db_session):
+        _verified_user(db_session)
+        resp = client.post(
+            f"{ACCOUNT}/change-email",
+            json={"new_email": "newaddress@example.com"},
+        )
+        assert resp.status_code == 401
+

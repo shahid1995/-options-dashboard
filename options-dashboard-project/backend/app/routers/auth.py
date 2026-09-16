@@ -28,6 +28,7 @@ from app.identity import (
     get_or_create_user_from_google,
     get_analytics_token,
     hash_password,
+    hash_session_id,
     remove_analytics_token,
     resolve_platform_user,
     resolve_user_credentials,
@@ -1282,6 +1283,9 @@ def account_login(
 
     user.last_login_at = datetime.now(timezone.utc)
     session_id, _record = account_security.issue_account_session(db, user)
+    # Server-side recent-authentication state for sensitive-change gating
+    # (plan Task 4): tied to (user_id, session_id), TTL-enforced on read.
+    account_security.mark_recently_authenticated(db, user.id, session_id)
     db.commit()
 
     response.set_cookie(
@@ -1500,3 +1504,234 @@ def account_resend_verification(
 
     account_security.send_verification_email(email, raw_token)
     return generic
+
+
+# ---------------------------------------------------------------------------
+# Password recovery + sensitive account changes (2026-09-16 plan Task 4)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/account/forgot-password")
+def account_forgot_password(
+    email: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Request a password-reset email.
+
+    Enumeration protection (design spec §6): known and unknown addresses
+    receive the IDENTICAL public response; nothing in the body or status
+    reveals account existence. Only eligible local-password accounts get a
+    reset email with a short-lived, hashed, single-use token.
+    """
+    email = account_security.normalize_email(email)
+    generic = {"ok": True, "message": "If that email has an account, a reset link is on its way."}
+
+    if not email or "@" not in email:
+        return generic
+
+    user = db.query(User).filter(User.email == email).one_or_none()
+    if user is None or user.identity_source != "email" or not user.password_hash:
+        return generic
+
+    raw_token, _record = account_security.create_reset_token(db, user.id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="password_reset_requested",
+        metadata={"transport": "email"},
+    )
+    db.commit()
+
+    account_security.send_password_reset_email(email, raw_token)
+    return generic
+
+
+@router.post("/account/reset-password")
+def account_reset_password(
+    token: str = Body(..., embed=True),
+    new_password: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Consume a reset token atomically and set the new password.
+
+    Per design spec §5/§6: consumption invalidates the token, revokes ALL
+    existing sessions, records a security event, and sends a security
+    notification — and does NOT create a new authenticated session. The user
+    logs in normally afterwards.
+    """
+    detail = account_security.validate_registration("reset@example.com", new_password)
+    if detail:
+        raise HTTPException(status_code=422, detail=detail)
+
+    record = account_security.consume_reset_token(db, token)
+    if record is None:
+        account_security.record_security_event(
+            db,
+            user_id=None,
+            event_type="password_reset_failed",
+            metadata={"reason": "invalid_or_expired_token"},
+        )
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user = db.query(User).filter(User.id == record.user_id).one_or_none()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    user.password_hash = hash_password(new_password)
+    account_security.revoke_all_for_user(db, user.id)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="password_reset_completed",
+        metadata={"sessions_revoked": "all"},
+    )
+    db.commit()
+
+    account_security.send_generic_notification_email(
+        user.email,
+        "Your StrikeNova password was changed",
+        "Your StrikeNova password was just reset. If this was not you, "
+        "contact support immediately.",
+    )
+    return {"ok": True, "message": "Password updated. Please log in with your new password."}
+
+
+@router.post("/account/change-password")
+def account_change_password(
+    current_password: str = Body(..., embed=True),
+    new_password: str = Body(..., embed=True),
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """Change the password for the authenticated account.
+
+    Requires an authenticated durable session plus server-side recent
+    authentication (never a client-supplied boolean). On success the current
+    session is retained and all other active sessions are revoked (session
+    policy, design spec §6). Sends a security notification.
+    """
+    resolved = _account_user_from_session(db, session_id)
+    if resolved is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user, session = resolved
+    if not verify_password(current_password, user.password_hash or ""):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    account_security.require_recently_authenticated(db, user.id, session_id)
+
+    detail = account_security.validate_registration(user.email, new_password)
+    if detail:
+        raise HTTPException(status_code=422, detail=detail)
+
+    user.password_hash = hash_password(new_password)
+    now = datetime.now(timezone.utc)
+    others = (
+        db.query(UserSession)
+        .filter(
+            UserSession.user_id == user.id,
+            UserSession.id != session.id,
+            UserSession.revoked_at.is_(None),
+            UserSession.expires_at > now,
+        )
+        .all()
+    )
+    for other in others:
+        other.revoked_at = now
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="password_changed",
+        session_id=hash_session_id(session_id or ""),
+        metadata={"other_sessions_revoked": len(others)},
+    )
+    db.commit()
+
+    account_security.send_generic_notification_email(
+        user.email,
+        "Your StrikeNova password was changed",
+        "Your StrikeNova password was just changed from your account "
+        "settings. If this was not you, contact support immediately.",
+    )
+    return {"ok": True, "message": "Password updated. Other sessions have been signed out."}
+
+
+@router.post("/account/change-email")
+def account_change_email(
+    new_email: str = Body(..., embed=True),
+    session_id: str | None = Depends(get_session_id),
+    db: Session = Depends(get_db),
+):
+    """Request an email change.
+
+    Requires an authenticated durable session plus server-side recent
+    authentication. The change is stored as a pending record with a hashed,
+    single-use token; the CURRENT email remains authoritative until the new
+    address is verified. Confirmation goes to the NEW address.
+    """
+    resolved = _account_user_from_session(db, session_id)
+    if resolved is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user, _session = resolved
+    account_security.require_recently_authenticated(db, user.id, session_id)
+
+    new_email = account_security.normalize_email(new_email)
+    if not new_email or "@" not in new_email:
+        raise HTTPException(status_code=422, detail="A valid new email address is required")
+    if len(new_email) > 320:
+        raise HTTPException(status_code=422, detail="Email must be 320 characters or fewer")
+    if new_email == user.email:
+        raise HTTPException(status_code=422, detail="New email must differ from the current email")
+    clash = db.query(User).filter(User.email == new_email).one_or_none()
+    if clash is not None:
+        raise HTTPException(status_code=409, detail="That email is already in use")
+
+    raw_token, _record = account_security.create_email_change_token(db, user.id, new_email)
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="email_change_requested",
+        metadata={"new_email_domain": new_email.split("@")[-1]},
+    )
+    db.commit()
+
+    account_security.send_email_change_email(new_email, raw_token)
+    return {"ok": True, "message": "Check your new email to confirm the change."}
+
+
+@router.post("/account/verify-email-change")
+def account_verify_email_change(
+    token: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Consume a single-use email-change token and complete the change.
+
+    Expired/used/unknown tokens fail closed with 400; the current email stays
+    authoritative until this succeeds. Records a security event and sends a
+    security notification after the change.
+    """
+    record = account_security.consume_email_change_token(db, token)
+    if record is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired change token")
+
+    user = db.query(User).filter(User.id == record.user_id).one_or_none()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired change token")
+
+    old_email = user.email
+    user.email = record.new_email
+    account_security.record_security_event(
+        db,
+        user_id=user.id,
+        event_type="email_change_completed",
+        metadata={"old_email_domain": old_email.split("@")[-1],
+                  "new_email_domain": record.new_email.split("@")[-1]},
+    )
+    db.commit()
+
+    account_security.send_generic_notification_email(
+        record.new_email,
+        "Your StrikeNova email address was changed",
+        "The email address on your StrikeNova account was just changed. "
+        "If this was not you, contact support immediately.",
+    )
+    return {"ok": True, "message": "Email address updated."}

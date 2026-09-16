@@ -9,6 +9,8 @@ import {
   getGoogleState,
   registerAccount,
   resendVerification,
+  forgotPassword,
+  resetPassword,
 } from "@/lib/api";
 import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
@@ -172,6 +174,15 @@ export default function AuthModal({ open, onClose, onAuth }) {
   // of auto-logging in. The pending email is transient component state only.
   const [verificationPending, setVerificationPending] = useState("");
   const [resent, setResent] = useState(false);
+  // Password-recovery view (2026-09-16 plan Task 4). The submitted email is
+  // transient component state; the backend always answers generically so the
+  // UI cannot reveal whether an account exists.
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  // Reset completion (Task 4): the emailed link carries the raw token; the
+  // user pastes it here. The token lives ONLY in transient component state.
+  const [resetToken, setResetToken] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
   const panelRef = useRef(null);
 
   // Reset state on open/close
@@ -186,6 +197,8 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setLoading(false);
     setVerificationPending("");
     setResent(false);
+    setForgotOpen(false);
+    setForgotSent(false);
   }, [open]);
 
   // Close on Escape
@@ -232,7 +245,13 @@ export default function AuthModal({ open, onClose, onAuth }) {
     setSuccess("");
     setLoading(true);
     try {
-      if (tab === "signin") {
+      if (forgotOpen) {
+        // Enumeration-resistant by backend contract: identical response for
+        // known and unknown addresses. Nothing here reveals account state.
+        await forgotPassword(email);
+        setForgotSent(true);
+        setLoading(false);
+      } else if (tab === "signin") {
         const data = await loginEmail(email, password);
         handleAuthSuccess(data);
       } else {
@@ -426,6 +445,101 @@ export default function AuthModal({ open, onClose, onAuth }) {
           </div>
         )}
 
+        {/* Password recovery (2026-09-16 plan Task 4) */}
+        {forgotOpen && (
+          <div
+            data-testid="auth-forgot-panel"
+            style={{ marginBottom: 14, fontSize: 13, color: C.text, lineHeight: 1.5 }}
+          >
+            {forgotSent && (
+              <div
+                data-testid="auth-forgot-sent"
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: 8,
+                  border: `1px solid ${C.green}`,
+                  background: "rgba(76,175,125,0.08)",
+                  color: C.green,
+                  marginBottom: 12,
+                }}
+              >
+                If that email has an account, a reset link is on its way.
+              </div>
+            )}
+            {/* Complete the reset: paste the token from the reset email and
+                choose a new password. No session is created on success. */}
+            <form
+              data-testid="auth-reset-form"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setError("");
+                setSuccess("");
+                setLoading(true);
+                try {
+                  await resetPassword(resetToken, resetNewPassword);
+                  setSuccess("Password updated. Please sign in with your new password.");
+                  setResetToken("");
+                  setResetNewPassword("");
+                  setForgotOpen(false);
+                } catch (err) {
+                  setError(err.message || "Invalid or expired reset link.");
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              style={{ display: "flex", flexDirection: "column", gap: 10 }}
+            >
+              <input
+                type="text"
+                data-testid="auth-reset-token"
+                placeholder="Reset token from your email"
+                value={resetToken}
+                onChange={(e) => setResetToken(e.target.value)}
+                required
+                autoComplete="off"
+                style={INPUT_STYLE}
+              />
+              <input
+                type="password"
+                data-testid="auth-reset-password"
+                placeholder="New password (min. 8 characters)"
+                value={resetNewPassword}
+                onChange={(e) => setResetNewPassword(e.target.value)}
+                required
+                minLength={8}
+                autoComplete="new-password"
+                style={INPUT_STYLE}
+              />
+              <button
+                type="submit"
+                data-testid="auth-reset-submit"
+                disabled={loading}
+                style={{ ...GOLD_BTN, opacity: loading ? 0.7 : 1 }}
+              >
+                {loading ? "Updating…" : "Set new password"}
+              </button>
+            </form>
+            <button
+              type="button"
+              data-testid="auth-forgot-back"
+              onClick={() => { setForgotOpen(false); setError(""); setSuccess(""); }}
+              style={{
+                background: "none",
+                border: "none",
+                color: C.gold,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+                padding: 0,
+                textDecoration: "underline",
+                fontFamily: "inherit",
+              }}
+            >
+              ← Back to sign in
+            </button>
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div
@@ -502,16 +616,37 @@ export default function AuthModal({ open, onClose, onAuth }) {
           </div>
 
           <div style={{ marginBottom: 18 }}>
-            <label htmlFor="auth-password" style={{ display: "block", fontSize: 12, color: C.muted, marginBottom: 4 }}>
-              Password
-            </label>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <label htmlFor="auth-password" style={{ fontSize: 12, color: C.muted }}>
+                Password
+              </label>
+              {tab === "signin" && !forgotOpen && (
+                <button
+                  type="button"
+                  data-testid="auth-forgot-link"
+                  onClick={() => { setForgotOpen(true); setError(""); setSuccess(""); }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: C.gold,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: 0,
+                    fontFamily: "inherit",
+                  }}
+                >
+                  Forgot password?
+                </button>
+              )}
+            </div>
             <input
               id="auth-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder={tab === "signin" ? "Enter your password" : "Min. 8 characters"}
-              required
+              required={!forgotOpen}
               minLength={tab === "signup" ? 8 : undefined}
               autoComplete={tab === "signin" ? "current-password" : "new-password"}
               style={INPUT_STYLE}
@@ -526,7 +661,13 @@ export default function AuthModal({ open, onClose, onAuth }) {
             disabled={loading}
             style={{ ...GOLD_BTN, opacity: loading ? 0.7 : 1 }}
           >
-            {loading ? "Please wait…" : tab === "signin" ? "Sign In" : "Create Account"}
+            {loading
+              ? "Please wait…"
+              : forgotOpen
+                ? "Send reset link"
+                : tab === "signin"
+                  ? "Sign In"
+                  : "Create Account"}
           </button>
         </form>
 

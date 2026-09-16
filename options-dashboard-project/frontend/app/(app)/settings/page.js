@@ -10,6 +10,9 @@ import {
   connectAnalyticsToken,
   getAnalyticsTokenStatus,
   removeAnalyticsToken,
+  changePassword,
+  changeEmail,
+  verifyEmailChange,
 } from "@/lib/api";
 
 /**
@@ -400,7 +403,166 @@ function AuthForm({ authLogin, authRegister }) {
   );
 }
 
-// ─── Account section ───────────────────────────────────────────────────────
+// ─── Security section (2026-09-16 plan Task 4) ─────────────────────────────
+
+function SecuritySection({ user }) {
+  // Passwords live ONLY in transient component state — never localStorage,
+  // never URLs, never analytics.
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState(null);
+  const [pwIsError, setPwIsError] = useState(false);
+
+  const [newEmail, setNewEmail] = useState("");
+  const [changeToken, setChangeToken] = useState("");
+  const [emBusy, setEmBusy] = useState(false);
+  const [emMsg, setEmMsg] = useState(null);
+  const [emIsError, setEmIsError] = useState(false);
+
+  const isLocalAccount = user?.identity_source === "email";
+
+  const submitPassword = async (e) => {
+    e.preventDefault();
+    setPwBusy(true);
+    setPwMsg(null);
+    setPwIsError(false);
+    try {
+      const res = await changePassword(pwCurrent, pwNew);
+      setPwMsg(res?.message || "Password updated.");
+      setPwCurrent("");
+      setPwNew("");
+    } catch (err) {
+      setPwMsg(err.message || "Could not update password.");
+      setPwIsError(true);
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
+  const submitEmailChange = async (e) => {
+    e.preventDefault();
+    setEmBusy(true);
+    setEmMsg(null);
+    setEmIsError(false);
+    try {
+      const res = await changeEmail(newEmail);
+      setEmMsg(res?.message || "Check your new email to confirm the change.");
+      setNewEmail("");
+    } catch (err) {
+      setEmMsg(err.message || "Could not start the email change.");
+      setEmIsError(true);
+    } finally {
+      setEmBusy(false);
+    }
+  };
+
+  const submitChangeToken = async (e) => {
+    e.preventDefault();
+    setEmBusy(true);
+    setEmMsg(null);
+    setEmIsError(false);
+    try {
+      const res = await verifyEmailChange(changeToken);
+      setEmMsg(res?.message || "Email address updated.");
+      setChangeToken("");
+      // Re-fetch identity so the authoritative email updates in place.
+      window.location.reload();
+    } catch (err) {
+      setEmMsg(err.message || "Invalid or expired change token.");
+      setEmIsError(true);
+    } finally {
+      setEmBusy(false);
+    }
+  };
+
+  if (!isLocalAccount) return null;
+
+  return (
+    <div style={card}>
+      <div style={{ ...sectionTitle, marginBottom: 16 }}>Security</div>
+
+      {/* Change password */}
+      <form onSubmit={submitPassword} style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.muted }}>
+          CHANGE PASSWORD
+        </div>
+        <input
+          type="password"
+          placeholder="Current password"
+          value={pwCurrent}
+          onChange={(e) => setPwCurrent(e.target.value)}
+          required
+          autoComplete="current-password"
+          style={inputBase}
+        />
+        <input
+          type="password"
+          placeholder="New password (min. 8 characters)"
+          value={pwNew}
+          onChange={(e) => setPwNew(e.target.value)}
+          required
+          minLength={8}
+          autoComplete="new-password"
+          style={inputBase}
+        />
+        {pwMsg && <FlashMessage text={pwMsg} isError={pwIsError} />}
+        <button type="submit" disabled={pwBusy} style={{ ...btnPrimary, opacity: pwBusy ? 0.6 : 1, alignSelf: "flex-start" }}>
+          {pwBusy ? "Updating…" : "Update Password"}
+        </button>
+      </form>
+
+      <div style={divider}><div style={dividerLine} /><span>and</span><div style={dividerLine} /></div>
+
+      {/* Change email */}
+      <form onSubmit={submitEmailChange} style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.muted }}>
+          CHANGE EMAIL
+        </div>
+        <div style={{ fontSize: 10, color: C.faint }}>
+          Current: {user.email} — stays authoritative until you confirm the change from the new address.
+        </div>
+        <input
+          type="email"
+          placeholder="New email address"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          required
+          autoComplete="email"
+          style={inputBase}
+        />
+        {emMsg && <FlashMessage text={emMsg} isError={emIsError} />}
+        <button type="submit" disabled={emBusy} style={{ ...btnOutline, opacity: emBusy ? 0.6 : 1, alignSelf: "flex-start" }}>
+          {emBusy ? "Working…" : "Send Confirmation Email"}
+        </button>
+      </form>
+
+      {/* Confirmation token entry (link opens on the app origin) */}
+      <form onSubmit={submitChangeToken} style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.5, color: C.muted }}>
+          CONFIRM EMAIL CHANGE
+        </div>
+        <input
+          type="text"
+          placeholder="Confirmation token from your new email"
+          value={changeToken}
+          onChange={(e) => setChangeToken(e.target.value)}
+          required
+          style={inputBase}
+        />
+        <button type="submit" disabled={emBusy} style={{ ...btnOutline, opacity: emBusy ? 0.6 : 1, alignSelf: "flex-start" }}>
+          {emBusy ? "Confirming…" : "Confirm Change"}
+        </button>
+      </form>
+
+      <div style={{ fontSize: 9, color: C.faint, letterSpacing: 0.4, marginTop: 8 }}>
+        SENSITIVE ACTIONS REQUIRE RECENT SIGN-IN · OTHER SESSIONS ARE SIGNED OUT AFTER A PASSWORD CHANGE
+      </div>
+    </div>
+  );
+}
+
+// ─── Account section ───────────────────────────────────────────────────────────
 
 function AccountSection({ user, onLogout }) {
   return (
@@ -850,6 +1012,7 @@ export default function SettingsPage() {
       ) : (
         <>
           <AccountSection user={user} onLogout={handleLogout} />
+          <SecuritySection user={user} />
           <BrokerSection />
           <AnalyticsTokenSection />
         </>

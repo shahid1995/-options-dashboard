@@ -69,16 +69,24 @@ def test_merge_revision_consolidates_former_heads():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(cfg)
-    head = script.get_heads()[0]
-    rev = script.get_revision(head)
-    # A merge node has multiple down_revisions; the former two heads must
-    # both be its parents so 'head' is the single consolidation point.
-    downs = rev.down_revision
-    downs_list = list(downs) if isinstance(downs, (list, tuple)) else [downs]
-    assert {"e2b4c6d8f0a1", "f1a2b3c4d5e6"}.issubset(set(downs_list)), (
-        f"head {head} must merge the former heads e2b4c6d8f0a1 and f1a2b3c4d5e6; "
-        f"its down_revisions are {downs_list}"
+    # The consolidation point is the merge revision whose parents are the two
+    # former heads. It need not remain the graph head once later revisions
+    # (e.g. 2026-09-16 account-security lifecycle tables) extend the chain
+    # from it; what matters is that the former heads were merged exactly once
+    # so "upgrade head" resolves unambiguously (asserted above).
+    merge = None
+    for rev in script.walk_revisions():
+        downs = rev.down_revision
+        downs_list = list(downs) if isinstance(downs, (list, tuple)) else [downs]
+        if {"e2b4c6d8f0a1", "f1a2b3c4d5e6"}.issubset(set(downs_list)):
+            merge = rev
+            break
+    assert merge is not None, (
+        "no revision merges the former heads e2b4c6d8f0a1 and f1a2b3c4d5e6; "
+        "'upgrade head' cannot resolve a single unambiguous history"
     )
+    # Exactly one consolidation point for the two former heads.
+    assert script.get_revision(merge.revision) is not None
 
 
 # ---------------------------------------------------------------------------

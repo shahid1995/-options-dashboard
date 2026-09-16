@@ -90,6 +90,31 @@ export const verifyEmail = (token) =>
 export const resendVerification = (email) =>
   api.post("/auth/account/resend-verification", { email }).then((r) => r.data);
 
+// Password recovery + sensitive account changes (2026-09-16 plan Task 4).
+// Tokens travel ONLY in transient state / request bodies — never URLs or
+// persistent storage.
+export const forgotPassword = (email) =>
+  api.post("/auth/account/forgot-password", { email }).then((r) => r.data);
+
+export const resetPassword = (token, newPassword) =>
+  api
+    .post("/auth/account/reset-password", { token, new_password: newPassword })
+    .then((r) => r.data);
+
+export const changePassword = (currentPassword, newPassword) =>
+  api
+    .post("/auth/account/change-password", {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+    .then((r) => r.data);
+
+export const changeEmail = (newEmail) =>
+  api.post("/auth/account/change-email", { new_email: newEmail }).then((r) => r.data);
+
+export const verifyEmailChange = (token) =>
+  api.post("/auth/account/verify-email-change", { token }).then((r) => r.data);
+
 // ---- Phase A: Google OAuth ----
 
 // Phase A security: Generate HMAC-signed state for nonce binding.

@@ -20,6 +20,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -32,6 +33,7 @@ from app.identity import (
     User,
     UserSession,
     create_session_record,
+    hash_session_id,
     revoke_session,
 )
 
@@ -52,6 +54,8 @@ __all__ = [
     "issue_account_session",
     "revoke_one",
     "revoke_all_for_user",
+    "is_recently_authenticated",
+    "require_recently_authenticated",
 ]
 
 # Metadata keys that must never appear in a security event (defense in depth:
@@ -409,3 +413,129 @@ def send_generic_notification_email(email: str, subject: str, body: str) -> None
         loop.create_task(
             send_email(to=email, subject=subject, html=f"<p>{body}</p>", text=body)
         )
+
+
+# ---------------------------------------------------------------------------
+# Recent authentication (2026-09-16 plan Task 4)
+#
+# Server-side freshness state tied to (user_id, session_id), enforced with a
+# configurable TTL. Never represented as a client-controlled boolean. Storage
+# reuses the durable SecurityEvent stream ("recent_authentication_completed",
+# per design spec §5 initial event types) — no second competing record type.
+# ---------------------------------------------------------------------------
+
+
+RECENT_AUTH_EVENT = "recent_authentication_completed"
+
+
+def mark_recently_authenticated(
+    db: Session, user_id: str, session_id: str | None
+) -> None:
+    """Record a recent-authentication event for (user_id, session_id)."""
+    record_security_event(
+        db,
+        user_id=user_id,
+        event_type=RECENT_AUTH_EVENT,
+        session_id=hash_session_id(session_id) if session_id else None,
+        metadata={"freshness_window_minutes": settings.RECENT_AUTH_TTL_MINUTES},
+    )
+
+
+def is_recently_authenticated(
+    db: Session, user_id: str, session_id: str | None
+) -> bool:
+    """Return True when a recent-authentication event for this exact
+    (user_id, session_id) pair exists within the configured freshness window."""
+    if not session_id:
+        return False
+    window_start = _utcnow() - timedelta(minutes=settings.RECENT_AUTH_TTL_MINUTES)
+    event = (
+        db.query(SecurityEvent)
+        .filter(
+            SecurityEvent.user_id == user_id,
+            SecurityEvent.session_id == hash_session_id(session_id),
+            SecurityEvent.event_type == RECENT_AUTH_EVENT,
+            SecurityEvent.occurred_at >= window_start,
+        )
+        .first()
+    )
+    return event is not None
+
+
+def require_recently_authenticated(db: Session, user_id: str, session_id: str | None) -> None:
+    """Raise 403 unless the (user_id, session_id) pair has fresh recent-auth state."""
+    if not is_recently_authenticated(db, user_id, session_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Recent authentication required for this action",
+        )
+
+
+def send_password_reset_email(email: str, raw_token: str) -> None:
+    """Deliver the password-reset email through the provider-neutral transport.
+
+    The raw token exists ONLY in the emailed link — never persisted, never
+    logged, never returned by an API response.
+    """
+    import asyncio
+
+    from app.services.email import send_email, set_test_metadata
+
+    base = settings.EMAIL_BASE_URL.rstrip("/")
+    link = f"{base}/reset-password?token={raw_token}"
+    # Context-local metadata for the deterministic test sink only; production
+    # transports never receive or persist this value.
+    set_test_metadata({"raw_token": raw_token})
+    subject = "Reset your StrikeNova password"
+    text = (
+        "We received a request to reset your StrikeNova password.\n\n"
+        f"Reset link (single-use, expires soon): {link}\n\n"
+        "If you did not request a reset, you can ignore this email and "
+        "your password will remain unchanged."
+    )
+    html = (
+        "<p>We received a request to reset your StrikeNova password.</p>"
+        f'<p><a href="{link}">Reset your password</a></p>'
+        "<p>This link is single-use and expires soon. If you did not request "
+        "a reset, you can ignore this email.</p>"
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(send_email(to=email, subject=subject, html=html, text=text))
+    else:
+        loop.create_task(send_email(to=email, subject=subject, html=html, text=text))
+
+
+def send_email_change_email(new_email: str, raw_token: str) -> None:
+    """Deliver the email-change confirmation to the NEW address.
+
+    The raw token exists ONLY in the emailed link — never persisted, never
+    logged, never returned by an API response.
+    """
+    import asyncio
+
+    from app.services.email import send_email, set_test_metadata
+
+    base = settings.EMAIL_BASE_URL.rstrip("/")
+    link = f"{base}/verify-email-change?token={raw_token}"
+    set_test_metadata({"raw_token": raw_token})
+    subject = "Confirm your new StrikeNova email address"
+    text = (
+        "We received a request to change the email address on your "
+        "StrikeNova account.\n\n"
+        f"Confirm link (single-use, expires soon): {link}\n\n"
+        "Your current email remains active until you confirm this change."
+    )
+    html = (
+        "<p>We received a request to change the email address on your "
+        "StrikeNova account.</p>"
+        f'<p><a href="{link}">Confirm your new email address</a></p>'
+        "<p>Your current email remains active until you confirm this change.</p>"
+    )
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(send_email(to=new_email, subject=subject, html=html, text=text))
+    else:
+        loop.create_task(send_email(to=new_email, subject=subject, html=html, text=text))

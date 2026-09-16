@@ -283,3 +283,43 @@ describe("account security API (2026-09-16 plan Task 3)", () => {
     postSpy.mockRestore();
   });
 });
+
+describe("account security API (2026-09-16 plan Task 4)", () => {
+  it("forgotPassword posts email to /auth/account/forgot-password", async () => {
+    const { forgotPassword } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    await forgotPassword("a@example.com");
+    expect(spy).toHaveBeenCalledWith("/auth/account/forgot-password", { email: "a@example.com" });
+  });
+
+  it("resetPassword posts token + new_password to /auth/account/reset-password", async () => {
+    const { resetPassword } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    await resetPassword("raw-token", "N3wPassword!");
+    expect(spy).toHaveBeenCalledWith("/auth/account/reset-password", { token: "raw-token", new_password: "N3wPassword!" });
+  });
+
+  it("changePassword posts current + new password to /auth/account/change-password", async () => {
+    const { changePassword } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    await changePassword("Cur3ntPass!", "N3wPassword!");
+    expect(spy).toHaveBeenCalledWith("/auth/account/change-password", {
+      current_password: "Cur3ntPass!",
+      new_password: "N3wPassword!",
+    });
+  });
+
+  it("changeEmail posts new_email to /auth/account/change-email", async () => {
+    const { changeEmail } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    await changeEmail("new@example.com");
+    expect(spy).toHaveBeenCalledWith("/auth/account/change-email", { new_email: "new@example.com" });
+  });
+
+  it("verifyEmailChange posts the raw token to /auth/account/verify-email-change", async () => {
+    const { verifyEmailChange } = await import("./api");
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true } });
+    await verifyEmailChange("raw-token");
+    expect(spy).toHaveBeenCalledWith("/auth/account/verify-email-change", { token: "raw-token" });
+  });
+});
