@@ -43,6 +43,7 @@ html { scroll-behavior: smooth; }
 .od-card { transition: transform 0.18s ease, border-color 0.18s ease; }
 .od-card:hover { transform: translateY(-3px); border-color: rgba(201, 161, 90, 0.45) !important; }
 
+/* Focus-visible ring for all interactive elements */
 a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid ${C.gold};
   outline-offset: 2px;
@@ -64,14 +65,17 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
 }
 `;
 
+// Reusable page container max-width
 export const PAGE_MAX = 1100;
 
+// Shared section padding
 export const sectionPad = (isMobile) => ({
   maxWidth: PAGE_MAX,
   margin: "0 auto",
   padding: isMobile ? "72px 20px" : "96px 20px",
 });
 
+// Common "illustrative data" disclaimer style
 export const DEMO_LABEL_STYLE = {
   display: "inline-block",
   fontSize: 11,
