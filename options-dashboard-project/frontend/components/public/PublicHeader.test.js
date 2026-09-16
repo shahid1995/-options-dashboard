@@ -86,7 +86,7 @@ describe("PublicHeader — P6 Tests", () => {
 
   it("header inner container does not clip desktop dropdowns horizontally", () => {
     const html = renderHeader();
-    const navInnerMatch = html.match(/height:\s*60px[\s\S]*?boxSizing[^}]*}/);
+    const navInnerMatch = html.match(/height:\s*60px[\s\S]*?width:\s*100%[^}]*}/);
     expect(navInnerMatch).toBeTruthy();
     expect(navInnerMatch[0]).not.toContain("overflowX");
     expect(navInnerMatch[0]).not.toContain("overflow-x");
