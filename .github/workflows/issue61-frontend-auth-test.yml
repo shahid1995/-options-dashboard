@@ -19,4 +19,4 @@ jobs:
           cache: npm
           cache-dependency-path: options-dashboard-project/frontend/package-lock.json
       - run: npm ci
-      - run: npm test -- --runInBand session-transport.test.js components/AuthGate.test.js
+      - run: npm test -- session-transport.test.js components/AuthGate.test.js
