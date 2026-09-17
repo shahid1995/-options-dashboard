@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const mockReplace = vi.fn();
@@ -45,6 +46,12 @@ describe("AuthGate", () => {
     mockGetMe.mockResolvedValue({ user_id: "user-1" });
     expect(mockGetSessionId()).toBe("valid-session");
     expect(mockGetMe).toBeDefined();
+  });
+
+  it("does not depend on a client-readable session credential", () => {
+    const source = readFileSync(new URL("./AuthGate.js", import.meta.url), "utf8");
+    expect(source).not.toContain("getSessionId");
+    expect(source).not.toContain("@/lib/session");
   });
 
   it("treats 401 and 403 as authentication failures", () => {
