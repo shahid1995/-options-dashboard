@@ -515,6 +515,12 @@ class TestExistingApis:
 
     def _make_client(self):
         from app.main import app
+        # TestClient without a context manager never runs the app lifespan,
+        # so init_db() does not run against the swapped in-memory engine.
+        # Create the schema explicitly (same convention as test_google_auth)
+        # so session resolution can query user_sessions.
+        from app.db import Base, engine
+        Base.metadata.create_all(engine)
         return TestClient(app)
 
     @patch("app.routers.gex.token_store")

@@ -101,7 +101,7 @@ class TestFeedStateMachine:
         feed = UpstoxMarketFeed(access_token="test_token")
         feed._state = FeedState.LIVE
         # disconnect is async
-        asyncio.get_event_loop().run_until_complete(feed.disconnect())
+        asyncio.run(feed.disconnect())
         assert feed.state == FeedState.DISCONNECTED
 
     def test_close_during_stopping_doesnt_reconnect(self):
@@ -479,7 +479,7 @@ class TestMarketHoursDetection:
 
         # Mock the calendar to return closed
         with patch("app.services.upstox_market_feed.UpstoxMarketFeed._check_market_hours", return_value=False):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 feed.connect("NIFTY", "2026-08-28", ["NSE_FO|123"])
             )
         assert feed.state == FeedState.MARKET_CLOSED
@@ -491,7 +491,7 @@ class TestMarketHoursDetection:
 
         with patch("app.services.upstox_market_feed.UpstoxMarketFeed._check_market_hours", return_value=True):
             # Will fail on actual WebSocket creation, but state should be CONNECTING
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 feed.connect("NIFTY", "2026-08-28", ["NSE_FO|123"])
             )
         # State will be DISCONNECTED or ERROR (can't actually connect), but not MARKET_CLOSED
