@@ -622,12 +622,11 @@ class TestRawImmutability:
 # ===========================================================================
 
 class TestNoServerStartupIngestion:
-    def test_init_db_no_upstox_calls(self):
+    def test_init_db_no_upstox_calls(self, hermetic_init_db):
         """init_db() must not call any Upstox API."""
         from unittest.mock import patch
         with patch("app.services.upstox_client.UpstoxClient") as MockCls:
-            from app.db import init_db
-            init_db()
+            hermetic_init_db()
             MockCls.assert_not_called()
 
 

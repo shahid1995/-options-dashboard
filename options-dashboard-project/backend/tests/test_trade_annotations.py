@@ -117,10 +117,9 @@ class TestMigration:
         cols = [row.name for row in result]
         assert "notes" in cols
 
-    def test_migration_idempotent(self):
-        from app.db import init_db
-        init_db()
-        init_db()  # running twice must not fail
+    def test_migration_idempotent(self, hermetic_init_db):
+        hermetic_init_db()
+        hermetic_init_db()  # running twice must not fail
 
 
 # ---- API tests (need fixtures from conftest) ----

@@ -982,9 +982,8 @@ class TestRateLimiterOrchestratorIntegration:
         assert m2.successful_requests >= m1.successful_requests
 
     @pytest.mark.asyncio
-    async def test_no_server_startup_ingestion(self):
+    async def test_no_server_startup_ingestion(self, hermetic_init_db):
         """init_db must not call any Upstox API."""
         with patch("app.services.upstox_client.UpstoxClient") as MockCls:
-            from app.db import init_db
-            init_db()
+            hermetic_init_db()
             MockCls.assert_not_called()

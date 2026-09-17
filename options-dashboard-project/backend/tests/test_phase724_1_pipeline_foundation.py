@@ -159,25 +159,25 @@ class TestIndexes:
             ), {"t": table_name}).fetchall()
             return [r[0] for r in rows]
 
-    def test_ingestion_log_indexes_in_production_db(self):
+    def test_ingestion_log_indexes_in_production_db(self, hermetic_init_db):
         """ingestion_log has expected indexes in the production database."""
-        from app.db import init_db, engine as prod_engine
-        init_db()
+        from app.db import engine as prod_engine
+        hermetic_init_db()
         idxs = self._get_indexes(prod_engine, "ingestion_log")
         assert any("operation" in i and "status" in i for i in idxs)
         assert any("completed_at" in i for i in idxs)
 
-    def test_data_completeness_indexes_in_production_db(self):
+    def test_data_completeness_indexes_in_production_db(self, hermetic_init_db):
         """data_completeness has expected indexes in the production database."""
-        from app.db import init_db, engine as prod_engine
-        init_db()
+        from app.db import engine as prod_engine
+        hermetic_init_db()
         idxs = self._get_indexes(prod_engine, "data_completeness")
         assert any("status" in i for i in idxs)
 
-    def test_ingestion_checkpoint_indexes_in_production_db(self):
+    def test_ingestion_checkpoint_indexes_in_production_db(self, hermetic_init_db):
         """ingestion_checkpoint has expected indexes in the production database."""
-        from app.db import init_db, engine as prod_engine
-        init_db()
+        from app.db import engine as prod_engine
+        hermetic_init_db()
         idxs = self._get_indexes(prod_engine, "ingestion_checkpoint")
         assert any("status" in i for i in idxs)  # ix_ingestion_checkpoint_status
 
@@ -482,25 +482,39 @@ class TestPersistence:
 # ---------------------------------------------------------------------------
 
 class TestInitDbSafety:
-    def test_init_db_idempotent(self):
+    def test_init_db_idempotent(self, hermetic_init_db):
         """Running init_db() twice produces no errors."""
-        from app.db import init_db
-        init_db()
-        init_db()  # Should not raise
+        hermetic_init_db()
+        hermetic_init_db()  # Should not raise
 
-    def test_init_db_preserves_existing_data(self, sample_raw_data):
+    def test_init_db_preserves_existing_data(self, hermetic_init_db, sample_raw_data):
         """init_db() does not delete existing rows."""
-        db_session = sample_raw_data  # fixture inserts data
-        # Re-import to get the real DB session
+        db_session = sample_raw_data  # fixture inserts data into the isolated session
+
+        # Create the hermetic schema, then add a row to the database init_db()
+        # targets so preservation can actually be verified across a re-init.
+        hermetic_init_db()
         from app.db import SessionLocal
         real_session = SessionLocal()
         try:
+            now = datetime.now(timezone.utc)
+            real_session.add(ContractSpec(
+                instrument_key="NSE_FO|PRESERVE|28-07-2026",
+                underlying="NIFTY", underlying_key="NSE_INDEX|Nifty 50",
+                trading_symbol="NIFTY", segment="INDICES", exchange="NSE_EQ",
+                expiry="2026-07-28", strike_price=24000.0,
+                instrument_type="CE", lot_size=75,
+                source="test", source_reference="test",
+                fetched_at=now, created_at=now,
+            ))
+            real_session.commit()
+
             contracts_before = real_session.scalar(select(func.count(ContractSpec.id)))
             nifty_before = real_session.scalar(select(func.count(NiftyCandle.id)))
             options_before = real_session.scalar(select(func.count(OptionCandle.id)))
+            assert contracts_before == 1  # setup produced a row to preserve
 
-            from app.db import init_db
-            init_db()
+            hermetic_init_db()
 
             contracts_after = real_session.scalar(select(func.count(ContractSpec.id)))
             nifty_after = real_session.scalar(select(func.count(NiftyCandle.id)))
@@ -512,10 +526,9 @@ class TestInitDbSafety:
         finally:
             real_session.close()
 
-    def test_init_db_creates_new_tables(self):
+    def test_init_db_creates_new_tables(self, hermetic_init_db):
         """init_db() creates the three new infrastructure tables."""
-        from app.db import init_db
-        init_db()
+        hermetic_init_db()
 
         from app.db import SessionLocal
         session = SessionLocal()
