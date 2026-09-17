@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: StrikeNova Project Control
+    url: https://github.com/shahid1995/-options-dashboard/blob/main/PROJECT-CONTROL.md
+    about: Read the project workflow and issue/agent rules before opening work.
