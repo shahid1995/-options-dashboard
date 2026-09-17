@@ -223,7 +223,10 @@ def test_new_strikenova_session_can_use_existing_broker_authorization(db_session
     from app.identity import get_active_session
 
     assert get_active_session(db, new_sid) is not None
-    conn2, authz2 = resolve_broker_authorization(db, user.id, "FYERS")
+    # Explicit service clock: the fixture authorization lives on the fixed
+    # NOW timeline, so resolve must be pinned to NOW too (real wall clock
+    # has moved past NOW + 1 day, and lazy expiry correctly fails closed).
+    conn2, authz2 = resolve_broker_authorization(db, user.id, "FYERS", now=NOW)
     assert conn2 is not None and authz2 is not None
     assert conn2.id == conn.id
     assert authz2.access_token_plain() == "connection-token"
@@ -266,7 +269,7 @@ def test_old_session_expiration_does_not_disconnect_broker_connection(db_session
     assert conn2.status == "connected"  # NOT disconnected by session expiry
     assert conn2.disconnected_at is None
 
-    conn3, authz3 = resolve_broker_authorization(db, user.id, "FYERS")
+    conn3, authz3 = resolve_broker_authorization(db, user.id, "FYERS", now=NOW)
     assert conn3.id == conn.id
     assert authz3.access_token_plain() == "connection-token"
 
