@@ -1,0 +1,144 @@
+name: Issue 61 apply secure transport
+
+on:
+  push:
+    branches:
+      - fix/61-secure-cookie-auth-transport
+
+jobs:
+  apply:
+    if: ${{ !startsWith(github.event.head_commit.message, 'fix(auth): reconcile secure cookie session transport') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: options-dashboard-project/frontend/package-lock.json
+      - name: Apply deterministic Issue 61 reconciliation
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('options-dashboard-project')
+
+          # Frontend: secure cookie is the only browser session transport.
+          session = root / 'frontend/lib/session.js'
+          session.write_text('''const captureGoogleIdTokenFromUrl = () => {\n  if (typeof window === "undefined") return null;\n  const hash = window.location.hash;\n  if (!hash || !hash.includes("id_token=")) return null;\n\n  const params = new URLSearchParams(hash.substring(1));\n  const idToken = params.get("id_token");\n  if (!idToken) return null;\n\n  let redirectPath = "/dashboard";\n  try {\n    const stateStr = params.get("state");\n    if (stateStr) {\n      const state = JSON.parse(decodeURIComponent(stateStr));\n      if (state.redirect) redirectPath = state.redirect;\n    }\n  } catch {}\n\n  window.history.replaceState(null, "", window.location.pathname + window.location.search);\n\n  let oauthState = null;\n  try {\n    const stateStr = params.get("state");\n    if (stateStr) oauthState = stateStr;\n  } catch {}\n\n  return { idToken, redirectPath, state: oauthState };\n};\n\nexport { captureGoogleIdTokenFromUrl };\n''', encoding='utf-8')
+
+          auth_gate = root / 'frontend/components/AuthGate.js'
+          auth_gate.write_text('''"use client";\nimport { useEffect, useState } from "react";\nimport { useRouter } from "next/navigation";\nimport { getMe } from "@/lib/api";\n\n/**\n * Central auth guard for the (app) route group.\n *\n * /auth/me is the authoritative platform-identity check. Broker connectivity\n * is deliberately not part of this decision: a logged-in user may have no\n * broker connected.\n *\n * Authentication failures redirect to the public landing page. Network or\n * server failures do not log the user out; they render a retryable state\n * because an outage is not evidence that the session is invalid.\n */\nexport default function AuthGate({ children }) {\n  const [state, setState] = useState("checking");\n  const [error, setError] = useState("");\n  const [retryKey, setRetryKey] = useState(0);\n  const router = useRouter();\n\n  useEffect(() => {\n    let cancelled = false;\n\n    const verify = async () => {\n      try {\n        await getMe();\n        if (!cancelled) {\n          setError("");\n          setState("authenticated");\n        }\n      } catch (err) {\n        if (cancelled) return;\n        const status = err?.response?.status;\n        if (status === 401 || status === 403) {\n          router.replace("/");\n          return;\n        }\n        setError("We couldn't verify your session. Check your connection and try again.");\n        setState("error");\n      }\n    };\n\n    verify();\n    return () => { cancelled = true; };\n  }, [router, retryKey]);\n\n  if (state === "checking") return null;\n\n  if (state === "error") {\n    return (\n      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>\n        <div style={{ textAlign: "center", maxWidth: 440 }}>\n          <p style={{ fontSize: 14, marginBottom: 16 }}>{error}</p>\n          <button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button>\n        </div>\n      </div>\n    );\n  }\n\n  return children;\n}\n''', encoding='utf-8')
+
+          api = root / 'frontend/lib/api.js'
+          text = api.read_text(encoding='utf-8')
+          old = '''import axios from "axios";\nimport { getSessionId } from "./session";\n\nexport const api = axios.create({\n  baseURL: process.env.NEXT_PUBLIC_API_URL,\n  withCredentials: true,\n});\n\n// Authenticate with the session ID captured from the OAuth callback; the\n// session cookie alone doesn't survive third-party cookie blocking because\n// the backend is on a different site.\napi.interceptors.request.use((config) => {\n  const sessionId = getSessionId();\n  if (sessionId) config.headers["X-Session-Id"] = sessionId;\n  return config;\n});\n\n'''
+          new = '''import axios from "axios";\n\nexport const api = axios.create({\n  baseURL: process.env.NEXT_PUBLIC_API_URL,\n  withCredentials: true,\n});\n\n'''
+          assert old in text, 'api transport block not found'
+          text = text.replace(old, new, 1)
+          old = '''// Browsers can't set custom headers on websockets, so the session ID rides\n// along as the second entry of the subprotocol list (matched by the backend).\nexport const chainWsProtocols = () => {\n  const sessionId = getSessionId();\n  return sessionId ? ["options-dashboard-session", sessionId] : undefined;\n};\n'''
+          new = '''// WebSocket connections automatically include the HttpOnly session cookie.\nexport const chainWsProtocols = () => undefined;\n'''
+          assert old in text, 'websocket transport block not found'
+          api.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          use_auth = root / 'frontend/lib/useAuth.js'
+          text = use_auth.read_text(encoding='utf-8')
+          text = text.replace('  useEffect(() => {\n    captureSessionFromUrl();\n\n', '  useEffect(() => {\n', 1)
+          text = text.replace('''      const session = getSessionId();\n      if (!session) {\n        setUser(null);\n        setLoading(false);\n        return;\n      }\n      const status = await getStatus();\n      if (!status.logged_in) {\n        clearSessionId();\n''', '''      const status = await getStatus();\n      if (!status.logged_in) {\n''', 1)
+          text = text.replace('''    } catch (e) {\n      clearSessionId();\n      setUser(null);\n''', '''    } catch (e) {\n      setUser(null);\n''', 1)
+          text = text.replace('''      if (result.session_id) {\n        setSessionId(result.session_id);\n      }\n      setUser(result.user || null);\n''', '''      setUser(result.user || null);\n''', 1)
+          text = text.replace('''    const result = await loginGoogle(credential, state);\n      if (result.session_id) {\n        setSessionId(result.session_id);\n      }\n      setUser(result.user || null);\n''', '''    const result = await loginGoogle(credential, state);\n      setUser(result.user || null);\n''', 1)
+          text = text.replace('''    }\n    clearSessionId();\n    setUser(null);\n''', '''    }\n    setUser(null);\n''', 1)
+          text = text.replace('import { captureGoogleIdTokenFromUrl } from "./session";', 'import { captureGoogleIdTokenFromUrl } from "./session";')
+          use_auth.write_text(text, encoding='utf-8')
+
+          shell = root / 'frontend/components/Shell.js'
+          text = shell.read_text(encoding='utf-8')
+          old = '''      try {\n        const { getSessionId } = await import("@/lib/session");\n        const { getStatus, getMe } = await import("@/lib/api");\n        const session = getSessionId();\n        if (!session) return;\n        const status = await getStatus();\n        if (status.logged_in) {\n          const me = await getMe();\n          setAuthUser(me);\n        }\n      } catch {}\n'''
+          new = '''      try {\n        const { getStatus, getMe } = await import("@/lib/api");\n        const status = await getStatus();\n        if (status.logged_in) {\n          const me = await getMe();\n          setAuthUser(me);\n        }\n      } catch {}\n'''
+          assert old in text, 'Shell auth bootstrap block not found'
+          text = text.replace(old, new, 1)
+          old = '''    try {\n      const { logoutUser } = await import("@/lib/api");\n      const { clearSessionId } = await import("@/lib/session");\n      await logoutUser();\n      clearSessionId();\n    } catch {}\n'''
+          new = '''    try {\n      const { logoutUser } = await import("@/lib/api");\n      await logoutUser();\n    } catch {}\n'''
+          assert old in text, 'Shell logout block not found'
+          shell.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          modal = root / 'frontend/components/public/AuthModal.js'
+          text = modal.read_text(encoding='utf-8')
+          text = text.replace('import { setSessionId } from "@/lib/session";\n', '', 1)
+          old = '''  const handleAuthSuccess = (data) => {\n    if (data?.session_id) setSessionId(data.session_id);\n    setSuccess("Authenticated! Redirecting…");\n    setLoading(false);\n    setTimeout(() => {\n      onClose();\n      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";\n      if (data?.session_id && appUrl) {\n        // Cross-origin handoff: navigate to authenticated app with session in fragment\n        window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);\n      } else {\n        // Fallback: same-origin navigation\n        if (onAuth) onAuth();\n        else router.push("/dashboard");\n      }\n    }, 400);\n  };\n'''
+          new = '''  const handleAuthSuccess = () => {\n    setSuccess("Authenticated! Redirecting…");\n    setLoading(false);\n    setTimeout(() => {\n      onClose();\n      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";\n      if (appUrl) {\n        window.location.assign(`${appUrl}/dashboard`);\n      } else if (onAuth) {\n        onAuth();\n      } else {\n        router.replace("/dashboard");\n      }\n    }, 400);\n  };\n'''
+          assert old in text, 'AuthModal session handoff block not found'
+          modal.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Backend dependency: canonical cookie first, header only for non-browser/API compatibility.
+          deps = root / 'backend/app/routers/deps.py'
+          deps.write_text('''from __future__ import annotations\n\nfrom dataclasses import dataclass\n\nfrom fastapi import Cookie, Depends, Header, HTTPException\nfrom sqlalchemy.orm import Session\n\nfrom app.db import get_db\n\nSESSION_COOKIE_NAME = "strikenova_session"\n\n\ndef get_session_id(\n    x_session_id: str | None = Header(default=None),\n    session_id: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),\n) -> str | None:\n    """Resolve platform session from the HttpOnly cookie first.\n\n    The legacy X-Session-Id header remains an API-client compatibility path,\n    but browser code no longer has or transmits the session credential.\n    """\n    return session_id or x_session_id\n\n\n@dataclass(frozen=True)\nclass AuthenticatedUser:\n    user_id: str\n    access_token: str | None\n\n\ndef _extract_session_id(\n    x_session_id: str | None,\n    session_id_cookie: str | None,\n) -> str:\n    sid = session_id_cookie or x_session_id\n    if not sid:\n        raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")\n    return sid\n\n\ndef _resolve_user(db: Session, sid: str) -> AuthenticatedUser:\n    from app.identity import get_active_session, User\n    from app.services import token_store\n\n    broker_token = token_store.get_token(sid)\n    session = get_active_session(db, sid)\n    if session is None:\n        raise HTTPException(status_code=401, detail="Session is invalid or expired.")\n\n    user = db.query(User).filter(User.id == session.user_id).one_or_none()\n    if user is None or user.status != "active":\n        raise HTTPException(status_code=403, detail="StrikeNova account is not active.")\n\n    return AuthenticatedUser(user_id=user.id, access_token=broker_token)\n\n\ndef get_current_user(\n    x_session_id: str | None = Header(default=None),\n    session_id_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),\n) -> AuthenticatedUser:\n    sid = _extract_session_id(x_session_id, session_id_cookie)\n    from app.db import SessionLocal\n    own_db = SessionLocal()\n    try:\n        return _resolve_user(own_db, sid)\n    finally:\n        own_db.close()\n\n\nclass CurrentUser:\n    def __call__(\n        self,\n        db: Session = Depends(get_db),\n        x_session_id: str | None = Header(default=None),\n        session_id_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),\n    ) -> AuthenticatedUser:\n        sid = _extract_session_id(x_session_id, session_id_cookie)\n        return _resolve_user(db, sid)\n''', encoding='utf-8')
+
+          chains = root / 'backend/app/routers/chains.py'
+          text = chains.read_text(encoding='utf-8')
+          text = text.replace('\nWS_SESSION_PROTOCOL = "options-dashboard-session"\n', '\n', 1)
+          old = '''def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:\n    """Extracts the session ID from the websocket handshake.\n\n    Browsers can't set custom headers on websockets, so the frontend sends the\n    session ID as the second entry of the Sec-WebSocket-Protocol list (falling\n    back to the session cookie). Returns (session_id, subprotocol_to_accept)."""\n    requested = websocket.headers.get("sec-websocket-protocol")\n    if requested:\n        parts = [p.strip() for p in requested.split(",")]\n        if len(parts) == 2 and parts[0] == WS_SESSION_PROTOCOL:\n            return parts[1], WS_SESSION_PROTOCOL\n    return websocket.cookies.get("session_id"), None\n'''
+          new = '''def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:\n    """Resolve the platform session from the canonical HttpOnly cookie only."""\n    return websocket.cookies.get("strikenova_session"), None\n'''
+          assert old in text, 'WebSocket session block not found'
+          chains.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # Backend auth router: canonical cookie for all browser sessions and no session ID in JSON/URL.
+          auth = root / 'backend/app/routers/auth.py'
+          text = auth.read_text(encoding='utf-8')
+          text = text.replace('SESSION_COOKIE = "session_id"', 'SESSION_COOKIE_NAME = "strikenova_session"\nSESSION_COOKIE_TTL = 60 * 60 * 24', 1)
+          text = text.replace('SESSION_COOKIE,', 'SESSION_COOKIE_NAME,')
+          text = text.replace('SESSION_COOKIE)', , 1) if False else text
+          text = text.replace('SESSION_COOKIE,', 'SESSION_COOKIE_NAME,')
+          text = text.replace('SESSION_COOKIE_NAME_NAME', 'SESSION_COOKIE_NAME')
+
+          old = '''    # Send the user back to the dashboard. The session ID is passed in the\n    # URL fragment because it is not sent to servers as a query parameter.\n    response = RedirectResponse(\n        f"{settings.FRONTEND_ORIGIN}/dashboard#session_id={session_id}"\n    )\n    response.set_cookie(\n        SESSION_COOKIE_NAME,\n        session_id,\n        httponly=True,\n        secure=True,\n        samesite="none",\n        max_age=60 * 60 * 24,\n    )\n    return response'''
+          new = '''    # The session is stored in the HttpOnly cookie, never the URL.\n    response = RedirectResponse(f"{settings.FRONTEND_ORIGIN}/dashboard")\n    response.set_cookie(\n        SESSION_COOKIE_NAME,\n        session_id,\n        httponly=True,\n        secure=True,\n        samesite="none",\n        max_age=SESSION_COOKIE_TTL,\n        path="/",\n    )\n    return response'''
+          assert old in text, 'OAuth callback cookie block not found'
+          text = text.replace(old, new, 1)
+
+          # Legacy email login endpoint: preserve route, switch transport to cookie.
+          text = text.replace('''def login_email(\n    email: str = Body(..., embed=True),\n    password: str = Body(..., embed=True),\n    db: Session = Depends(get_db),\n):''', '''def login_email(\n    email: str = Body(..., embed=True),\n    password: str = Body(..., embed=True),\n    response: Response = None,\n    db: Session = Depends(get_db),\n):''', 1)
+          old = '''    create_session_record(db, user.id, session_id)\n    db.commit()\n\n    return {\n        "ok": True,\n        "session_id": session_id,\n'''
+          new = '''    create_session_record(db, user.id, session_id)\n    db.commit()\n\n    response.set_cookie(\n        SESSION_COOKIE_NAME, session_id, httponly=True, secure=True,\n        samesite="none", max_age=SESSION_COOKIE_TTL, path="/"\n    )\n\n    return {\n        "ok": True,\n'''
+          assert old in text, 'legacy email login return block not found'
+          text = text.replace(old, new, 1)
+
+          # Google login endpoint: same secure cookie contract.
+          text = text.replace('''def google_auth(\n    credential: str = Body(..., embed=True),\n    state: str | None = Body(default=None, embed=True),\n    db: Session = Depends(get_db),\n):''', '''def google_auth(\n    credential: str = Body(..., embed=True),\n    state: str | None = Body(default=None, embed=True),\n    response: Response = None,\n    db: Session = Depends(get_db),\n):''', 1)
+          old = '''    create_session_record(db, user.id, session_id)\n    db.commit()\n\n    return {\n        "ok": True,\n        "session_id": session_id,\n'''
+          new = '''    create_session_record(db, user.id, session_id)\n    db.commit()\n\n    response.set_cookie(\n        SESSION_COOKIE_NAME, session_id, httponly=True, secure=True,\n        samesite="none", max_age=SESSION_COOKIE_TTL, path="/"\n    )\n\n    return {\n        "ok": True,\n'''
+          assert old in text, 'google login return block not found'
+          text = text.replace(old, new, 1)
+
+          # Account login is already cookie-backed; never expose the durable session in JSON.
+          old = '''    return {\n        "ok": True,\n        "session_id": session_id,\n        "user": {\n'''
+          new = '''    return {\n        "ok": True,\n        "user": {\n'''
+          assert old in text, 'account login response block not found'
+          text = text.replace(old, new, 1)
+
+          # Make cookie TTL/path consistent wherever the named constant is used.
+          text = text.replace('max_age=60 * 60 * 24,', 'max_age=SESSION_COOKIE_TTL,')
+          auth.write_text(text, encoding='utf-8')
+
+          # Sanity checks before commit.
+          for path in [auth_gate, api, use_auth, shell, modal, deps, chains, auth]:
+              assert path.exists(), path
+          assert 'getSessionId' not in auth_gate.read_text(encoding='utf-8')
+          assert 'X-Session-Id' not in api.read_text(encoding='utf-8')
+          assert 'getSessionId' not in api.read_text(encoding='utf-8')
+          assert 'chainWsProtocols = () => undefined' in api.read_text(encoding='utf-8')
+          assert 'SESSION_COOKIE_NAME = "strikenova_session"' in auth.read_text(encoding='utf-8')
+          assert '"session_id": session_id' not in auth.read_text(encoding='utf-8')
+          assert 'strikenova_session' in chains.read_text(encoding='utf-8')
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add options-dashboard-project/frontend options-dashboard-project/backend
+          git commit -m "fix(auth): reconcile secure cookie session transport"
+          git push origin "HEAD:${BRANCH}"
