@@ -498,10 +498,29 @@ class TestSignedOAuthState:
         result = token_store.consume_oauth_state(state_with_dot)
         assert result is None
 
-    def test_dot_in_unsigned_state_not_created(self):
-        """create_oauth_state() without session_id must NOT produce dots."""
+    def test_dotless_unsigned_state_rejected(self):
+        """Day 3 security fix: unsigned (dotless) states are never created and
+        never accepted.
+
+        create_oauth_state() always emits HMAC-signed state carrying session
+        binding, so a dotless value cannot be a state we issued.  consume()
+        must therefore reject any dotless state outright — this closes the
+        downgrade path that would let a forged legacy state bypass session
+        binding.
+        """
         state = token_store.create_oauth_state()  # No session_id
-        assert "." not in state, "Unsigned state must not contain dots"
+
+        # Always signed now: dot separator present.
+        assert "." in state, "create_oauth_state() must produce signed (dotted) state"
+
+        # And consumption must sign-verify it (not treat it as legacy unsigned).
+        result = token_store.consume_oauth_state(state)
+        assert result is not None
+        assert result["session_id"] == ""
+        assert result["broker"] == "UPSTOX"
+
+        # A dotless value is never a state we issued: rejected outright.
+        assert token_store.consume_oauth_state("plainunsignedstate") is None
 
 
 # ---------------------------------------------------------------------------
