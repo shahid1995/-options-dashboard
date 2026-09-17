@@ -11,6 +11,7 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 
 # revision identifiers, used by Alembic.
@@ -30,7 +31,7 @@ def upgrade() -> None:
             "users",
             ["google_sub"],
             unique=True,
-            postgresql_where="google_sub IS NOT NULL",
+            postgresql_where=text("google_sub IS NOT NULL"),
         )
     elif dialect == "sqlite":
         # SQLite supports partial indexes with WHERE clause
@@ -39,7 +40,7 @@ def upgrade() -> None:
             "users",
             ["google_sub"],
             unique=True,
-            sqlite_where="google_sub IS NOT NULL",
+            sqlite_where=text("google_sub IS NOT NULL"),
         )
     elif dialect == "cockroachdb":
         # CockroachDB supports partial indexes with WHERE clause
@@ -48,7 +49,7 @@ def upgrade() -> None:
             "users",
             ["google_sub"],
             unique=True,
-            cockroachdb_where="google_sub IS NOT NULL",
+            cockroachdb_where=text("google_sub IS NOT NULL"),
         )
     else:
         # Fallback: create a regular unique index (may not handle NULLs ideally)
