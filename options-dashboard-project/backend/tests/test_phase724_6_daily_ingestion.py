@@ -161,11 +161,10 @@ class TestArchitecture:
         mod = importlib.import_module("run_daily")
         assert hasattr(mod, "main")
 
-    def test_init_db_no_auto_ingestion(self):
+    def test_init_db_no_auto_ingestion(self, hermetic_init_db):
         """init_db() must NOT call daily ingestion."""
-        from app.db import init_db
         with patch("app.services.daily_ingestion.DailyIngestionPipeline") as MockPipeline:
-            init_db()
+            hermetic_init_db()
             MockPipeline.assert_not_called()
 
     def test_pipeline_uses_client(self):

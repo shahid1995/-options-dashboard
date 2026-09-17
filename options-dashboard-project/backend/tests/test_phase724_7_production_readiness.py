@@ -164,19 +164,17 @@ def _add_option_candle(db, ik, dt, open_p=150.0, volume=5000.0, oi=325000.0):
 class TestZeroAutomaticIngestion:
     """Prove that startup/restart/init_db never triggers Upstox API calls."""
 
-    def test_init_db_no_upstox_calls(self):
+    def test_init_db_no_upstox_calls(self, hermetic_init_db):
         """init_db() must not call any Upstox API."""
         with patch("app.services.upstox_client.UpstoxClient") as MockCls:
-            from app.db import init_db
-            init_db()
+            hermetic_init_db()
             MockCls.assert_not_called()
 
-    def test_lifespan_no_upstox_calls(self):
+    def test_lifespan_no_upstox_calls(self, hermetic_init_db):
         """FastAPI lifespan must not trigger Upstox ingestion."""
         with patch("app.services.upstox_client.UpstoxClient") as MockCls:
             with patch("app.services.daily_ingestion.DailyIngestionPipeline") as MockDaily:
-                from app.db import init_db
-                init_db()
+                hermetic_init_db()
                 MockCls.assert_not_called()
                 MockDaily.assert_not_called()
 
@@ -190,13 +188,20 @@ class TestZeroAutomaticIngestion:
         from app.services import backfill_orchestrator
         assert hasattr(backfill_orchestrator, "BackfillOrchestrator")
 
-    def test_startup_only_creates_tables(self, db):
+    def test_startup_only_creates_tables(self, hermetic_init_db):
         """Startup only creates tables — no market data ingestion."""
-        from app.db import init_db
-        init_db()
-        # Tables should exist, but no market data should be created
-        count = db.scalar(select(func.count(ContractSpec.id))) or 0
-        assert count == 0
+        hermetic_init_db()
+        # Query the same database that hermetic_init_db() redirected app.db to.
+        # The separate ``db`` fixture is intentionally not used here because
+        # it is an unrelated in-memory database that init_db() never touches.
+        from app.db import SessionLocal
+
+        session = SessionLocal()
+        try:
+            count = session.scalar(select(func.count(ContractSpec.id))) or 0
+            assert count == 0
+        finally:
+            session.close()
 
 
 # ===========================================================================

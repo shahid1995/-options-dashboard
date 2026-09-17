@@ -49,3 +49,46 @@ def reset_token_store():
     yield
     token_store.clear_token()
 
+
+# ---------------------------------------------------------------------------
+# Hermetic init_db() support (Issue #59)
+# ---------------------------------------------------------------------------
+#
+# init_db() runs ``alembic upgrade head`` against app.db.engine.  When a test
+# calls init_db() directly, Alembic must see a database it fully controls:
+# the conftest-swapped shared engine is populated by many suites through
+# ``Base.metadata.create_all(...)`` which creates application tables but no
+# ``alembic_version`` row.  Alembic then replays the baseline migration on top
+# of that schema and dies with "table bulk_exit_records already exists".
+#
+# Tests that exercise init_db() must therefore point app.db.engine at a fresh,
+# disposable database for the duration of the test.  This fixture follows the
+# existing pattern in test_db_migration.py (file-based SQLite so Alembic's
+# connectable and the test engine address the same database) and is shared so
+# every suite exercises the identical startup path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def hermetic_init_db(monkeypatch, tmp_path):
+    """Redirect app.db.engine/SessionLocal to a fresh SQLite DB for init_db().
+
+    Yields the ``init_db`` callable.  Each call runs the real Alembic startup
+    path against an isolated file-based SQLite database that no other test
+    can observe or pollute, and that is removed with the test's tmp_path.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    db_path = tmp_path / "hermetic_init_db.db"
+    engine = create_engine(
+        f"sqlite:///{db_path}", connect_args={"check_same_thread": False}
+    )
+    monkeypatch.setattr("app.db.engine", engine)
+    monkeypatch.setattr("app.db.SessionLocal", sessionmaker(bind=engine))
+
+    from app.db import init_db
+
+    yield init_db
+    engine.dispose()
+

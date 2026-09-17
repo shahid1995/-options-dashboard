@@ -183,11 +183,10 @@ class TestOrchestratorArchitecture:
         assert hasattr(mod, "main")
         assert hasattr(mod, "_get_db_session")
 
-    def test_init_db_does_not_trigger_backfill(self):
+    def test_init_db_does_not_trigger_backfill(self, hermetic_init_db):
         """init_db() must NOT call any Upstox API."""
-        from app.db import init_db
         with patch("app.services.upstox_client.UpstoxClient") as mock_cls:
-            init_db()
+            hermetic_init_db()
             mock_cls.assert_not_called()
 
     def test_orchestrator_uses_client(self):
