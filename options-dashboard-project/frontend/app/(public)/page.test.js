@@ -42,19 +42,20 @@ describe("HomePage — Redesign", () => {
       expect(html).toContain("StrikeNova");
     });
 
-    it("contains Options Intelligence tagline", () => {
+    it("contains the Market Intelligence Command Center hero eyebrow", () => {
       const html = renderPage();
-      expect(html).toMatch(/Options Intelligence|OPTIONS INTELLIGENCE/);
+      expect(html).toContain("Market Intelligence Command Center");
     });
 
-    it("contains 'for Structured Decisions' tagline", () => {
+    it("presents the structured-decisions positioning", () => {
       const html = renderPage();
-      expect(html).toMatch(/for Structured Decisions|FOR STRUCTURED DECISIONS/);
+      expect(html).toContain("From market data to structured decisions");
     });
 
-    it("contains primary CTA 'Explore StrikeNova'", () => {
+    it("contains primary CTA 'Explore the Platform'", () => {
       const html = renderPage();
-      expect(html).toContain("Explore StrikeNova");
+      expect(html).toContain("Explore the Platform");
+      expect(html).toContain('href="/features"');
     });
 
     it("contains secondary CTA 'Strategy Lab'", () => {
@@ -86,12 +87,12 @@ describe("HomePage — Redesign", () => {
       expect(html).toContain("ATM IV");
     });
 
-    it("contains preview Greeks (DELTA, GAMMA, THETA, VEGA)", () => {
+    it("contains key hero preview signals (CALL OI, PUT OI, GEX, ATM IV)", () => {
       const html = renderPage();
-      expect(html).toContain("DELTA");
-      expect(html).toContain("GAMMA");
-      expect(html).toContain("THETA");
-      expect(html).toContain("VEGA");
+      expect(html).toContain("CALL OI");
+      expect(html).toContain("PUT OI");
+      expect(html).toContain("GEX");
+      expect(html).toContain("ATM IV");
     });
   });
 
@@ -99,16 +100,13 @@ describe("HomePage — Redesign", () => {
   // ANALYTICAL LAYERS
   // ════════════════════════════════════════════════════════════════════════
   describe("Analytical Layers", () => {
-    it("contains all eight analytical layer cards", () => {
+    it("contains the four market intelligence panels and signal overview metrics", () => {
       const html = renderPage();
-      expect(html).toContain("PRICE");
-      expect(html).toContain("OPEN INTEREST");
-      expect(html).toContain("OI CHANGE");
-      expect(html).toContain("VOLUME");
-      expect(html).toContain("IMPLIED VOLATILITY");
+      expect(html).toContain("POSITIONING");
+      expect(html).toContain("VOLATILITY");
       expect(html).toContain("GREEKS");
-      expect(html).toContain("MARKET STRUCTURE");
-      expect(html).toContain("MARKET STATE");
+      expect(html).toContain("STRUCTURE");
+      expect(html).toContain("DIRECTION");
     });
   });
 
@@ -116,9 +114,10 @@ describe("HomePage — Redesign", () => {
   // SIGNAL FIELD
   // ════════════════════════════════════════════════════════════════════════
   describe("Signal Field", () => {
-    it("contains SIGNAL FIELD heading", () => {
+    it("contains the Market State section", () => {
       const html = renderPage();
-      expect(html).toContain("SIGNAL FIELD");
+      expect(html).toContain("MARKET STATE");
+      expect(html).toContain("Start with context, not isolated indicators");
     });
 
     it("contains key indicator labels (SPOT, PCR, ATM IV, OI CHANGE)", () => {
@@ -203,15 +202,17 @@ describe("HomePage — Redesign", () => {
   describe("Paper Trading Tabs", () => {
     it("contains four paper tab labels", () => {
       const html = renderPage();
-      expect(html).toContain("DECISION");
-      expect(html).toContain("SIMULATION");
-      expect(html).toContain("POSITION");
+      expect(html).toContain("DECIDE");
+      expect(html).toContain("EXECUTE");
+      expect(html).toContain("MANAGE");
       expect(html).toContain("REVIEW");
     });
 
-    it("renders default tab (DECISION) content deterministically", () => {
+    it("renders default tab (DECIDE) content deterministically", () => {
       const html = renderPage();
-      expect(html).toContain("DECISION");
+      expect(html).toContain("DECIDE");
+      expect(html).toContain("BULL CALL SPREAD");
+      expect(html).toContain("25,500");
     });
 
     it("contains SIMULATED or DEMO labeling", () => {
@@ -227,19 +228,20 @@ describe("HomePage — Redesign", () => {
     it("contains MAX PROFIT metric", () => {
       const html = renderPage();
       expect(html).toContain("MAX PROFIT");
-      expect(html).toContain("3,250");
+      expect(html).toContain("+55 pts");
     });
 
     it("contains MAX LOSS metric", () => {
       const html = renderPage();
       expect(html).toContain("MAX LOSS");
-      expect(html).toContain("9,750");
+      expect(html).toContain("-45 pts");
     });
 
-    it("contains breakeven levels", () => {
+    it("contains breakeven and strike levels", () => {
       const html = renderPage();
-      expect(html).toContain("25,250");
-      expect(html).toContain("25,750");
+      expect(html).toContain("25,495");
+      expect(html).toContain("25,450");
+      expect(html).toContain("25,550");
     });
 
     it("contains payoff graph labels (LOSS, PROFIT)", () => {

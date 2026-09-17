@@ -86,9 +86,16 @@ describe("PublicHeader — P6 Tests", () => {
 
   it("header inner container does not clip desktop dropdowns horizontally", () => {
     const html = renderHeader();
-    const navInnerMatch = html.match(/height:\s*60px[\s\S]*?width:\s*100%[^}]*}/);
-    expect(navInnerMatch).toBeTruthy();
-    expect(navInnerMatch[0]).not.toContain("overflowX");
-    expect(navInnerMatch[0]).not.toContain("overflow-x");
+    // Locate the 60px-tall header inner container by its style attribute and
+    // assert full-width layout without horizontal clipping (dropdowns in the
+    // desktop nav must not be cut off). Attribute-scoped so it survives
+    // property reordering and unrelated style changes elsewhere.
+    const styleMatch = html.match(/style="([^"]*)height:\s*60px([^"]*)"/);
+    expect(styleMatch).toBeTruthy();
+    const style = styleMatch[1] + styleMatch[2];
+    expect(style).toContain("width:100%");
+    expect(style).toContain("box-sizing:border-box");
+    expect(style).not.toContain("overflow-x");
+    expect(style).not.toContain("overflowX");
   });
 });

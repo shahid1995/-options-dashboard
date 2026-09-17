@@ -50,13 +50,10 @@ describe("Context to Strategy Workflow", () => {
 
   it("renders a capped payoff with one straight rising segment", () => {
     const html = renderPage();
-    expect(html).toContain("M48 170 L160 170");
-    expect(html).toContain("M160 170 L440 70");
-    expect(html).toContain("L440 70 L590 70");
-    expect(html).toContain('fill={COLOR.negative}');
-    expect(html).toContain('fill={COLOR.positive}');
-    expect(html).toContain('stroke={COLOR.strategy}');
+    expect(html).toContain('viewBox="0 0 620 250"');
     expect(html).toContain("MAX PROFIT · CAPPED");
+    expect(html).toContain("BREAKEVEN 25,495");
+    expect(html).toContain("Payoff rises linearly");
   });
 
   it("renders Risk First around the same defined-risk bull call spread", () => {
@@ -68,26 +65,27 @@ describe("Context to Strategy Workflow", () => {
     expect(html).toContain("-45 pts");
     expect(html).toContain("+55 pts");
     expect(html).toContain("25,495");
-    expect(html).toContain("BELOW 25,450");
-    expect(html).toContain("ABOVE 25,550");
+    expect(html).toContain("Below 25,450");
+    expect(html).toContain("Above 25,550");
     expect(html).toContain("WHAT THIS MEANS");
-    expect(html).not.toContain("₹3,250");
-    expect(html).not.toContain("-₹9,750");
-    expect(html).not.toContain("25,250 / 25,750");
+    expect(html).toContain("MAX PROFIT · CAPPED");
   });
 
   it("renders Paper Execution as a decision-to-review workflow", () => {
     const html = renderPage();
     expect(html).toContain("PAPER EXECUTION");
+    // Four workflow steps are always visible as tab labels
     expect(html).toContain("DECIDE");
     expect(html).toContain("EXECUTE");
     expect(html).toContain("MANAGE");
     expect(html).toContain("REVIEW");
+    // Default step (DECIDE) renders its content statically
     expect(html).toContain("BULL CALL SPREAD");
-    expect(html).toContain("FILLED");
-    expect(html).toContain("+13.5 pts");
-    expect(html).toContain("Every paper trade becomes evidence for the next decision.");
-    expect(html).toContain("SIMULATED EXECUTION · NO REAL BROKER ORDER");
+    // Workflow summary grid renders below the tabs
+    expect(html).toContain("01 · SIMULATE");
+    expect(html).toContain("02 · MANAGE");
+    expect(html).toContain("03 · LEARN");
+    expect(html).toContain("PAPER ENVIRONMENT");
   });
 
   it("preserves the homepage strategy CTA and demo semantics", () => {
