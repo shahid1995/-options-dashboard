@@ -233,20 +233,36 @@ class TestConfigAutoDerivation:
         assert s.UPSTOX_REDIRECT_URI == ""
 
     def test_redirect_uri_auto_derived_from_backend_url(self, monkeypatch):
-        """UPSTOX_REDIRECT_URI auto-derived from BACKEND_URL."""
+        """UPSTOX_REDIRECT_URI auto-derived from BACKEND_URL.
+
+        Executes ``app.config`` in an isolated module instead of reloading
+        the shared one. ``importlib.reload(app.config)`` rebinds the
+        ``settings`` singleton that already-imported routers hold via
+        ``from app.config import settings``, leaving later tests (e.g.
+        google_auth) patching a dead object. Even a
+        pop-``sys.modules``-and-reimport swap is unsafe: re-importing a
+        submodule overwrites the parent package attribute (``app.config``)
+        that ``import app.config as ...`` binds, while
+        ``from app.config import ...`` reads ``sys.modules`` — split-brain
+        bindings. ``module_from_spec``/``exec_module`` runs the module code
+        in a throwaway module without touching ``sys.modules`` or the
+        ``app`` package, so no state leaks in any direction.
+        """
+        import importlib.util
+
         monkeypatch.setenv("BACKEND_URL", "https://my-backend.up.railway.app")
         monkeypatch.setenv("UPSTOX_REDIRECT_URI", "")
         monkeypatch.setenv("UPSTOX_API_KEY", "test")
         monkeypatch.setenv("UPSTOX_API_SECRET", "test")
         monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "test-key")
 
-        # Re-import to trigger auto-derivation
-        import importlib
-        import app.config
-        importlib.reload(app.config)
-
-        # The auto-derivation should have set it
-        # (This tests the logic; actual value depends on env)
+        spec = importlib.util.find_spec("app.config")
+        fresh = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fresh)
+        # Auto-derivation should have produced the callback URL
+        assert fresh.settings.UPSTOX_REDIRECT_URI == (
+            "https://my-backend.up.railway.app/auth/callback"
+        )
 
     def test_explicit_redirect_uri_preserved(self):
         """Explicit UPSTOX_REDIRECT_URI is not overridden."""
