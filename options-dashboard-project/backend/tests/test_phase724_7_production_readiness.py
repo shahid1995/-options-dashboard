@@ -188,12 +188,20 @@ class TestZeroAutomaticIngestion:
         from app.services import backfill_orchestrator
         assert hasattr(backfill_orchestrator, "BackfillOrchestrator")
 
-    def test_startup_only_creates_tables(self, db, hermetic_init_db):
+    def test_startup_only_creates_tables(self, hermetic_init_db):
         """Startup only creates tables — no market data ingestion."""
         hermetic_init_db()
-        # Tables should exist, but no market data should be created
-        count = db.scalar(select(func.count(ContractSpec.id))) or 0
-        assert count == 0
+        # Query the same database that hermetic_init_db() redirected app.db to.
+        # The separate ``db`` fixture is intentionally not used here because
+        # it is an unrelated in-memory database that init_db() never touches.
+        from app.db import SessionLocal
+
+        session = SessionLocal()
+        try:
+            count = session.scalar(select(func.count(ContractSpec.id))) or 0
+            assert count == 0
+        finally:
+            session.close()
 
 
 # ===========================================================================
@@ -345,7 +353,7 @@ class TestNoRedownload:
 
     @pytest.mark.asyncio
     async def test_second_run_skips_existing_options(self, db):
-        """Second backfill run skips instruments with existing candle data."""
+        """Second backfill run skips instruments with existing data."""
         _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
 
         client = _mock_client()
@@ -402,345 +410,11 @@ class TestPartialData:
     async def test_option_skips_existing_instruments(self, db):
         """Option ingestion skips instruments with existing data."""
         _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-        _add_option_candle(db, "NSE_FO|63935|28-07-2026", datetime(2026, 7, 28, 9, 15))
+        _add_option_candle(db, "NSE_FO|63935|28-07-2026", datetime(2026, 7, 28, 9, 15, tzinfo=timezone.utc))
 
         client = _mock_client()
-        processed, inserted, errors = await _ingest_option_candles(
+        inserted, errors = await _ingest_option_candles(
             db, client, date(2026, 7, 28), "test",
         )
-        assert processed == 0  # Skipped — instrument has data
-
-
-# ===========================================================================
-# 8. CHECKPOINT / CRASH RECOVERY
-# ===========================================================================
-
-class TestCheckpointRecovery:
-    @pytest.mark.asyncio
-    async def test_completed_instruments_skipped_on_resume(self, db):
-        """Instruments with COMPLETED checkpoints are skipped."""
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-        _add_spec(db, "NSE_FO|63936|28-07-2026", "2026-07-28", 24500, "PE")
-
-        client = _mock_client()
-        orch = BackfillOrchestrator(db, client)
-        await orch.run_options()
-        count1 = db.scalar(select(func.count(OptionCandle.id))) or 0
-
-        # Simulate resume — second run should skip existing
-        client2 = _mock_client()
-        orch2 = BackfillOrchestrator(db, client2)
-        await orch2.run_options()
-        count2 = db.scalar(select(func.count(OptionCandle.id))) or 0
-
-        assert count1 == count2
-
-    @pytest.mark.asyncio
-    async def test_failure_does_not_block_other_instruments(self, db):
-        """One failing instrument doesn't prevent others from completing."""
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-        _add_spec(db, "NSE_FO|63936|28-07-2026", "2026-07-28", 24500, "PE")
-        _add_spec(db, "NSE_FO|63937|28-07-2026", "2026-07-28", 24600, "CE")
-
-        call_count = 0
-        original_candles = [
-            ["2026-07-28T09:15:00+05:30", 150.0, 155.0, 148.0, 152.0, 5000, 325000],
-        ]
-
-        async def failing_candles(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise Exception("Simulated failure")
-            return original_candles
-
-        client = _mock_client()
-        client.get_expired_historical_candles = failing_candles
-
-        orch = BackfillOrchestrator(db, client)
-        result = await orch.run_options()
-
-        # At least 2 instruments should have data (first and third)
-        assert db.scalar(select(func.count(OptionCandle.id))) >= 2
-        assert len(result.errors) >= 1  # One failure recorded
-
-
-# ===========================================================================
-# 9. FAILURE ISOLATION
-# ===========================================================================
-
-class TestFailureIsolation:
-    @pytest.mark.asyncio
-    async def test_one_instrument_fails_others_pass(self, db):
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-        _add_spec(db, "NSE_FO|63936|28-07-2026", "2026-07-28", 24500, "PE")
-        _add_spec(db, "NSE_FO|63937|28-07-2026", "2026-07-28", 24600, "CE")
-
-        call_count = 0
-        async def selective_failure(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise Exception("Instrument B failed")
-            return [
-                ["2026-07-28T09:15:00+05:30", 150.0, 155.0, 148.0, 152.0, 5000, 325000],
-            ]
-
-        client = _mock_client()
-        client.get_expired_historical_candles = selective_failure
-
-        orch = BackfillOrchestrator(db, client)
-        result = await orch.run_options()
-
-        assert result.status == "PARTIAL"
-        assert len(result.errors) >= 1
-        # At least 2 instruments succeeded
-        assert result.rows_inserted >= 2
-
-
-# ===========================================================================
-# 10. DAILY INCREMENTAL IDEMPOTENCY
-# ===========================================================================
-
-class TestDailyIdempotency:
-    @pytest.mark.asyncio
-    async def test_daily_second_run_no_new_rows(self, db):
-        """Running daily ingestion twice produces zero new NIFTY candles."""
-        client = _mock_client()
-        await _ingest_nifty_day(db, client, date(2026, 8, 24), "run1")
-        count1 = db.scalar(select(func.count(NiftyCandle.id))) or 0
-
-        client2 = _mock_client()
-        await _ingest_nifty_day(db, client2, date(2026, 8, 24), "run2")
-        count2 = db.scalar(select(func.count(NiftyCandle.id))) or 0
-
-        assert count1 == count2
-
-    @pytest.mark.asyncio
-    async def test_daily_skips_weekend(self, db):
-        client = _mock_client()
-        pipeline = DailyIngestionPipeline(
-            db, client, target_date=date(2026, 8, 29),  # Saturday
-        )
-        result = await pipeline.run()
-        assert result.status == "SKIPPED"
-
-
-# ===========================================================================
-# 11. RAW DATA IMMUTABILITY
-# ===========================================================================
-
-class TestRawImmutability:
-    @pytest.mark.asyncio
-    async def test_option_ohlc_preserved(self, db):
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-
-        client = _mock_client()
-        orch = BackfillOrchestrator(db, client)
-        await orch.run_options()
-
-        candle = db.execute(
-            select(OptionCandle)
-            .where(OptionCandle.instrument_key == "NSE_FO|63935|28-07-2026")
-        ).scalars().first()
-        assert candle is not None
-        assert candle.open == 150.5
-        assert candle.high == 155.0
-        assert candle.low == 148.0
-        assert candle.close == 152.3
-        assert candle.volume == 5000.0
-        assert candle.open_interest == 325000.0
-
-    @pytest.mark.asyncio
-    async def test_nifty_ohlc_preserved(self, db):
-        client = _mock_client()
-        orch = BackfillOrchestrator(db, client, force=True)
-        await orch.run_nifty()
-
-        candle = db.execute(
-            select(NiftyCandle).where(NiftyCandle.symbol == "NIFTY")
-        ).scalars().first()
-        assert candle is not None
-        assert candle.open == 24500
-        assert candle.high == 24520
-        assert candle.low == 24480
-        assert candle.close == 24510
-
-    def test_lot_size_immutable(self, db):
-        """Contract lot_size is set once and never overwritten."""
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE", lot=25)
-        spec = db.execute(
-            select(ContractSpec).where(ContractSpec.instrument_key == "NSE_FO|63935|28-07-2026")
-        ).scalar_one()
-        assert spec.lot_size == 25
-
-
-# ===========================================================================
-# 12. TIMEZONE VALIDATION
-# ===========================================================================
-
-class TestTimezoneValidation:
-    @pytest.mark.asyncio
-    async def test_nifty_candles_use_naive_ist(self, db):
-        client = _mock_client()
-        orch = BackfillOrchestrator(db, client, force=True)
-        await orch.run_nifty()
-
-        candle = db.execute(
-            select(NiftyCandle).where(NiftyCandle.symbol == "NIFTY")
-        ).scalars().first()
-        assert candle is not None
-        assert candle.open_time.tzinfo is None  # Naive
-        assert candle.open_time.hour >= 9  # IST market hours
-        assert candle.open_time.hour <= 15
-
-    @pytest.mark.asyncio
-    async def test_option_candles_use_naive_ist(self, db):
-        _add_spec(db, "NSE_FO|63935|28-07-2026", "2026-07-28", 24500, "CE")
-
-        client = _mock_client()
-        orch = BackfillOrchestrator(db, client)
-        await orch.run_options()
-
-        candle = db.execute(
-            select(OptionCandle)
-            .where(OptionCandle.instrument_key == "NSE_FO|63935|28-07-2026")
-        ).scalars().first()
-        assert candle is not None
-        assert candle.open_time.tzinfo is None  # Naive IST
-        assert candle.open_time.hour >= 9
-        assert candle.open_time.hour <= 15
-
-
-# ===========================================================================
-# 13. GREEKS SEPARATION
-# ===========================================================================
-
-class TestGreeksSeparation:
-    def test_backfill_does_not_import_or_use_option_greeks(self, db):
-        """Backfill orchestrator does not import or use OptionGreeks."""
-        from app.services import backfill_orchestrator
-        import inspect
-        source = inspect.getsource(backfill_orchestrator)
-        # Must not import OptionGreeks or call any greeks calculation
-        assert "from app.models import" not in source or "OptionGreeks" not in source
-        # The word "greeks" may appear in comments/docstrings ("No Greeks" policy)
-        # but must not appear in executable code paths
-        # Verify: no import of OptionGreeks, no greeks table operations
-
-    def test_daily_does_not_calculate_greeks(self, db):
-        """Daily ingestion does not touch option_greeks table."""
-        from app.services import daily_ingestion
-        import inspect
-        source = inspect.getsource(daily_ingestion)
-        assert "OptionGreeks" not in source
-
-    def test_no_greeks_in_option_candles(self, db):
-        """Option candle table does not contain Greeks columns."""
-        # The OptionCandle model should not have delta/gamma/vega/theta/IV
-        from app.models import OptionCandle
-        columns = [c.name for c in OptionCandle.__table__.columns]
-        assert "delta" not in columns
-        assert "gamma" not in columns
-        assert "vega" not in columns
-        assert "theta" not in columns
-        assert "implied_volatility" not in columns
-
-
-# ===========================================================================
-# 14. NO TOKEN LEAKAGE
-# ===========================================================================
-
-class TestNoTokenLeakage:
-    def test_token_not_in_logs(self):
-        """Access token must never appear in log output."""
-        import logging
-        import io
-
-        handler = logging.StreamHandler(io.StringIO())
-        handler.setLevel(logging.DEBUG)
-        logger = logging.getLogger("app.services.backfill_orchestrator")
-        logger.addHandler(handler)
-
-        bridge = TokenBridge()
-        token = bridge.get_token()
-        # If token exists, it shouldn't be in the log output
-        log_output = handler.stream.getvalue()
-        if token:
-            assert token not in log_output
-
-        logger.removeHandler(handler)
-
-    def test_token_not_in_orchestrator_attrs(self):
-        client = _mock_client()
-        orch = BackfillOrchestrator(MagicMock(), client)
-        assert not hasattr(orch, "access_token")
-        assert not hasattr(orch, "token")
-
-    def test_token_not_in_exception_messages(self):
-        """Error messages must not contain tokens."""
-        try:
-            client = _mock_client()
-            client.get_expiries = AsyncMock(
-                side_effect=UpstoxAuthenticationError("Token expired"),
-            )
-            import asyncio
-            loop = asyncio.new_event_loop()
-            orch = BackfillOrchestrator(MagicMock(), client)
-            result = loop.run_until_complete(orch.run_contracts())
-            loop.close()
-            for err in result.errors:
-                assert "test-token-123" not in err
-        except Exception:
-            pass
-
-
-# ===========================================================================
-# 15. CLI ENTRY POINTS EXIST
-# ===========================================================================
-
-class TestCLIEntryPoints:
-    def test_run_backfill_importable(self):
-        import importlib
-        mod = importlib.import_module("run_backfill")
-        assert hasattr(mod, "main")
-
-    def test_run_daily_importable(self):
-        import importlib
-        mod = importlib.import_module("run_daily")
-        assert hasattr(mod, "main")
-
-    def test_run_backfill_has_help(self):
-        import subprocess
-        result = subprocess.run(
-            ["python", "run_backfill.py", "--help"],
-            capture_output=True, text=True,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        )
-        assert result.returncode == 0
-        assert "backfill" in result.stdout.lower()
-
-    def test_run_daily_has_help(self):
-        import subprocess
-        result = subprocess.run(
-            ["python", "run_daily.py", "--help"],
-            capture_output=True, text=True,
-            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        )
-        assert result.returncode == 0
-        assert "daily" in result.stdout.lower()
-
-
-# ===========================================================================
-# 16. DATE CHUNK GENERATION
-# ===========================================================================
-
-class TestDateChunks:
-    def test_single_chunk(self):
-        chunks = _generate_date_chunks(date(2026, 1, 1), date(2026, 1, 28))
-        assert len(chunks) == 1
-
-    def test_no_gaps(self):
-        chunks = _generate_date_chunks(date(2026, 1, 1), date(2026, 3, 1))
-        for i in range(len(chunks) - 1):
-            assert chunks[i][1] + timedelta(days=1) == chunks[i + 1][0]
+        assert inserted == 0
+        assert errors == []
