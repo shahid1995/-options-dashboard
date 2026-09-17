@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ContractSpec,
+    HistoricalGexSnapshot,
     IngestionCheckpoint,
     IngestionLog,
     NiftyCandle,
@@ -481,8 +482,8 @@ def _validate_pipeline(db: Session, target_date: date) -> dict:
     # Count total candles
     total_candles = db.scalar(select(func.count(OptionCandle.id))) or 0
 
-    # Count Greeks
-    total_greeks = db.scalar(select(func.count(OptionGreeks.id))) or 0
+    # NOTE: No Greeks here by policy — daily ingestion must not touch the
+    # option_greeks table (Phase 7.24 "No Greeks" separation policy).
 
     # Count GEX
     total_gex = db.scalar(select(func.count(HistoricalGexSnapshot.id))) or 0
@@ -497,17 +498,16 @@ def _validate_pipeline(db: Session, target_date: date) -> dict:
         select(func.count(func.distinct(ContractSpec.expiry)))
     ) or 0
 
-    gex_coverage = (total_gex / total_greeks * 100) if total_greeks > 0 else 0
+    gex_coverage = total_gex
 
     return {
         "target_date": target_date.isoformat(),
         "candles_today": candles_today,
         "total_candles": total_candles,
-        "total_greeks": total_greeks,
         "total_gex": total_gex,
         "instruments": instruments,
         "expiries": expiries,
-        "gex_coverage_pct": round(gex_coverage, 1),
+        "gex_snapshots": gex_coverage,
     }
 
 

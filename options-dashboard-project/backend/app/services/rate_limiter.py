@@ -6,7 +6,7 @@ migration path to Redis for multi-process deployment.
 
 Architecture:
     session_id → {endpoint → [timestamps]}
-    
+
 Memory: O(active_sessions × endpoints × window_entries)
 For 100 users × 5 endpoints × 60 entries = 30,000 floats ≈ 240KB
 
@@ -15,6 +15,7 @@ Limits are configurable per endpoint. Default: 60 requests/minute.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -175,46 +176,164 @@ rate_limiter = SessionRateLimiter()
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible aliases (Phase 7.24 backfill_orchestrator)
+# Phase 7.24.8C — Global adaptive rate limiter for bulk backfills
 # ---------------------------------------------------------------------------
 import asyncio as _asyncio
 
-
-class _BackfillRateConfig:
-    """Minimal config shim for backward-compat with backfill_orchestrator."""
-    def __init__(self, **kwargs: object):
-        self.max_concurrency: int = int(kwargs.get("max_concurrency", 5))
+_backfill_logger = logging.getLogger(__name__)
 
 
-RateLimiterConfig = _BackfillRateConfig  # type: ignore[misc]
+@dataclass
+class RateLimiterConfig:
+    """Tuning knobs for :class:`GlobalRateLimiter`.
+
+    All durations are seconds.  The limiter paces acquisitions by a
+    dynamic ``interval``; 429 responses trigger a global cooldown and
+    widen the interval, sustained success narrows it again (down to
+    ``min_interval * recovery_floor_pct``).  After
+    ``reduce_concurrency_threshold`` consecutive 429s the concurrency
+    ceiling is stepped down toward ``min_concurrency``.
+    """
+
+    initial_concurrency: int = 5
+    min_concurrency: int = 1
+    max_concurrency: int = 6
+
+    initial_interval: float = 0.25
+    min_interval: float = 0.05
+    max_interval: float = 5.0
+
+    cooldown_base: float = 1.0
+    cooldown_max: float = 60.0
+    cooldown_multiplier: float = 2.0
+
+    recovery_step: float = 0.01
+    recovery_floor_pct: float = 0.7
+
+    reduce_concurrency_threshold: int = 3
+    reduce_cooldown: float = 0.5
+
+
+@dataclass
+class RateLimiterMetrics:
+    """Point-in-time snapshot of the adaptive limiter state.
+
+    Contains only operational counters — never credentials or tokens.
+    """
+
+    current_concurrency: int = 0
+    interval_s: float = 0.0
+    cooldown_remaining_s: float = 0.0
+    total_requests: int = 0
+    successful_requests: int = 0
+    rate_limit_429s: int = 0
+    consecutive_429s: int = 0
+    retries_from_client: int = 0
+    total_cooldown_time_s: float = 0.0
+    total_instruments: int = 0
+    instruments_completed: int = 0
+    instruments_remaining: int = 0
+    instruments_failed: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "concurrency": self.current_concurrency,
+            "interval_s": self.interval_s,
+            "cooldown_remaining_s": self.cooldown_remaining_s,
+            "total_requests": self.total_requests,
+            "successful_requests": self.successful_requests,
+            "rate_limit_429s": self.rate_limit_429s,
+            "consecutive_429s": self.consecutive_429s,
+            "retries_from_client": self.retries_from_client,
+            "total_cooldown_time_s": self.total_cooldown_time_s,
+            "total_instruments": self.total_instruments,
+            "instruments_completed": self.instruments_completed,
+            "instruments_remaining": self.instruments_remaining,
+            "instruments_failed": self.instruments_failed,
+        }
 
 
 class GlobalRateLimiter:
-    """Async concurrency limiter used by the backfill orchestrator.
+    """Global adaptive rate limiter shared by all backfill workers.
 
-    This is NOT the same as ``SessionRateLimiter`` which throttles
-    per-user HTTP requests.  ``GlobalRateLimiter`` controls the
-    maximum number of concurrent Upstox API fetches during bulk
-    historical backfills.
+    This is NOT the same as ``SessionRateLimiter`` (per-user HTTP
+    throttling for authenticated endpoints).  ``GlobalRateLimiter``
+    gates bulk Upstox backfill traffic: it caps concurrency with a
+    semaphore, spaces acquisitions by a dynamic interval, enters a
+    global cooldown on 429 responses (honouring ``Retry-After`` when
+    supplied, exponential backoff otherwise), and gradually recovers
+    throughput after sustained success.
+
+    Deliberately in-process and dependency-free (no Redis) so the
+    implementation can be swapped later without changing callers.
     """
 
-    def __init__(self, max_concurrency: int = 5, **_kwargs: object):
-        self._concurrency = max_concurrency
-        self._semaphore: _asyncio.Semaphore = _asyncio.Semaphore(max_concurrency)
-        self._total_instruments: int = 0
+    def __init__(
+        self,
+        config: RateLimiterConfig | None = None,
+        max_concurrency: int | None = None,
+        **_kwargs: object,
+    ):
+        self._config = config or RateLimiterConfig()
+        cfg = self._config
+        if max_concurrency is not None:
+            # Legacy positional-style construction
+            cfg.initial_concurrency = int(max_concurrency)
+        self._concurrency: int = max(
+            cfg.min_concurrency, min(cfg.initial_concurrency, cfg.max_concurrency)
+        )
+        self._semaphore: _asyncio.Semaphore = _asyncio.Semaphore(self._concurrency)
 
-    # -- properties used by backfill_orchestrator --------------------------------
+        self._interval: float = float(cfg.initial_interval)
+        self._last_request: float | None = None
+        self._cooldown_until: float = 0.0
+        self._cooldown_total: float = 0.0
+        self._consecutive_429s: int = 0
+        self._lock = _asyncio.Lock()
+
+        self._total_requests: int = 0
+        self._successful: int = 0
+        self._rate_429s: int = 0
+        self._retries_from_client: int = 0
+
+        self._total_instruments: int = 0
+        self._instruments_done: int = 0
+        self._instruments_failed: int = 0
+
+    # -- state ------------------------------------------------------------------
+
+    @property
+    def config(self) -> RateLimiterConfig:
+        return self._config
 
     @property
     def concurrency(self) -> int:
         return self._concurrency
 
-    async def set_total_instruments(self, count: int) -> None:
-        self._total_instruments = count
+    @property
+    def interval(self) -> float:
+        """Current pacing interval in seconds between acquisitions."""
+        return self._interval
 
-    # -- acquire / release used by worker tasks -----------------------------------
+    @property
+    def cooldown_remaining(self) -> float:
+        """Seconds left in the global cooldown (0 when clear)."""
+        return max(0.0, self._cooldown_until - time.monotonic())
+
+    # -- worker lifecycle ---------------------------------------------------------
 
     async def acquire(self) -> None:
+        """Acquire a worker slot after global pacing and cooldown."""
+        async with self._lock:
+            remaining = self._cooldown_until - time.monotonic()
+            if remaining > 0:
+                await _asyncio.sleep(remaining)
+            if self._last_request is not None:
+                gap = self._interval - (time.monotonic() - self._last_request)
+                if gap > 0:
+                    await _asyncio.sleep(gap)
+            self._last_request = time.monotonic()
+            self._total_requests += 1
         await self._semaphore.acquire()
 
     def release(self) -> None:
@@ -223,25 +342,115 @@ class GlobalRateLimiter:
         except ValueError:
             pass  # release when nothing acquired
 
+    async def on_success(self) -> None:
+        """Record a successful request and gradually recover throughput."""
+        cfg = self._config
+        self._successful += 1
+        self._consecutive_429s = 0
+        floor = cfg.min_interval * cfg.recovery_floor_pct
+        if self._interval > floor:
+            self._interval = max(floor, self._interval - cfg.recovery_step)
+        await self._maybe_increase_concurrency()
 
+    async def on_429(self, retry_after: float | None = None) -> None:
+        """Record a 429: global cooldown, wider interval, adaptive concurrency.
 
-class RateLimiterMetrics:
-    """Stub metrics container for backward compat with Phase 7.24 tests."""
+        ``retry_after`` (from the ``Retry-After`` response header) is
+        honoured when supplied and positive; otherwise an exponential
+        backoff based on consecutive 429s is used.  Either way the
+        cooldown is capped at ``cooldown_max``.
+        """
+        cfg = self._config
+        self._rate_429s += 1
+        self._consecutive_429s += 1
 
-    def __init__(self) -> None:
-        self.api_calls: int = 0
-        self.rate_limit_hits: int = 0
-        self.concurrency: int = 5
-        self.total_instruments: int = 0
-        self.instruments_completed: int = 0
-        self.instruments_failed: int = 0
+        if retry_after is not None and retry_after > 0:
+            cooldown = float(retry_after)
+        else:
+            cooldown = cfg.cooldown_base * (
+                cfg.cooldown_multiplier ** max(0, self._consecutive_429s - 1)
+            )
+        cooldown = min(cooldown, cfg.cooldown_max)
 
-    def to_dict(self) -> dict:
-        return {
-            "api_calls": self.api_calls,
-            "rate_limit_hits": self.rate_limit_hits,
-            "concurrency": self.concurrency,
-            "total_instruments": self.total_instruments,
-            "instruments_completed": self.instruments_completed,
-            "instruments_failed": self.instruments_failed,
-        }
+        self._cooldown_until = max(self._cooldown_until, time.monotonic() + cooldown)
+        self._cooldown_total = cooldown
+
+        # Widen the pacing interval in proportion to the cooldown severity
+        self._interval = min(cfg.max_interval, max(self._interval, cooldown))
+
+        # Step concurrency down after sustained 429 storms
+        if (
+            self._consecutive_429s >= cfg.reduce_concurrency_threshold
+            and self._concurrency > cfg.min_concurrency
+        ):
+            self._concurrency -= 1
+            self._semaphore = _asyncio.Semaphore(self._concurrency)
+
+    async def on_error(self) -> None:
+        """Record a non-429 instrument failure (never throttles)."""
+        self._instruments_failed += 1
+
+    async def on_client_retry(self) -> None:
+        """Record a retry issued by the HTTP client layer."""
+        self._retries_from_client += 1
+
+    async def set_total_instruments(self, count: int) -> None:
+        self._total_instruments = count
+
+    async def mark_instrument_done(self) -> None:
+        self._instruments_done += 1
+
+    async def reset(self) -> None:
+        """Clear all adaptive state, counters, and concurrency ceilings."""
+        cfg = self._config
+        self._interval = float(cfg.initial_interval)
+        self._last_request = None
+        self._cooldown_until = 0.0
+        self._cooldown_total = 0.0
+        self._consecutive_429s = 0
+        self._total_requests = 0
+        self._successful = 0
+        self._rate_429s = 0
+        self._retries_from_client = 0
+        self._concurrency = max(
+            cfg.min_concurrency, min(cfg.initial_concurrency, cfg.max_concurrency)
+        )
+        self._semaphore = _asyncio.Semaphore(self._concurrency)
+
+    async def _maybe_increase_concurrency(self) -> None:
+        """Step concurrency back toward its configured ceiling after success."""
+        cfg = self._config
+        ceiling = min(cfg.initial_concurrency, cfg.max_concurrency)
+        if self._concurrency < ceiling:
+            self._concurrency += 1
+            self._semaphore = _asyncio.Semaphore(self._concurrency)
+
+    # -- observability -------------------------------------------------------------
+
+    def snapshot(self) -> RateLimiterMetrics:
+        return RateLimiterMetrics(
+            current_concurrency=self._concurrency,
+            interval_s=self._interval,
+            cooldown_remaining_s=self.cooldown_remaining,
+            total_requests=self._total_requests,
+            successful_requests=self._successful,
+            rate_limit_429s=self._rate_429s,
+            consecutive_429s=self._consecutive_429s,
+            retries_from_client=self._retries_from_client,
+            total_cooldown_time_s=self._cooldown_total,
+            total_instruments=self._total_instruments,
+            instruments_completed=self._instruments_done,
+            instruments_remaining=max(0, self._total_instruments - self._instruments_done),
+            instruments_failed=self._instruments_failed,
+        )
+
+    def log_status(self) -> None:
+        """Log the current adaptive state at INFO level (operational data only)."""
+        m = self.snapshot()
+        _backfill_logger.info(
+            "GlobalRateLimiter: concurrency=%d interval=%.3fs cooldown=%.1fs "
+            "requests=%d success=%d 429s=%d consecutive_429s=%d instruments=%d/%d",
+            m.current_concurrency, m.interval_s, m.cooldown_remaining_s,
+            m.total_requests, m.successful_requests, m.rate_limit_429s,
+            m.consecutive_429s, m.instruments_completed, m.total_instruments,
+        )
