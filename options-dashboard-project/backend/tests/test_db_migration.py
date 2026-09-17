@@ -4,7 +4,7 @@ Phase 10.1B removes create_all() and ensure_column() from production startup.
 Alembic is now the sole authoritative schema management mechanism.
 
 These tests verify:
-- Alembic upgrade creates all 24 application tables
+- Alembic upgrade creates all 42 application tables
 - init_db() does NOT call create_all()
 - init_db() does NOT call ensure_column()
 - init_db() is idempotent
@@ -96,14 +96,32 @@ def test_init_db_uses_alembic(monkeypatch, temp_engine):
             ).fetchall()
         }
 
-    # All 24 application tables + alembic_version
+    # Core application tables + alembic_version (schema asserted below)
     assert "users" in tables
     assert "user_sessions" in tables
     assert "trades" in tables
     assert "positions" in tables
     assert "paper_orders" in tables
     assert "alembic_version" in tables
-    assert len(tables) == 39  # 38 app tables + alembic_version (Day41.2 order_family_sync_lock + BrokerAuthorization broker_authorizations now apply via the merge head; was 37 under the single-branch head)
+
+    # Account-security lifecycle tables (Alembic c1d2e3f4a5b6)
+    assert "email_verification_tokens" in tables
+    assert "password_reset_tokens" in tables
+    assert "pending_email_changes" in tables
+    assert "security_events" in tables
+
+    # Broker raw-ingress internals (Day41) and Day41.2 lock table
+    assert "broker_raw_observation" in tables
+    assert "order_family_sync_lock" in tables
+    assert "broker_authorizations" in tables
+
+    # 42 application tables + alembic_version.
+    # History: 24 app tables at the Phase 10.1B Alembic cutover; 37 after the
+    # broker_sync expansions; 39 after Day41.2 (order_family_sync_lock +
+    # broker_authorizations via the merge head); 43 since Auth account-security
+    # c1d2e3f4a5b6 added email_verification_tokens, password_reset_tokens,
+    # pending_email_changes, security_events.
+    assert len(tables) == 43
 
 
 def test_init_db_creates_legacy_columns_via_baseline(monkeypatch, temp_engine):
