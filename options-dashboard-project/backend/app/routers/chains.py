@@ -27,22 +27,11 @@ router = APIRouter()
 WS_PUSH_INTERVAL_SECONDS = 3
 WS_LIVE_PUSH_INTERVAL_SECONDS = 1  # Push live ticks more frequently
 
-WS_SESSION_PROTOCOL = "options-dashboard-session"
 
 
 def ws_session(websocket: WebSocket) -> tuple[str | None, str | None]:
-    """Extracts the session ID from the websocket handshake.
-
-    Browsers can't set custom headers on websockets, so the frontend sends the
-    session ID as the second entry of the Sec-WebSocket-Protocol list (falling
-    back to the session cookie). Returns (session_id, subprotocol_to_accept)."""
-    requested = websocket.headers.get("sec-websocket-protocol")
-    if requested:
-        parts = [p.strip() for p in requested.split(",")]
-        if len(parts) == 2 and parts[0] == WS_SESSION_PROTOCOL:
-            return parts[1], WS_SESSION_PROTOCOL
-    return websocket.cookies.get("session_id"), None
-
+    """Resolve the platform session from the canonical HttpOnly cookie only."""
+    return websocket.cookies.get("strikenova_session"), None
 
 def require_token(session_id: str | None) -> str:
     """Return the broker access token for the session.
