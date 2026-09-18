@@ -81,13 +81,20 @@ _sent_store: list[SentMessage] = []
 
 
 def get_email_sender() -> EmailSender:
-    """Return the sender selected by ``EMAIL_PROVIDER`` (Issue #65).
+    """Return the sender selected by ``EMAIL_PROVIDER`` — strictly fail-closed.
 
     ``inmemory`` (default)  → deterministic test sink, never network.
     ``brevo``               → :class:`BrevoEmailSender` (requires
                               ``BREVO_API_KEY``; fails fast when missing —
                               never silently falls back to the test sink).
-    Anything else           → ValueError (typo protection).
+    ANY OTHER VALUE         → ValueError. Unknown/typo'd provider values can
+                              never select a sender — there is no implicit
+                              ``EMAIL_API_URL``-keyed fallback (review fix,
+                              Issue #65).
+
+    :class:`HttpEmailSender` is retained as a reusable generic transport for
+    explicit, intentional callers (and future explicitly-registered
+    providers); the factory itself never selects it implicitly.
 
     Replacing this factory with a Redis/queue-backed or vendor-backed
     transport never changes endpoint contracts.
@@ -111,16 +118,10 @@ def get_email_sender() -> EmailSender:
                 api_key=settings.BREVO_API_KEY,
                 from_address=settings.EMAIL_FROM_ADDRESS,
             )
-        elif settings.EMAIL_API_URL:
-            # Backward compatibility: the pre-#65 implicit selection. Only
-            # reached for unknown EMAIL_PROVIDER values that already set an
-            # EMAIL_API_URL (never for the default path).
-            _sender = HttpEmailSender(
-                api_url=settings.EMAIL_API_URL,
-                api_key=settings.EMAIL_API_KEY,
-                from_address=settings.EMAIL_FROM_ADDRESS,
-            )
         else:
+            # Strictly fail-closed: unknown values raise regardless of any
+            # other configuration (e.g. a populated EMAIL_API_URL must NOT
+            # select a sender implicitly).
             raise ValueError(
                 f"Unsupported EMAIL_PROVIDER {provider!r}. "
                 "Use 'inmemory' or 'brevo'."

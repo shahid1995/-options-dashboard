@@ -205,6 +205,23 @@ def test_unknown_provider_rejected(monkeypatch):
         get_email_sender()
 
 
+def test_unknown_provider_never_falls_through_to_http_sender(monkeypatch):
+    """Regression (Issue #65 review fix): an unknown EMAIL_PROVIDER value plus
+    a populated EMAIL_API_URL must raise ValueError — it must NEVER silently
+    instantiate HttpEmailSender via a legacy implicit fallback."""
+    monkeypatch.setattr(settings, "EMAIL_PROVIDER", "unknown-provider", raising=False)
+    monkeypatch.setattr(settings, "EMAIL_API_URL", "https://legacy.example/send", raising=False)
+    monkeypatch.setattr(settings, "EMAIL_API_KEY", "legacy-key", raising=False)
+    try:
+        get_email_sender()
+    except ValueError as exc:
+        # Error text must name the offending value, not leak any key.
+        assert "unknown-provider" in str(exc)
+        assert "legacy-key" not in str(exc)
+    else:
+        pytest.fail("ValueError not raised for unknown EMAIL_PROVIDER with EMAIL_API_URL set")
+
+
 def test_existing_api_key_alone_does_not_enable_brevo(monkeypatch):
     """A key sitting in config must not silently switch the provider on."""
     monkeypatch.setattr(settings, "BREVO_API_KEY", "sk_test_key_value", raising=False)
