@@ -280,7 +280,7 @@ Schema changes must consider:
 - indexes and constraints;
 - rollback/forward-compatibility;
 - SQLite development/test behavior;
-- PostgreSQL production behavior.
+- CockroachDB production behavior.
 
 A migration is incomplete until the affected existing-data path has been verified.
 
