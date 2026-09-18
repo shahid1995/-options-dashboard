@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from app.db import Base, engine, SessionLocal
 from app.identity import User, UserSession, hash_session_id
 from app.main import app
+from app.routers.deps import SESSION_COOKIE_NAME
 from app.services import token_store
 
 
@@ -62,6 +63,15 @@ def _make_valid_state() -> str:
     return token_store.create_google_oauth_state()
 
 
+def _login_session_id(resp):
+    """Extract the canonical session ID from a login response's cookie.
+
+    Issue #61: /auth/google transports the session ONLY via the secure
+    HttpOnly ``strikenova_session`` cookie — the body never contains it.
+    """
+    return resp.cookies.get(SESSION_COOKIE_NAME)
+
+
 def _fake_google_credential(sub="google-user-123", email="test@gmail.com", name="Test User"):
     """Build a minimal JWT-like string for testing.
 
@@ -95,7 +105,9 @@ class TestGoogleAuthNewUser:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        assert data["session_id"]
+        # Issue #61: the session is transported only by the secure cookie
+        assert _login_session_id(resp)
+        assert "session_id" not in data
         assert data["user"]["email"] == "newuser@gmail.com"
         assert data["user"]["display_name"] == "New User"
 
@@ -288,7 +300,7 @@ class TestGoogleSessionManagement:
             "name": "ME Test",
         }
         resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
-        session_id = resp.json()["session_id"]
+        session_id = _login_session_id(resp)
 
         # Use the session to access /auth/me
         me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
@@ -306,7 +318,7 @@ class TestGoogleSessionManagement:
             "name": "Logout Test",
         }
         resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
-        session_id = resp.json()["session_id"]
+        session_id = _login_session_id(resp)
 
         # Logout
         logout_resp = client.post("/auth/logout", headers={"X-Session-Id": session_id})
@@ -326,8 +338,8 @@ class TestGoogleSessionManagement:
         resp1 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         resp2 = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
 
-        sid1 = resp1.json()["session_id"]
-        sid2 = resp2.json()["session_id"]
+        sid1 = _login_session_id(resp1)
+        sid2 = _login_session_id(resp2)
         assert sid1 != sid2  # Each login gets a unique session
 
 
@@ -346,7 +358,7 @@ class TestAuthMe:
             "name": "ME Data",
         }
         resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
-        session_id = resp.json()["session_id"]
+        session_id = _login_session_id(resp)
 
         me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})
         assert me_resp.status_code == 200
@@ -535,7 +547,7 @@ class TestGoogleNonceValidation:
         }
         resp = client.post("/auth/google", json={"credential": "fake-jwt", "state": _make_valid_state()})
         assert resp.status_code == 200
-        session_id = resp.json()["session_id"]
+        session_id = _login_session_id(resp)
 
         # Session works via in-memory cache
         me_resp = client.get("/auth/me", headers={"X-Session-Id": session_id})

@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getSessionId } from "@/lib/session";
 import { getMe } from "@/lib/api";
 
 /**
@@ -26,12 +25,6 @@ export default function AuthGate({ children }) {
 
     const verify = async () => {
       try {
-        const session = getSessionId();
-        if (!session) {
-          if (!cancelled) router.replace("/");
-          return;
-        }
-
         await getMe();
         if (!cancelled) {
           setError("");

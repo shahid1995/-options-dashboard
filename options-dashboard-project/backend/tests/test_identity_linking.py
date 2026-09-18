@@ -83,6 +83,7 @@ def client(db_session):
 
 
 from app.main import app  # noqa: E402  (import after fixtures defined)
+from app.routers.deps import SESSION_COOKIE_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -754,4 +755,4 @@ def test_token_persisted_in_main_transaction(client, db_session, monkeypatch):
     sess = db_session.query(UserSession).filter(
         UserSession.broker_connection_id == conn.id
     ).one()
-    assert sess.session_hash == hash_session_id(resp.cookies.get("session_id"))
+    assert sess.session_hash == hash_session_id(resp.cookies.get(SESSION_COOKIE_NAME))

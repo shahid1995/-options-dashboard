@@ -12,7 +12,6 @@ import {
   forgotPassword,
   resetPassword,
 } from "@/lib/api";
-import { setSessionId } from "@/lib/session";
 import { useRouter } from "next/navigation";
 
 const INPUT_STYLE = {
@@ -221,24 +220,21 @@ export default function AuthModal({ open, onClose, onAuth }) {
 
   if (!open) return null;
 
-  const handleAuthSuccess = (data) => {
-    if (data?.session_id) setSessionId(data.session_id);
+  const handleAuthSuccess = () => {
     setSuccess("Authenticated! Redirecting…");
     setLoading(false);
     setTimeout(() => {
       onClose();
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-      if (data?.session_id && appUrl) {
-        // Cross-origin handoff: navigate to authenticated app with session in fragment
-        window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);
+      if (appUrl) {
+        window.location.assign(`${appUrl}/dashboard`);
+      } else if (onAuth) {
+        onAuth();
       } else {
-        // Fallback: same-origin navigation
-        if (onAuth) onAuth();
-        else router.push("/dashboard");
+        router.replace("/dashboard");
       }
     }, 400);
   };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");

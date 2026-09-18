@@ -344,10 +344,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
   useEffect(() => {
     (async () => {
       try {
-        const { getSessionId } = await import("@/lib/session");
         const { getStatus, getMe } = await import("@/lib/api");
-        const session = getSessionId();
-        if (!session) return;
         const status = await getStatus();
         if (status.logged_in) {
           const me = await getMe();
@@ -362,9 +359,7 @@ export default function Shell({ children, executionMode = "PAPER", marketStatus 
   const handleLogout = useCallback(async () => {
     try {
       const { logoutUser } = await import("@/lib/api");
-      const { clearSessionId } = await import("@/lib/session");
       await logoutUser();
-      clearSessionId();
     } catch {}
     setAuthUser(null);
     router.replace("/");

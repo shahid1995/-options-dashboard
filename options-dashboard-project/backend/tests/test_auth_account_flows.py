@@ -34,7 +34,7 @@ from app.identity import (
 )
 from app.main import app
 from app.config import settings
-from app.routers.auth import SESSION_COOKIE as SESSION_COOKIE_NAME
+from app.routers.auth import SESSION_COOKIE_NAME
 from app.services import token_store
 
 
@@ -144,7 +144,10 @@ class TestAccountLogin:
         assert body["ok"] is True
         assert body["user"]["user_id"] == user.id
         assert body["user"]["email"] == user.email
-        assert body.get("session_id"), "login must return the session identifier"
+        # Issue #61: the session is transported ONLY by the secure cookie —
+        # the body never carries the session identifier.
+        assert "session_id" not in body
+        assert resp.cookies.get(SESSION_COOKIE_NAME), "login must set the canonical session cookie"
 
         sessions = (
             db_session.query(UserSession).filter(UserSession.user_id == user.id).all()
@@ -237,19 +240,21 @@ class TestAccountLogin:
 
 class TestAccountSession:
     def _login(self, client):
+        """Login and return the session ID from the canonical secure cookie
+        (Issue #61: the response body never carries the session)."""
         resp = client.post(
             f"{ACCOUNT}/login",
             json={"email": "trader@example.com", "password": "Sup3rSecret!"},
         )
         assert resp.status_code == 200
-        return resp.json()
+        return resp.cookies.get(SESSION_COOKIE_NAME)
 
     def test_session_endpoint_returns_authenticated_user(self, client, db_session):
         user = _local_user(db_session)
-        body = self._login(client)
+        sid = self._login(client)
 
         resp = client.get(
-            f"{ACCOUNT}/session", headers={"X-Session-Id": body["session_id"]}
+            f"{ACCOUNT}/session", headers={"X-Session-Id": sid}
         )
 
         assert resp.status_code == 200, resp.text
@@ -267,8 +272,7 @@ class TestAccountSession:
         """UserSession.revoked_at is the authority — a revoked session is
         rejected even if the client still presents its identifier."""
         _local_user(db_session)
-        body = self._login(client)
-        sid = body["session_id"]
+        sid = self._login(client)
 
         logout = client.post(f"{ACCOUNT}/logout", headers={"X-Session-Id": sid})
         assert logout.status_code == 200
@@ -279,8 +283,7 @@ class TestAccountSession:
     def test_session_rejects_expired_session(self, client, db_session):
         """UserSession.expires_at is the authority — expired sessions fail."""
         _local_user(db_session)
-        body = self._login(client)
-        sid = body["session_id"]
+        sid = self._login(client)
 
         db_session.query(UserSession).filter(
             UserSession.session_hash == hash_session_id(sid)
@@ -301,13 +304,13 @@ class TestAccountLogout:
         user = _local_user(db_session)
         r1 = client.post(
             f"{ACCOUNT}/login", json={"email": user.email, "password": "Sup3rSecret!"}
-        ).json()
+        ).cookies.get(SESSION_COOKIE_NAME)
         r2 = client.post(
             f"{ACCOUNT}/login", json={"email": user.email, "password": "Sup3rSecret!"}
-        ).json()
+        ).cookies.get(SESSION_COOKIE_NAME)
 
         resp = client.post(
-            f"{ACCOUNT}/logout", headers={"X-Session-Id": r1["session_id"]}
+            f"{ACCOUNT}/logout", headers={"X-Session-Id": r1}
         )
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
@@ -315,13 +318,13 @@ class TestAccountLogout:
         # Logged-out session is rejected; the other session still works.
         assert (
             client.get(
-                f"{ACCOUNT}/session", headers={"X-Session-Id": r1["session_id"]}
+                f"{ACCOUNT}/session", headers={"X-Session-Id": r1}
             ).status_code
             == 401
         )
         assert (
             client.get(
-                f"{ACCOUNT}/session", headers={"X-Session-Id": r2["session_id"]}
+                f"{ACCOUNT}/session", headers={"X-Session-Id": r2}
             ).status_code
             == 200
         )
@@ -345,7 +348,7 @@ class TestAccountLogout:
             client.post(
                 f"{ACCOUNT}/login",
                 json={"email": user.email, "password": "Sup3rSecret!"},
-            ).json()["session_id"]
+            ).cookies.get(SESSION_COOKIE_NAME)
             for _ in range(3)
         ]
 
@@ -406,7 +409,7 @@ class TestBrokerOAuthBoundary:
         )
         assert resp.status_code == 200
         assert "location" not in resp.headers
-        assert resp.json().get("session_id")
+        assert resp.cookies.get(SESSION_COOKIE_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -646,7 +649,7 @@ class TestEmailVerification:
             },
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json().get("session_id")
+        assert resp.cookies.get(SESSION_COOKIE_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -667,9 +670,11 @@ def auth(session_id):
 
 
 def _login(client, email="recovery@example.com", password="Sup3rSecret!"):
+    """Login and return the session ID from the canonical secure cookie
+    (Issue #61: the response body never carries the session)."""
     resp = client.post(f"{ACCOUNT}/login", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.text
-    return resp.json()["session_id"]
+    return resp.cookies.get(SESSION_COOKIE_NAME)
 
 
 class TestForgotPassword:
@@ -788,7 +793,7 @@ class TestResetPassword:
             json={"email": "recovery@example.com", "password": "N3wPassword!"},
         )
         assert resp.status_code == 200
-        assert resp.json().get("session_id")
+        assert resp.cookies.get(SESSION_COOKIE_NAME)
 
     def test_invalid_reset_token_fails(self, client, db_session):
         _verified_user(db_session)

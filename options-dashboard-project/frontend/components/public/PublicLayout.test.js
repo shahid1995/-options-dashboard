@@ -30,7 +30,6 @@ vi.mock("@/components/public/AuthModalContext", () => {
 
 vi.mock("@/lib/session", () => ({
   captureGoogleIdTokenFromUrl: () => null,
-  setSessionId: () => {},
 }));
 
 vi.mock("@/lib/api", () => ({
