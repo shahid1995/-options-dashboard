@@ -73,12 +73,17 @@ class Settings(BaseSettings):
     RECENT_AUTH_TTL_MINUTES: int = 15
     EMAIL_FROM_ADDRESS: str = "StrikeNova <no-reply@strikenova.local>"
     EMAIL_BASE_URL: str = "http://localhost:3000"
-    # Provider-neutral email transport (Task 3): when EMAIL_API_URL is set the
-    # generic HTTP transport is used; otherwise the deterministic in-memory
-    # test sender. Provider credentials live ONLY in backend environment
-    # configuration — never in the frontend, logs, or security events.
+    # Provider-neutral email transport: selection is EXPLICIT via
+    # EMAIL_PROVIDER (inmemory|brevo). The default ``inmemory`` deterministic
+    # test sender never performs network calls. Provider credentials live
+    # ONLY in backend environment configuration — never in the frontend,
+    # logs, or security events. Selecting ``brevo`` without BREVO_API_KEY
+    # fails fast (no silent fallback).
+    EMAIL_PROVIDER: str = "inmemory"
     EMAIL_API_URL: str = ""
     EMAIL_API_KEY: str = ""
+    BREVO_API_KEY: str = ""
+    BREVO_API_URL: str = "https://api.brevo.com/v3/smtp/email"
 
     @property
     def FRONTEND_ORIGIN(self) -> str:

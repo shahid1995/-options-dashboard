@@ -8,6 +8,25 @@ Format: date — change — reference.
 
 ---
 
+## 2026-09-18 — Brevo transactional-email adapter (Issue #65)
+
+- Added `BrevoEmailSender` behind the provider-neutral `EmailSender`
+  boundary (`backend/app/services/email.py`): Brevo `smtp/email` endpoint,
+  `api-key` header, `sender` object, `[{"email"}]` recipients,
+  `htmlContent`/`textContent`. No vendor SDK in the auth flow; account
+  security code remains Brevo-unaware.
+- Provider selection is now explicit: `EMAIL_PROVIDER=inmemory|brevo`
+  (default `inmemory`; the deterministic test sender never performs network
+  calls). Selecting `brevo` without `BREVO_API_KEY` fails fast — never a
+  silent fallback. `BREVO_API_URL` defaults to the Brevo endpoint.
+- Hardened the transport: the deterministic capture mirror now runs only for
+  the in-memory sender, so production provider message contents (which
+  contain verification/reset links) are never persisted in memory or the
+  database; credentials/tokens/URLs are never logged.
+- Status effect: transactional email provider integration is **implemented
+  in code**; real mailbox/email-delivery verification and the final Phase
+  10.2 release/security gate remain **pending** (ADR-011).
+
 ## 2026-09-18 — Introduced the canonical control-document set (Issue #63)
 
 - Added the eleven canonical control documents at the repository root:
@@ -38,8 +57,8 @@ landed under `options-dashboard-project/docs/superpowers/` (spec + plan dated
 - account-auth implementation — substantially implemented;
 - secure browser session transport — completed by PR #62 (Issue #61),
   merged 2026-09-18 at `aa70629`;
-- transactional email provider integration — pending (**Brevo selected,
-  not yet integrated**);
+- transactional email provider integration — implemented in code
+  (**Brevo** adapter, Issue #65); real delivery not yet verified;
 - real mailbox/email-delivery verification — pending;
 - final end-to-end Phase 10.2 release/security gate — pending.
 

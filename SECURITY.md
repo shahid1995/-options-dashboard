@@ -64,10 +64,14 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
 Account-security work is **in progress, not uniformly complete** — see
 [`DECISIONS.md`](DECISIONS.md) ADR-011 for the standing record. Completed:
 identity/session hardening, token/OAuth-state work, the account-auth route
-surface, and the secure browser session transport (PR #62). Pending:
-**Brevo transactional email integration (selected, not yet integrated)**,
-real mailbox/email-delivery verification, and the final end-to-end Phase 10.2
-release/security gate.
+surface, and the secure browser session transport (PR #62). **Implemented in
+code:** the Brevo transactional-email adapter behind the provider-neutral
+`EmailSender` boundary (`EMAIL_PROVIDER=brevo`; Issue #65) — real delivery is
+not yet verified. Pending: real mailbox/email-delivery verification and the
+final end-to-end Phase 10.2 release/security gate. Brevo credentials live
+only in backend environment configuration (`BREVO_API_KEY`), are sent only in
+the provider `api-key` header, and are never logged, persisted, or exposed to
+the frontend.
 
 ## 6. Credential handling
 
