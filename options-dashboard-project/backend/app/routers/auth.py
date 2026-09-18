@@ -63,7 +63,8 @@ def _serialize_utc(dt) -> str | None:
 
 router = APIRouter()
 
-SESSION_COOKIE = "session_id"
+SESSION_COOKIE_NAME = "strikenova_session"
+SESSION_COOKIE_TTL = 60 * 60 * 24
 
 # ---------------------------------------------------------------------------
 # Popup OAuth kickoff — one-time pre-authorized kick token for the seamless
@@ -559,18 +560,16 @@ async def callback(
     if popup:
         return _popup_success_response(broker_id)
 
-    # Send the user back to the dashboard. The session ID is passed in the
-    # URL fragment because it is not sent to servers as a query parameter.
-    response = RedirectResponse(
-        f"{settings.FRONTEND_ORIGIN}/dashboard#session_id={session_id}"
-    )
+    # The session is stored in the HttpOnly cookie, never the URL.
+    response = RedirectResponse(f"{settings.FRONTEND_ORIGIN}/dashboard")
     response.set_cookie(
-        SESSION_COOKIE,
+        SESSION_COOKIE_NAME,
         session_id,
         httponly=True,
         secure=True,
         samesite="none",
-        max_age=60 * 60 * 24,
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
     )
     return response
 
@@ -708,12 +707,12 @@ def register(
 def login_email(
     email: str = Body(..., embed=True),
     password: str = Body(..., embed=True),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     """Authenticate with email/password and return a session.
 
-    Returns session_id in the response body (not in a cookie) so the
-    frontend can store it in localStorage and send as X-Session-Id.
+    The browser session is returned only as the HttpOnly cookie.
     """
     # Rate limit: use email as client identifier (unauthenticated endpoint)
     rate_limiter.check(None, "/auth/login-email", client_id=f"unauth:{email.strip().lower()}")
@@ -746,9 +745,18 @@ def login_email(
     create_session_record(db, user.id, session_id)
     db.commit()
 
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
+    )
+
     return {
         "ok": True,
-        "session_id": session_id,
         "user": {
             "user_id": user.id,
             "email": user.email,
@@ -787,6 +795,7 @@ def google_oauth_state():
 def google_auth(
     credential: str = Body(..., embed=True),
     state: str | None = Body(default=None, embed=True),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     """Authenticate via Google Sign-In (One Tap / GIS).
@@ -859,9 +868,18 @@ def google_auth(
     create_session_record(db, user.id, session_id)
     db.commit()
 
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_id,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=SESSION_COOKIE_TTL,
+        path="/",
+    )
+
     return {
         "ok": True,
-        "session_id": session_id,
         "user": {
             "user_id": user.id,
             "email": user.email,
@@ -1040,7 +1058,7 @@ def logout(session_id: str | None = Depends(get_session_id), db: Session = Depen
         token_store.clear_token(session_id)
 
     response = JSONResponse({"ok": True})
-    response.delete_cookie(SESSION_COOKIE, httponly=True, secure=True, samesite="none")
+    response.delete_cookie(SESSION_COOKIE_NAME, httponly=True, secure=True, samesite="none")
     return response
 
 
@@ -1336,18 +1354,17 @@ def account_login(
     db.commit()
 
     response.set_cookie(
-        SESSION_COOKIE,
+        SESSION_COOKIE_NAME,
         session_id,
         httponly=True,
         secure=True,
         samesite="none",
-        max_age=60 * 60 * 24,
+        max_age=SESSION_COOKIE_TTL,
         path="/",
     )
 
     return {
         "ok": True,
-        "session_id": session_id,
         "user": {
             "user_id": user.id,
             "email": user.email,
@@ -1411,7 +1428,7 @@ def account_logout(
 
     response = JSONResponse({"ok": True})
     response.delete_cookie(
-        SESSION_COOKIE, httponly=True, secure=True, samesite="none", path="/"
+        SESSION_COOKIE_NAME, httponly=True, secure=True, samesite="none", path="/"
     )
     return response
 
