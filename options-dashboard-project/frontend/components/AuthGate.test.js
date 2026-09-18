@@ -4,16 +4,12 @@ import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const mockReplace = vi.fn();
-const mockGetSessionId = vi.fn();
 const mockGetMe = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
 }));
 
-vi.mock("@/lib/session", () => ({
-  getSessionId: (...args) => mockGetSessionId(...args),
-}));
 
 vi.mock("@/lib/api", () => ({
   getMe: (...args) => mockGetMe(...args),
@@ -42,9 +38,10 @@ describe("AuthGate", () => {
   });
 
   it("uses /auth/me as the canonical identity check", () => {
-    mockGetSessionId.mockReturnValue("valid-session");
-    mockGetMe.mockResolvedValue({ user_id: "user-1" });
-    expect(mockGetSessionId()).toBe("valid-session");
+    const source = readFileSync(new URL("./AuthGate.js", import.meta.url), "utf8");
+    expect(source).toContain("getMe();");
+    expect(source).not.toContain("getSessionId");
+    expect(source).not.toContain("localStorage");
     expect(mockGetMe).toBeDefined();
   });
 
