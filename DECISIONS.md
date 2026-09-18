@@ -107,16 +107,19 @@ is **not uniformly complete**. Standing status:
 | Token/OAuth-state work | Completed |
 | Account-auth implementation | Substantially implemented |
 | Secure browser session transport | Completed by PR #62 (Issue #61) |
-| Transactional email provider integration | **Pending — Brevo selected, not yet integrated** |
+| Transactional email provider integration | **Implemented in code (Brevo adapter, Issue #65); real delivery not yet verified** |
 | Real mailbox/email-delivery verification | Pending |
 | Final end-to-end Phase 10.2 release/security gate | Pending |
 
 Evidence: account-auth route surface (`/auth/account/*` in
 `backend/app/routers/auth.py`), security record models and services
-(`backend/app/services/account_security.py`, `app/identity.py`), vendor-neutral
-`EmailSender` boundary with in-memory test sender as default
-(`backend/app/services/email.py` — production provider selected but not yet
-integrated), secure-transport regressions
+(`backend/app/services/account_security.py`, `app/identity.py`), provider-neutral
+`EmailSender` boundary with the explicit `EMAIL_PROVIDER` selection and the
+Brevo adapter behind it (`backend/app/services/email.py` —
+`BrevoEmailSender`, `api-key` header, Brevo `smtp/email` payload; default
+remains the deterministic in-memory test sender), secure-transport regressions
 (`backend/tests/test_secure_session_cookies.py`,
-`frontend/lib/useAuth.behavior.test.js`). Until the pending workstreams land,
-no document may describe Phase 10.2 account security as fully complete.
+`frontend/lib/useAuth.behavior.test.js`). Real mailbox/email-delivery
+verification and the final Phase 10.2 release/security gate remain pending —
+until both pass, no document may describe Phase 10.2 account security as
+fully complete.
