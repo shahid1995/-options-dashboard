@@ -32,19 +32,25 @@ export function useAuth() {
 
   // Check auth on mount and when session changes. /auth/me is the
   // authoritative check: the browser presents the HttpOnly cookie and the
-  // server resolves the durable UserSession. 401/403 mean logged out;
-  // anything else (5xx/network) is surfaced as a retryable error — never a
-  // silent local logout.
+  // server resolves the durable UserSession. 401/403 mean the server
+  // explicitly rejected authentication — clear local authenticated state.
+  // Anything else (5xx / network) means session validity is UNKNOWN:
+  // preserve the current user and surface a retryable error. A transient
+  // backend outage must never log the user out client-side, and the
+  // HttpOnly strikenova_session cookie stays untouched.
   const checkAuth = useCallback(async () => {
     try {
       const me = await getMe();
+      // A successful /auth/me is authoritative: update user and clear any
+      // retryable error left by an earlier transient failure.
       setUser(me);
       setError(null);
     } catch (e) {
-      setUser(null);
       const status = e?.response?.status;
-      if (status !== 401 && status !== 403) {
-        setError(e.message || "Failed to check auth status");
+      if (status === 401 || status === 403) {
+        setUser(null);
+      } else {
+        setError(e?.message || "Failed to check auth status");
       }
     } finally {
       setLoading(false);
@@ -118,9 +124,15 @@ export function useAuth() {
       setError(null);
       return result;
     } catch (e) {
-      setUser(null);
-      if (e?.response?.status !== 401) {
-        setError(e.message || "Failed to check account session");
+      const status = e?.response?.status;
+      if (status === 401 || status === 403) {
+        // Explicit authentication rejection — clear authenticated state.
+        setUser(null);
+      } else {
+        // Transient failure: session validity is unknown — preserve the
+        // authenticated state and surface a retryable error instead of
+        // silently converting the session into a logged-out UI.
+        setError(e?.message || "Failed to check account session");
       }
       return null;
     }
