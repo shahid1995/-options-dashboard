@@ -41,7 +41,7 @@ The required layer depends on the risk and scope of the change.
 - pytest-asyncio with asyncio_mode = auto
 - SQLAlchemy test databases where appropriate
 - SQLite/in-memory test setups for isolated tests
-- PostgreSQL-compatible integration expectations for persistence-sensitive work
+- CockroachDB production integration expectations for persistence-sensitive work; PostgreSQL-compatible behavior may be used only where the specific test/database contract requires it
 
 ### Frontend
 
