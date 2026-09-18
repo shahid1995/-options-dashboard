@@ -59,7 +59,17 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
   signed-state mechanism (`POST /auth/google/state`), preventing replay of
   id tokens from unrelated auth attempts.
 
-## 5. Credential handling
+## 5. Phase 10.2 status (do not over-assume)
+
+Account-security work is **in progress, not uniformly complete** — see
+[`DECISIONS.md`](DECISIONS.md) ADR-011 for the standing record. Completed:
+identity/session hardening, token/OAuth-state work, the account-auth route
+surface, and the secure browser session transport (PR #62). Pending:
+**Brevo transactional email integration (selected, not yet integrated)**,
+real mailbox/email-delivery verification, and the final end-to-end Phase 10.2
+release/security gate.
+
+## 6. Credential handling
 
 - Broker tokens are encrypted at rest (Fernet; `app/crypto.py`) and stored
   server-side (`BrokerToken` / `BrokerAuthorization` ownership path). The
@@ -75,7 +85,7 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
 - Agents never read, print, copy, decode, or expose credential files
   (including `.strikenova_gh_token`) — [`AGENTS.md`](AGENTS.md) §5.
 
-## 6. Server authority
+## 7. Server authority
 
 - Paper trading (equity, positions, exits, P&L) is **server-authoritative**;
   the client cannot compute or assert balances.
@@ -83,7 +93,7 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
   broker-dependent routes legitimately 403 when no broker credential exists —
   platform-only sessions remain valid for platform routes.
 
-## 7. Operational rules
+## 8. Operational rules
 
 - No deploy, no production database access, no infrastructure change without
   explicit Founder authorization.
@@ -92,7 +102,7 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
 - Security-relevant events are logged **without exposing secrets** (session
   prefixes only).
 
-## 8. Reporting
+## 9. Reporting
 
 Security issues are filed as **Security** issues on the GitHub Project
 ([`PROJECT-CONTROL.md`](PROJECT-CONTROL.md)); see

@@ -26,12 +26,26 @@ Format: date — change — reference.
 - References: Issue #63; branch `fix/63-sync-control-docs`; base
   `aa70629a7969c309bbd4caaa6f97c05e561ecb81` (merge of PR #62).
 
-## 2026-09-16 — Auth/account-security design approved (context)
+## 2026-09-16 — Phase 10.2 auth/account-security design approved (context)
 
-Approved design and execution plan for the secure session transport landed
-under `options-dashboard-project/docs/superpowers/` (spec + plan dated
-2026-09-16); implementation completed by PR #62 (Issue #61), merged
-2026-09-18 at `aa70629`. Recorded here 2026-09-18 with the control set.
+Approved design and execution plan for Phase 10.2 (auth & account security)
+landed under `options-dashboard-project/docs/superpowers/` (spec + plan dated
+2026-09-16). The phase is **not** uniformly complete — see
+[`DECISIONS.md`](DECISIONS.md) ADR-011 for the standing status record:
+
+- identity/session hardening — completed;
+- token/OAuth-state work — completed;
+- account-auth implementation — substantially implemented;
+- secure browser session transport — completed by PR #62 (Issue #61),
+  merged 2026-09-18 at `aa70629`;
+- transactional email provider integration — pending (**Brevo selected,
+  not yet integrated**);
+- real mailbox/email-delivery verification — pending;
+- final end-to-end Phase 10.2 release/security gate — pending.
+
+PR #62 completed only the secure browser-session transport/reconciliation
+work associated with Issue #61 — not the entire Phase 10.2 execution plan.
+Recorded here 2026-09-18 with the control set.
 
 ---
 
