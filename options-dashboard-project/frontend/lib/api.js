@@ -256,7 +256,11 @@ export const chainWsUrl = (symbol, expiryDate) => {
   return `${wsBase}/chains/ws/${symbol}?expiry_date=${encodeURIComponent(expiryDate)}`;
 };
 
-// WebSocket connections automatically include the HttpOnly session cookie.\nexport const chainWsProtocols = () => undefined;\n\n// ---- Phase 6.7: strategy templates (CRUD) ----
+// WebSocket connections automatically include the HttpOnly strikenova_session cookie.
+// No subprotocol is needed — the backend reads the session from the cookie.
+export const chainWsProtocols = () => undefined;
+
+// ---- Phase 6.7: strategy templates (CRUD) ----
 
 export const getStrategyTemplates = () =>
   api.get("/paper/templates").then((r) => r.data);

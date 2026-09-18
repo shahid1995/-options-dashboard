@@ -396,7 +396,9 @@ class TestTokenSecurity:
 class TestWebSocketSessionBinding:
     """Verify WebSocket connections are bound to authenticated sessions."""
 
-    def test_ws_session_extracts_from_protocol(self):
+    def test_ws_session_ignores_sec_websocket_protocol(self):
+        """Issue #61: the session credential is NEVER transported via
+        Sec-WebSocket-Protocol — ws_session must ignore that header."""
         from app.routers.chains import ws_session
 
         class MockWS:
@@ -404,10 +406,23 @@ class TestWebSocketSessionBinding:
             cookies = {}
 
         session_id, subprotocol = ws_session(MockWS())
-        assert session_id == "abc123"
-        assert subprotocol == "options-dashboard-session"
+        assert session_id is None
+        assert subprotocol is None
 
-    def test_ws_session_falls_back_to_cookie(self):
+    def test_ws_session_reads_canonical_cookie(self):
+        """ws_session resolves the platform session from the canonical
+        HttpOnly strikenova_session cookie only."""
+        from app.routers.chains import ws_session
+
+        class MockWS:
+            headers = {}
+            cookies = {"strikenova_session": "cookie_session_123"}
+
+        session_id, subprotocol = ws_session(MockWS())
+        assert session_id == "cookie_session_123"
+
+    def test_ws_session_rejects_legacy_session_id_cookie(self):
+        """The retired session_id cookie name is not a WebSocket transport."""
         from app.routers.chains import ws_session
 
         class MockWS:
@@ -415,7 +430,7 @@ class TestWebSocketSessionBinding:
             cookies = {"session_id": "cookie_session_123"}
 
         session_id, subprotocol = ws_session(MockWS())
-        assert session_id == "cookie_session_123"
+        assert session_id is None
 
     def test_ws_session_returns_none_when_no_auth(self):
         from app.routers.chains import ws_session

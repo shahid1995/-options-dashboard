@@ -34,6 +34,7 @@ from app.identity import (
     store_credentials,
 )
 from app.main import app
+from app.routers.deps import SESSION_COOKIE_NAME
 from app.services import token_store
 
 
@@ -464,4 +465,7 @@ class TestCallbackSessionMismatch:
         )
         assert resp.status_code == 307
         location = resp.headers["location"]
-        assert "/dashboard#session_id=" in location
+        # Issue #61: the session is transported ONLY by the secure cookie —
+        # the redirect URL carries no session credential.
+        assert location.endswith("/dashboard")
+        assert SESSION_COOKIE_NAME in resp.headers.get("set-cookie", "")

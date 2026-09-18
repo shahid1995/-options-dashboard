@@ -6,6 +6,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 from app.routers.chains import INSTRUMENT_KEYS
+from app.routers.deps import SESSION_COOKIE_NAME
 from app.services import token_store, upstox
 from app.services.upstox import UpstoxError
 
@@ -22,7 +23,9 @@ def client():
 @pytest.fixture
 def logged_in(client):
     session_id = token_store.set_token("tok-xyz")
-    client.cookies.set("session_id", session_id)
+    # Issue #61: the browser session is transported ONLY by the canonical
+    # HttpOnly cookie — tests authenticate exactly like the real browser.
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
     return session_id
 
 
@@ -118,7 +121,7 @@ def test_chain_accepts_session_header(client, monkeypatch):
 
 def test_chain_rejects_wrong_session(client):
     token_store.set_token("tok-xyz")
-    client.cookies.set("session_id", "wrong-session")
+    client.cookies.set(SESSION_COOKIE_NAME, "wrong-session")
     resp = client.get("/chains/NIFTY", params={"expiry_date": "2026-08-28"})
     assert resp.status_code == 401
 
@@ -251,33 +254,35 @@ def test_expiries_upstox_auth_error_clears_token_and_returns_401(client, logged_
 
 
 def ws_close_code(client, path, session_id=None):
-    headers = {"cookie": f"session_id={session_id}"} if session_id else {}
+    headers = {"cookie": f"{SESSION_COOKIE_NAME}={session_id}"} if session_id else {}
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(path, headers=headers) as ws:
             ws.receive_json()
     return exc_info.value.code
 
 
-def test_ws_accepts_session_subprotocol(client, monkeypatch):
+def test_ws_authenticates_via_canonical_cookie(client, monkeypatch):
+    """Issue #61: WebSocket auth resolves the platform session from the
+    canonical HttpOnly cookie — no session credential in subprotocols."""
     session_id = token_store.set_token("tok-xyz")
     raw = {"data": [make_chain_item(25000)]}
     monkeypatch.setattr(upstox, "get_option_chain", AsyncMock(return_value=raw))
 
     with client.websocket_connect(
         "/chains/ws/NIFTY?expiry_date=2026-08-28",
-        subprotocols=["options-dashboard-session", session_id],
+        headers={"cookie": f"{SESSION_COOKIE_NAME}={session_id}"},
     ) as ws:
         body = ws.receive_json()
 
     assert body["symbol"] == "NIFTY"
 
 
-def test_ws_rejects_wrong_session_subprotocol(client):
+def test_ws_rejects_wrong_session(client):
     token_store.set_token("tok-xyz")
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(
             "/chains/ws/NIFTY?expiry_date=2026-08-28",
-            subprotocols=["options-dashboard-session", "wrong-session"],
+            headers={"cookie": f"{SESSION_COOKIE_NAME}=wrong-session"},
         ) as ws:
             ws.receive_json()
     assert exc_info.value.code == 4401
@@ -322,7 +327,7 @@ def test_ws_streams_transformed_chain(client, logged_in, monkeypatch):
 
     with client.websocket_connect(
         "/chains/ws/nifty?expiry_date=2026-08-28",
-        headers={"cookie": f"session_id={logged_in}"},
+        headers={"cookie": f"{SESSION_COOKIE_NAME}={logged_in}"},
     ) as ws:
         body = ws.receive_json()
 

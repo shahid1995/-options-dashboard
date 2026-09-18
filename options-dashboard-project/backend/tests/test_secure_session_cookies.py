@@ -366,6 +366,73 @@ class TestCurrentUserCookiePath:
 
 
 # ---------------------------------------------------------------------------
+# Test 8b — Issue #61 acceptance: canonical cookie end-to-end on real routes
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalCookieEndToEnd:
+    """Issue #61 acceptance condition.
+
+    A browser that receives ONLY the canonical ``strikenova_session`` cookie
+    from login must be able to access authenticated StrikeNova routes through
+    the REAL production dependency path (CurrentUser / get_session_id) — not
+    a test-only shim. Also proves the legacy ``session_id`` cookie name is no
+    longer a transport, and that platform-only sessions (no broker token)
+    authenticate for ordinary platform routes.
+    """
+
+    def test_login_email_sets_canonical_cookie_only(self, client, db_session):
+        """Login must issue the canonical cookie and never the legacy name."""
+        user = _create_active_user(db_session)
+        resp = client.post("/auth/login-email", json={
+            "email": user.email,
+            "password": "password123",
+        })
+        assert resp.status_code == 200
+        set_cookie = resp.headers.get("set-cookie", "")
+        assert f"{SESSION_COOKIE_NAME}=" in set_cookie
+        # The legacy cookie name must not be issued alongside the canonical one
+        assert "session_id=" not in set_cookie, (
+            "Legacy session_id cookie must never be issued by login"
+        )
+
+    def test_real_current_user_route_accepts_canonical_cookie(self, client, db_session):
+        """Cookie from /auth/login-email authenticates a real CurrentUser route."""
+        cookie_value, user = _login_and_get_cookie(client, db_session)
+        # /paper/templates is guarded by Depends(CurrentUser()) in production
+        resp = client.get("/paper/templates", cookies={SESSION_COOKIE_NAME: cookie_value})
+        assert resp.status_code == 200
+
+    def test_real_current_user_route_platform_only_session(self, client, db_session):
+        """Platform-only login (no broker token) still authenticates."""
+        cookie_value, user = _login_and_get_cookie(client, db_session)
+        # Email login stores a platform session token, never a broker token
+        assert token_store.get_token(cookie_value).startswith("email:")
+        # /paper/positions is CurrentUser-guarded and broker-independent
+        resp = client.get("/paper/positions", cookies={SESSION_COOKIE_NAME: cookie_value})
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_legacy_session_id_cookie_is_not_a_transport(self, client, db_session):
+        """The retired session_id cookie name must authenticate nothing."""
+        cookie_value, user = _login_and_get_cookie(client, db_session)
+
+        status = client.get("/auth/status", cookies={"session_id": cookie_value})
+        assert status.json()["logged_in"] is False
+
+        protected = client.get("/paper/templates", cookies={"session_id": cookie_value})
+        assert protected.status_code == 401
+
+    def test_platform_session_without_broker_token_passes_auth_me(self, client, db_session):
+        """/auth/me works for a valid platform session with no broker token."""
+        cookie_value, user = _login_and_get_cookie(client, db_session)
+        assert user.broker_provider is None  # platform-only identity
+        resp = client.get("/auth/me", cookies={SESSION_COOKIE_NAME: cookie_value})
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == user.id
+
+
+# ---------------------------------------------------------------------------
 # Test 9 — WebSocket session migration
 # ---------------------------------------------------------------------------
 

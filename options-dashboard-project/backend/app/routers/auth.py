@@ -809,7 +809,9 @@ def google_auth(
     - If a user with this email exists → link Google to existing account.
     - Otherwise → create new account.
 
-    Returns session_id and user info (same shape as /auth/login-email).
+    Returns the session only as the secure HttpOnly ``strikenova_session``
+    cookie (Issue #61 secure transport); the response body carries user
+    info only — never ``session_id`` or token material.
     """
     # Rate limit: use a hash of the credential as client identifier
     # (unauthenticated endpoint, no session yet)

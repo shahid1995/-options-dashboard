@@ -380,18 +380,22 @@ class TestTokenStoreIntegration:
             _resolve_user(db_session, "orphan-session-id")
         assert exc_info.value.status_code == 401
 
-    def test_session_record_but_no_token_raises_401(self, db_session):
-        """Session record exists but no token in store → 401."""
+    def test_session_record_but_no_token_is_platform_only(self, db_session):
+        """Session record without a broker token is a valid PLATFORM session.
+
+        Issue #61: platform-only sessions (Google/email login) have no broker
+        token. _resolve_user returns access_token=None — broker authorization
+        is a separate concern and must never gate platform authentication.
+        """
         from app.routers.deps import _resolve_user
-        from fastapi import HTTPException
 
         session_id, user_id = create_test_identity(db_session, "tok-gone")
-        # Clear the token (simulating restart)
+        # Clear the broker token (simulating a platform-only session)
         token_store.clear_token()
 
-        with pytest.raises(HTTPException) as exc_info:
-            _resolve_user(db_session, session_id)
-        assert exc_info.value.status_code == 401
+        result = _resolve_user(db_session, session_id)
+        assert result.user_id == user_id
+        assert result.access_token is None
 
     def test_revoke_session_blocks_resolution(self, db_session):
         """Revoking a session prevents future resolution."""

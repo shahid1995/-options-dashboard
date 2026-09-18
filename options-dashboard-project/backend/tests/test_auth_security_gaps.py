@@ -21,6 +21,7 @@ from app.config import settings
 from app.db import Base, get_db
 from app.identity import User, create_session_record, hash_password
 from app.main import app
+from app.routers.deps import SESSION_COOKIE_NAME
 from app.services import token_store
 from app.services.rate_limiter import rate_limiter
 
@@ -220,9 +221,9 @@ class TestSessionSecurity:
         resp = client.post("/auth/logout", headers={"X-Session-Id": session_id})
         assert resp.status_code == 200
 
-        # Check that Set-Cookie header deletes the cookie
+        # Check that Set-Cookie header deletes the cookie (canonical name, Issue #61)
         set_cookie = resp.headers.get("set-cookie", "")
-        assert "session_id=" in set_cookie
+        assert f"{SESSION_COOKIE_NAME}=" in set_cookie
         # The cookie should be expired (max-age=0) and have secure flags
         assert "httponly" in set_cookie.lower() or "HttpOnly" in set_cookie
 

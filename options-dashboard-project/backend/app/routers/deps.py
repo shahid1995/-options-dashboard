@@ -11,12 +11,29 @@ from app.db import get_db
 SESSION_COOKIE_NAME = "strikenova_session"
 
 
+def _canonical_session_id(
+    x_session_id: str | None,
+    session_id_cookie: str | None,
+) -> str | None:
+    """Single canonical resolver for the browser session transport.
+
+    Issue #61: the only browser session transport is the HttpOnly
+    ``strikenova_session`` cookie. The ``X-Session-Id`` header remains as a
+    server-side compatibility transport for legacy/test clients; it is NOT
+    set by the browser application. The legacy ``session_id`` cookie name is
+    deliberately NOT consulted — Issue #61 retired it (issue #61 BLOCKER 1:
+    a client carrying only the canonical cookie must authenticate; the old
+    name must never re-enable transport).
+    """
+    return session_id_cookie or x_session_id
+
+
 def get_session_id(
     x_session_id: str | None = Header(default=None),
     session_id: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> str | None:
     """Resolve the canonical browser session cookie, with header compatibility."""
-    return session_id or x_session_id
+    return _canonical_session_id(x_session_id, session_id)
 
 
 @dataclass(frozen=True)
@@ -36,8 +53,8 @@ def _extract_session_id(
     x_session_id: str | None,
     session_id_cookie: str | None,
 ) -> str:
-    """Extract session ID from header/cookie, raising 401 if absent."""
-    sid = x_session_id or session_id_cookie
+    """Extract session ID from the canonical transport, raising 401 if absent."""
+    sid = _canonical_session_id(x_session_id, session_id_cookie)
     if not sid:
         raise HTTPException(status_code=401, detail="Not logged in. Visit /auth/login first.")
     return sid
@@ -112,7 +129,7 @@ class CurrentUser:
         self,
         db: Session = Depends(get_db),
         x_session_id: str | None = Header(default=None),
-        session_id_cookie: str | None = Cookie(default=None, alias="session_id"),
+        session_id_cookie: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     ) -> AuthenticatedUser:
         sid = _extract_session_id(x_session_id, session_id_cookie)
         return _resolve_user(db, sid)
