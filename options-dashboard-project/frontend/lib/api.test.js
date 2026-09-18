@@ -154,10 +154,10 @@ describe("auth API (Phase 10.2B-5)", () => {
   });
 
   it("logs in via POST /auth/login-email", async () => {
-    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, session_id: "sess-123" } });
+    const spy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, user: { user_id: "u1" } } });
     const result = await loginEmail("test@example.com", "password123");
     expect(spy).toHaveBeenCalledWith("/auth/login-email", { email: "test@example.com", password: "password123" });
-    expect(result.session_id).toBe("sess-123");
+    expect(result.session_id).toBeUndefined();
     spy.mockRestore();
   });
 
@@ -213,10 +213,10 @@ describe("auth API (Phase 10.2B-5)", () => {
 describe("account security API (2026-09-16 plan Task 1)", () => {
   it("loginAccount posts to /auth/account/login and keeps loginUrl() for broker OAuth", async () => {
     const { loginAccount, loginUrl } = await import("./api");
-    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, session_id: "sess-1", user: { user_id: "u1" } } });
+    const postSpy = vi.spyOn(api, "post").mockResolvedValue({ data: { ok: true, user: { user_id: "u1" } } });
     const result = await loginAccount("test@example.com", "password123");
     expect(postSpy).toHaveBeenCalledWith("/auth/account/login", { email: "test@example.com", password: "password123" });
-    expect(result.session_id).toBe("sess-1");
+    expect(result.session_id).toBeUndefined();
     // Broker OAuth initiation route is retained, untouched:
     expect(loginUrl("UPSTOX")).toContain("/auth/login?broker=UPSTOX");
     postSpy.mockRestore();
