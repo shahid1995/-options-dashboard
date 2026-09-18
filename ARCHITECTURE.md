@@ -423,11 +423,11 @@ Unknown market state is not treated as open.
 The application uses SQLAlchemy ORM with:
 
 - SQLite for local/default operation;
-- PostgreSQL when `DATABASE_URL` is configured.
+- CockroachDB when `DATABASE_URL` is configured for production; SQLite remains available for local/default operation.
 
 SQLite is configured with WAL behavior for local resilience.
 
-PostgreSQL uses connection pooling and health-oriented connection settings.
+CockroachDB connections use the configured SQLAlchemy database URL and health-oriented connection settings.
 
 ### 7.2 Schema authority
 
