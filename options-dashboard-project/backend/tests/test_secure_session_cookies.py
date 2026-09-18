@@ -431,6 +431,87 @@ class TestCanonicalCookieEndToEnd:
         assert resp.status_code == 200
         assert resp.json()["user_id"] == user.id
 
+    def test_combined_platform_only_canonical_cookie_real_route(self, client, db_session):
+        """Combined acceptance regression (Issue #61).
+
+        Proves the full production scenario in ONE path:
+
+            valid StrikeNova platform session (durable UserSession row)
+            + NO broker credential available to the auth path
+              (token_store.get_token() -> None => access_token=None)
+            + ONLY the canonical strikenova_session cookie as transport
+            + real route protected by Depends(CurrentUser())
+            = successful authenticated response bound to the expected user
+
+        No fake dependency, no CurrentUser monkeypatching, no direct
+        _resolve_user() call: the request crosses the real FastAPI
+        dependency boundary (cookie -> CurrentUser -> AuthenticatedUser).
+        """
+        import secrets
+
+        from app.identity import get_active_session
+        from app.models import StrategyTemplate
+
+        # 1. Valid StrikeNova platform identity (active email user).
+        user = _create_active_user(db_session, email="platform-only@test.com")
+
+        # 2. Valid durable UserSession via the production session-record API
+        #    (same function the login flows call; no broker connection).
+        session_id = secrets.token_urlsafe(32)
+        create_session_record(db_session, user.id, session_id)
+        db_session.commit()
+
+        # 3. NO broker credential exists for this session — the only source
+        #    _resolve_user() uses for AuthenticatedUser.access_token.
+        assert token_store.get_token(session_id) is None
+        # The durable platform session itself is valid and active.
+        assert get_active_session(db_session, session_id) is not None
+
+        # 4+5. Present ONLY the canonical cookie to a real CurrentUser-protected
+        #      production route (GET /paper/templates -> Depends(CurrentUser())).
+        cookie = {SESSION_COOKIE_NAME: session_id}
+        listed = client.get("/paper/templates", cookies=cookie)
+
+        # 7. Successful authentication through the real dependency path.
+        assert listed.status_code == 200, listed.text
+        assert listed.json() == []
+
+        # 8. Response is associated with the expected user: a write through the
+        #    same real route must be persisted with exactly this user's id,
+        #    and the ownership-scoped read must return it for this cookie only.
+        created = client.post(
+            "/paper/templates",
+            cookies=cookie,
+            json={
+                "name": "platform-only regression",
+                "symbol": "NIFTY",
+                "legs": [
+                    {
+                        "position": 1,
+                        "action": "sell",
+                        "option_type": "call",
+                        "strike": 20000,
+                        "expiry": "2026-12-31",
+                        "quantity": 1,
+                        "lot_size": 25,
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 201, created.text
+
+        row = (
+            db_session.query(StrategyTemplate)
+            .filter(StrategyTemplate.name == "platform-only regression")
+            .one_or_none()
+        )
+        assert row is not None
+        assert row.user_id == user.id
+
+        listed = client.get("/paper/templates", cookies=cookie)
+        assert listed.status_code == 200
+        assert [t["name"] for t in listed.json()] == ["platform-only regression"]
+
 
 # ---------------------------------------------------------------------------
 # Test 9 — WebSocket session migration
