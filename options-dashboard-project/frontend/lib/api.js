@@ -24,7 +24,7 @@ export const loginUrl = (broker = "UPSTOX") =>
 
 // Seamless popup kickoff: mint the single-use, API-origin kick cookie an
 // authenticated opener hands to the OAuth popup (the popup's top-level
-// navigation carries no X-Session-Id header). Returns the axios promise;
+// popup navigation carries no browser session header. Returns the axios promise;
 // the Set-Cookie lands in the browser jar for the API origin.
 export const mintPopupKick = (broker) =>
   api.post("/auth/oauth/popup-kick", { broker });
