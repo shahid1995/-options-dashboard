@@ -1,9 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("./session", () => ({
-  getSessionId: vi.fn(() => "browser-secret"),
-}));
-
 describe("secure browser session transport", () => {
   let api;
   let chainWsProtocols;
@@ -28,11 +24,22 @@ describe("secure browser session transport", () => {
 
     await api.get("/auth/me");
 
+    expect(api.defaults.withCredentials).toBe(true);
     expect(seenConfig.headers["X-Session-Id"]).toBeUndefined();
-    expect(JSON.stringify(seenConfig.headers)).not.toContain("browser-secret");
+    expect(JSON.stringify(seenConfig.headers)).not.toMatch(/session[_-]?id/i);
   });
 
   it("does not expose a session ID for WebSocket subprotocol authentication", () => {
     expect(chainWsProtocols()).toBeUndefined();
+  });
+
+  it("does not reference browser session storage or URL session capture", async () => {
+    const source = await import("node:fs").then(({ readFileSync }) =>
+      readFileSync(new URL("./session.js", import.meta.url), "utf8")
+    );
+    expect(source).not.toContain("localStorage");
+    expect(source).not.toContain("sessionStorage");
+    expect(source).not.toContain("captureSessionFromUrl");
+    expect(source).not.toContain("session_id");
   });
 });
