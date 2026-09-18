@@ -3,7 +3,6 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { getPaperOrdersFiltered } from "@/lib/api";
 import { C, fmtIN, SessionExpired, useIsMobile } from "@/lib/ui";
 import { isAuthError } from "@/lib/api";
-import { captureSessionFromUrl } from "@/lib/session";
 import { getStatus } from "@/lib/api";
 
 // ---- Constants ----
@@ -587,7 +586,6 @@ export default function OrdersPage() {
   }, [activeTab, filters]);
 
   useEffect(() => {
-    captureSessionFromUrl();
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
       .catch((e) => {

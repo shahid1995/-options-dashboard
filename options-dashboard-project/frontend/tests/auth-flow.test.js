@@ -41,10 +41,7 @@ vi.mock("@/components/public/AuthModalContext", () => {
 });
 
 vi.mock("@/lib/session", () => ({
-  getSessionId: vi.fn(() => null),
-  setSessionId: vi.fn(),
-  clearSessionId: vi.fn(),
-  captureSessionFromUrl: vi.fn(),
+  captureGoogleIdTokenFromUrl: vi.fn(() => null),
 }));
 
 vi.mock("@/lib/api", () => {
@@ -58,9 +55,9 @@ vi.mock("@/lib/api", () => {
     getMe: vi.fn().mockResolvedValue({ user_id: "user-1" }),
     getStatus: vi.fn().mockResolvedValue({ logged_in: true }),
     logoutUser: vi.fn().mockResolvedValue({ ok: true }),
-    loginEmail: vi.fn().mockResolvedValue({ session_id: "sess-1", user: { user_id: "u1" } }),
+    loginEmail: vi.fn().mockResolvedValue({ ok: true, user: { user_id: "u1" } }),
     registerEmail: vi.fn().mockResolvedValue({ ok: true, user_id: "u2" }),
-    loginGoogle: vi.fn().mockResolvedValue({ session_id: "sess-g", user: { user_id: "ug" } }),
+    loginGoogle: vi.fn().mockResolvedValue({ ok: true, user: { user_id: "ug" } }),
     getGoogleState: vi.fn().mockResolvedValue({ state: "state-1", nonce: "nonce-1" }),
   };
 });
@@ -160,21 +157,9 @@ describe("Test E & F: Protected route (AuthGate) behavior", () => {
     expect(html).toBe("");
   });
 
-  it("AuthGate treats missing session as unauthenticated", async () => {
-    const { default: AuthGate } = await import("@/components/AuthGate");
-    const session = await import("@/lib/session");
-    vi.mocked(session.getSessionId).mockReturnValue(null);
-    const html = renderToStaticMarkup(
-      React.createElement(AuthGate, null, "Protected content")
-    );
-    expect(html).toBe("");
-  });
-
   it("AuthGate treats 401 from getMe as authentication failure", async () => {
     const { default: AuthGate } = await import("@/components/AuthGate");
-    const session = await import("@/lib/session");
     const api = await import("@/lib/api");
-    vi.mocked(session.getSessionId).mockReturnValue("valid-session");
     vi.mocked(api.getMe).mockRejectedValue({ response: { status: 401 } });
     const html = renderToStaticMarkup(
       React.createElement(AuthGate, null, "Protected content")
@@ -209,11 +194,17 @@ describe("Test H: Redirect safety", () => {
 
 // Test I: Session security
 describe("Test I: Session security properties", () => {
-  it("session storage helpers exist", async () => {
-    const session = await import("@/lib/session");
-    expect(typeof session.getSessionId).toBe("function");
-    expect(typeof session.setSessionId).toBe("function");
-    expect(typeof session.clearSessionId).toBe("function");
+  it("session module exposes no browser session transport", async () => {
+    // Issue #61: the real session module must not expose browser-readable
+    // session helpers — the HttpOnly strikenova_session cookie is the only
+    // transport (read the real source; the mock above shadows imports).
+    const source = await import("node:fs").then(({ readFileSync }) =>
+      readFileSync(new URL("../lib/session.js", import.meta.url), "utf8")
+    );
+    expect(source).not.toMatch(/getSessionId|setSessionId|clearSessionId/);
+    expect(source).not.toContain("captureSessionFromUrl");
+    expect(source).not.toContain("localStorage");
+    expect(source).not.toContain("sessionStorage");
   });
 
   it("auth API sends credentials with withCredentials=true", async () => {

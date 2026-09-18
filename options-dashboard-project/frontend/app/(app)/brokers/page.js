@@ -7,7 +7,6 @@ import {
   getMarketStatus,
   isAuthError,
 } from "@/lib/api";
-import { captureSessionFromUrl } from "@/lib/session";
 import { getStatus } from "@/lib/api";
 import BrokerConnectionPanel from "../paper/BrokerConnectionPanel";
 
@@ -33,7 +32,6 @@ export default function BrokersPage() {
 
   // Auth check
   useEffect(() => {
-    captureSessionFromUrl();
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
       .catch((e) => {

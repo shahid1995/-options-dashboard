@@ -18,7 +18,6 @@ import {
   exitAllPaperPositions,
   resetPaperPortfolio as apiResetPaperPortfolio,
 } from "@/lib/api";
-import { captureSessionFromUrl } from "@/lib/session";
 import { STRATEGIES, STRATEGY_CATEGORIES, strategiesFor } from "@/lib/strategies";
 import { pnlAt, payoffGrid } from "@/lib/calculations/payoff";
 import { calculateStrategy } from "@/lib/calculations/strategyCalculator";
@@ -275,7 +274,6 @@ export default function PaperTradingPage() {
   }, [symbol]);
 
   useEffect(() => {
-    captureSessionFromUrl();
     getStatus()
       .then((s) => setLoggedIn(s.logged_in))
       .catch((e) => {

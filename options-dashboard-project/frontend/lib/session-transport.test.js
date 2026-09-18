@@ -64,4 +64,30 @@ describe("secure browser session transport", () => {
     expect(layoutSrc).not.toMatch(/setSessionId/);
     expect(layoutSrc).not.toContain("appUrl");
   });
+
+  it("no production page references the retired URL session capture", async () => {
+    // Every page under app/ must be free of captureSessionFromUrl — the
+    // URL-fragment session capture retired by Issue #61. Pages authenticate
+    // through the HttpOnly cookie the browser sends automatically.
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+
+    const appDir = fileURLToPath(new URL("../app/", import.meta.url));
+    const offenders = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".js") && !entry.name.endsWith(".test.js")) {
+          if (fs.readFileSync(full, "utf8").includes("captureSessionFromUrl")) {
+            offenders.push(path.relative(appDir, full));
+          }
+        }
+      }
+    };
+    walk(appDir);
+
+    expect(offenders).toEqual([]);
+  });
 });
