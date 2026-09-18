@@ -8,7 +8,6 @@ import PublicFooter from "./PublicFooter";
 import AuthModalProvider from "./AuthModalContext";
 import { captureGoogleIdTokenFromUrl } from "@/lib/session";
 import { loginGoogle } from "@/lib/api";
-import { setSessionId } from "@/lib/session";
 
 /**
  * Handles Google OAuth redirect callback on public pages.
@@ -23,18 +22,12 @@ function GoogleRedirectHandler() {
     if (result) {
       const { idToken, redirectPath, state } = result;
       loginGoogle(idToken, state)
-        .then((data) => {
-          if (data?.session_id) {
-            setSessionId(data.session_id);
-          }
-          const appUrl = process.env.NEXT_PUBLIC_APP_URL || "";
-          if (data?.session_id && appUrl) {
-            // Cross-origin handoff: navigate to authenticated app with session in fragment
-            window.location.assign(`${appUrl}/dashboard#session_id=${encodeURIComponent(data.session_id)}`);
-          } else {
-            // Fallback: same-origin navigation
-            router.push(redirectPath || "/dashboard");
-          }
+        .then(() => {
+          // The platform session travels ONLY via the HttpOnly
+          // strikenova_session cookie set by the backend (Issue #61).
+          // Never place session credentials in URL fragments — the
+          // retired cross-origin session fragment handoff is removed.
+          router.push(redirectPath || "/dashboard");
         })
         .catch((err) => {
           console.error("Google login failed:", err);

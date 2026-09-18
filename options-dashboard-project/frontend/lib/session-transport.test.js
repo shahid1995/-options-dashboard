@@ -42,4 +42,26 @@ describe("secure browser session transport", () => {
     expect(source).not.toContain("captureSessionFromUrl");
     expect(source).not.toContain("session_id");
   });
+
+  it("auth consumers keep no browser session transport (cookie-only)", async () => {
+    const { readFileSync } = await import("node:fs");
+
+    // useAuth must not read/store session credentials client-side and must
+    // not reference the retired session helpers removed by Issue #61.
+    const useAuthSrc = readFileSync(new URL("./useAuth.js", import.meta.url), "utf8");
+    expect(useAuthSrc).not.toMatch(/session_id/i);
+    expect(useAuthSrc).not.toMatch(/setSessionId|getSessionId|clearSessionId/);
+    expect(useAuthSrc).not.toContain("captureSessionFromUrl");
+    expect(useAuthSrc).not.toContain("getStatus");
+
+    // Public pages must not place session credentials in URL fragments —
+    // the retired cross-origin fragment handoff stays removed.
+    const layoutSrc = readFileSync(
+      new URL("../components/public/PublicLayout.js", import.meta.url),
+      "utf8"
+    );
+    expect(layoutSrc).not.toMatch(/session_id/i);
+    expect(layoutSrc).not.toMatch(/setSessionId/);
+    expect(layoutSrc).not.toContain("appUrl");
+  });
 });

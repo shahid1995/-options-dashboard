@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { captureGoogleIdTokenFromUrl } from "./session";
-import { getStatus, getMe, logoutUser, loginEmail, registerEmail, loginGoogle, getAccountSession, logoutAccount } from "./api";
+import { getMe, logoutUser, loginEmail, registerEmail, loginGoogle, getAccountSession, logoutAccount } from "./api";
 
 /**
  * Central auth hook for the StrikeNova frontend.
@@ -16,11 +16,10 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Capture session from OAuth callback URL fragment on mount
+  // Handle Google OAuth redirect callback on mount. The platform session
+  // itself travels ONLY via the HttpOnly strikenova_session cookie (Issue
+  // #61) — never via URL fragments, storage, or custom headers.
   useEffect(() => {
-    captureSessionFromUrl();
-
-    // Handle Google OAuth redirect callback
     const googleResult = captureGoogleIdTokenFromUrl();
     if (googleResult) {
       // Send the Google id_token to our backend (state is MANDATORY — the
@@ -31,29 +30,20 @@ export function useAuth() {
     }
   }, []);
 
-  // Check auth status on mount and when session changes
+  // Check auth on mount and when session changes. /auth/me is the
+  // authoritative check: the browser presents the HttpOnly cookie and the
+  // server resolves the durable UserSession. 401/403 mean logged out;
+  // anything else (5xx/network) is surfaced as a retryable error — never a
+  // silent local logout.
   const checkAuth = useCallback(async () => {
     try {
-      const session = getSessionId();
-      if (!session) {
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-      const status = await getStatus();
-      if (!status.logged_in) {
-        clearSessionId();
-        setUser(null);
-        setLoading(false);
-        return;
-      }
       const me = await getMe();
       setUser(me);
       setError(null);
     } catch (e) {
-      clearSessionId();
       setUser(null);
-      if (e?.response?.status !== 401) {
+      const status = e?.response?.status;
+      if (status !== 401 && status !== 403) {
         setError(e.message || "Failed to check auth status");
       }
     } finally {
@@ -69,9 +59,8 @@ export function useAuth() {
     setError(null);
     try {
       const result = await loginEmail(email, password);
-      if (result.session_id) {
-        setSessionId(result.session_id);
-      }
+      // Session arrives as the HttpOnly strikenova_session cookie — the
+      // response body carries user info only.
       setUser(result.user || null);
       return result;
     } catch (e) {
@@ -97,9 +86,8 @@ export function useAuth() {
     setError(null);
     try {
       const result = await loginGoogle(credential, state);
-      if (result.session_id) {
-        setSessionId(result.session_id);
-      }
+      // Session arrives as the HttpOnly strikenova_session cookie — the
+      // response body carries user info only.
       setUser(result.user || null);
       return result;
     } catch (e) {
@@ -115,7 +103,7 @@ export function useAuth() {
     } catch {
       // Ignore logout errors — clear local state regardless
     }
-    clearSessionId();
+    // The server revoked the durable session; the browser drops the cookie.
     setUser(null);
   }, []);
 

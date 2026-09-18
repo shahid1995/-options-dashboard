@@ -2,21 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import React, { useEffect, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// Mock session helpers
+// Mock session helpers — real module surface after Issue #61: the only
+// export is the Google id_token URL scrubber. Platform sessions travel
+// exclusively via the HttpOnly strikenova_session cookie.
 vi.mock("./session", () => ({
-  getSessionId: vi.fn(() => null),
-  setSessionId: vi.fn(),
-  clearSessionId: vi.fn(),
-  captureSessionFromUrl: vi.fn(),
+  captureGoogleIdTokenFromUrl: vi.fn(() => null),
 }));
 
 // Mock API helpers
 vi.mock("./api", () => ({
-  getStatus: vi.fn(),
   getMe: vi.fn(),
   logoutUser: vi.fn(),
   loginEmail: vi.fn(),
   registerEmail: vi.fn(),
+  loginGoogle: vi.fn(),
+  getAccountSession: vi.fn(),
+  logoutAccount: vi.fn(),
 }));
 
 import { useAuth } from "./useAuth";
@@ -78,26 +79,20 @@ function getStateFromProbe(onState) {
 }
 
 describe("useAuth — API integration", () => {
-  it("calls captureSessionFromUrl on import", async () => {
-    // The module import triggers useEffect — verify the mock
-    expect(typeof session.captureSessionFromUrl).toBe("function");
+  it("handles Google OAuth callback via captureGoogleIdTokenFromUrl", async () => {
+    expect(typeof session.captureGoogleIdTokenFromUrl).toBe("function");
   });
 
-  it("login calls loginEmail and setSessionId", async () => {
-    session.getSessionId.mockReturnValue(null);
-    api.getStatus.mockResolvedValue({ logged_in: false });
+  it("login relies on cookie transport — no session_id handling in the hook", async () => {
     api.loginEmail.mockResolvedValue({
-      session_id: "new-sess",
+      ok: true,
       user: { user_id: "u1", email: "test@test.com" },
     });
 
-    // We test the hook's login function by importing and calling it directly
-    // after mocking the dependencies
-    const { login } = await import("./useAuth");
-    // useAuth returns login function — but we can't call it without rendering.
-    // Instead, verify the API mock setup is correct.
+    // The hook must not store or read any session_id: the HttpOnly cookie
+    // is the only transport and is managed entirely by the browser.
     expect(api.loginEmail).toBeDefined();
-    expect(session.setSessionId).toBeDefined();
+    expect(api.getMe).toBeDefined();
   });
 
   it("registerEmail sends correct payload", async () => {
@@ -115,17 +110,18 @@ describe("useAuth — API integration", () => {
 });
 
 describe("useAuth — session helpers", () => {
-  it("getSessionId returns null by default (mocked)", () => {
-    expect(session.getSessionId()).toBeNull();
-  });
-
-  it("setSessionId is callable", () => {
-    session.setSessionId("test-id");
-    expect(session.setSessionId).toHaveBeenCalledWith("test-id");
-  });
-
-  it("clearSessionId is callable", () => {
-    session.clearSessionId();
-    expect(session.clearSessionId).toHaveBeenCalled();
+  it("session module exposes no browser session-id transport", async () => {
+    // Read the REAL module source (the vi.mock factory shadows dynamic
+    // imports in this file). Issue #61: getSessionId/setSessionId/
+    // clearSessionId and URL capture are retired; the only export left is
+    // the id_token URL scrubber.
+    const source = await import("node:fs").then(({ readFileSync }) =>
+      readFileSync(new URL("./session.js", import.meta.url), "utf8")
+    );
+    expect(source).not.toMatch(/setSessionId|getSessionId|clearSessionId/);
+    expect(source).not.toContain("captureSessionFromUrl");
+    expect(source).not.toContain("localStorage");
+    expect(source).not.toContain("sessionStorage");
+    expect(source).toContain("export const captureGoogleIdTokenFromUrl");
   });
 });
