@@ -652,7 +652,7 @@ Secrets belong in environment/configuration infrastructure, never source-control
 
 ## 13. Runtime and deployment architecture
 
-The repository's intended runtime topology is:
+The current runtime topology is:
 
 ```text
 GitHub
@@ -660,17 +660,25 @@ GitHub
   ├──────────────▶ Vercel
   │                 └── Next.js frontend
   │
-  └──────────────▶ Railway
+  └──────────────▶ Render
                     └── FastAPI backend
-                         └── PostgreSQL when DATABASE_URL is configured
+                         │
+                         └── CockroachDB
 ```
+
+### Current hosting responsibilities
+
+| Layer | Current platform | Responsibility |
+|---|---|---|
+| Frontend | Vercel | Next.js public website and authenticated web application |
+| Backend | Render | FastAPI application, authentication, broker integration, business logic, paper execution, analytics APIs |
+| Database | CockroachDB | Durable application database used by the backend |
+
+The backend connects to CockroachDB through the configured database connection rather than relying on platform-local database storage.
 
 The public website and authenticated application have separate frontend/deployment concerns within the product architecture.
 
 Deployment is operationally controlled and must not be inferred from code changes alone.
-
----
-
 ## 14. Verification architecture
 
 The project uses multiple verification layers:
