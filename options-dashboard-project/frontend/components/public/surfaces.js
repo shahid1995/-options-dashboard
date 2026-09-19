@@ -62,6 +62,7 @@ export function Panel({
         borderRadius: radius,
         boxShadow: shadow,
         padding,
+        boxSizing: "border-box",
         ...style,
       }}
       {...rest}
