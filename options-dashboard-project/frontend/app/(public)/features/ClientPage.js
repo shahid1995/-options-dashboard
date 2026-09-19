@@ -34,6 +34,11 @@ import {
   Eyebrow,
   SectionTitle,
 } from "@/components/public/truth";
+import {
+  IntelligenceStack,
+  DeepCapabilityGrid,
+  ProductEvidenceGrid,
+} from "@/components/public/FeatureIntelligenceSections";
 
 // =============================================================================
 // Features Page — Organized Around User Outcomes
@@ -489,6 +494,14 @@ export default function FeaturesClientPage() {
           </CardGrid>
         </Container>
       </Section>
+
+      {/* ─────────────────────────────────────────────────────────────────────
+          INTELLIGENCE STORY — Stack · Deep Capabilities · Product Evidence
+          (Founder-gated "Why StrikeNova" section intentionally not included)
+          ───────────────────────────────────────────────────────────────────── */}
+      <IntelligenceStack />
+      <DeepCapabilityGrid />
+      <ProductEvidenceGrid />
 
       {/* ─────────────────────────────────────────────────────────────────────
           VISUALIZATION DEMO — Signal Field
