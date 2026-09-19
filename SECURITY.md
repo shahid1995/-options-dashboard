@@ -61,7 +61,8 @@ Regression coverage: `backend/tests/test_secure_session_cookies.py`,
 
 ## 5. Phase 10.2 status (do not over-assume)
 
-Account-security work is **in progress, not uniformly complete** — see
+Account-security work **completed on this branch** — the final
+end-to-end release/security gate passed 2026-09-19 (Issue #69, ADR-013) — see
 [`DECISIONS.md`](DECISIONS.md) ADR-011 for the standing record. Completed:
 identity/session hardening, token/OAuth-state work, the account-auth route
 surface, and the secure browser session transport (PR #62). **Implemented and
@@ -71,10 +72,17 @@ mailbox/email-delivery verification completed on staging 2026-09-19 (Issue
 #67; ADR-012): registration verification, password reset (with full session
 revocation) and email-change messages were delivered by Brevo to real
 external mailboxes and consumed end-to-end with single-use replay rejection.
-Pending: the final end-to-end Phase 10.2 release/security gate. Brevo credentials live
+The final end-to-end Phase 10.2 release/security gate — was Pending, now
+**Complete** (update note below). Brevo credentials live
 only in backend environment configuration (`BREVO_API_KEY`), are sent only in
 the provider `api-key` header, and are never logged, persisted, or exposed to
 the frontend.
+
+*(Update 2026-09-19, Issue #69: the final end-to-end Phase 10.2
+release/security gate PASSED on the merged feature tip `798c6c2` — full-suite,
+migration, browser-matrix, email-link and broker-regression evidence recorded
+in ADR-013. Phase 10.2 account security is complete on this branch. Brevo
+credential handling above is unchanged.)*
 
 ## 6. Credential handling
 
