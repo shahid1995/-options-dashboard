@@ -8,6 +8,22 @@ Format: date — change — reference.
 
 ---
 
+## 2026-09-19 — Phase 10.2 final release/security gate PASSED (Issue #69)
+
+- Fresh post-merge verification against the integrated feature tip `798c6c2`
+  (PR #70 merged): focused backend suites 228 passed; full backend suite
+  5895/5/102 (identical to the documented baseline); frontend 1878 tests
+  passed + production build; Alembic chain verified from a clean disposable
+  PostgreSQL 17 database (head `c1d2e3f4a5b6`); 11/11 browser auth-boundary
+  matrix; email-token landing routes exercised user-facing with single-use
+  replay rejection on all three token types; security-material audit clean;
+  broker OAuth/BYOB regression 141 passed. Evidence: ADR-013.
+- Status effect: the final end-to-end Phase 10.2 release/security gate moves
+  from Pending to **Complete (2026-09-19, Issue #69)**; Phase 10.2 account
+  security is complete on this branch (ADR-011 updated).
+
+---
+
 ## 2026-09-19 — Real Brevo delivery verified on staging (Issue #67)
 
 - Configured the staging Render service (`strikenova-api-staging`) with
@@ -22,7 +38,8 @@ Format: date — change — reference.
   replay (400). Evidence: ADR-012.
 - Status effect: real mailbox/email-delivery verification moves from Pending
   to **Verified (2026-09-19, staging)**. The final Phase 10.2
-  release/security gate remains **pending** (ADR-011/ADR-012).
+  release/security gate remains **pending** (ADR-011/ADR-012; *passed later
+  the same day — Issue #69, ADR-013*).
 
 ---
 
@@ -43,7 +60,8 @@ Format: date — change — reference.
   database; credentials/tokens/URLs are never logged.
 - Status effect: transactional email provider integration is **implemented
   in code**; real mailbox/email-delivery verification and the final Phase
-  10.2 release/security gate remain **pending** (ADR-011).
+  10.2 release/security gate remain **pending** (ADR-011; *both since
+  completed — Issues #67 and #69, ADR-012/ADR-013*).
 
 ## 2026-09-18 — Introduced the canonical control-document set (Issue #63)
 
@@ -79,7 +97,8 @@ landed under `options-dashboard-project/docs/superpowers/` (spec + plan dated
   (**Brevo** adapter, Issue #65);
 - real mailbox/email-delivery verification — **verified 2026-09-19 on
   staging (Issue #67, ADR-012)**;
-- final end-to-end Phase 10.2 release/security gate — pending.
+- final end-to-end Phase 10.2 release/security gate — pending
+  *(completed 2026-09-19, Issue #69; see ADR-013)*.
 
   *(2026-09-19 update, Issue #67: the two delivery-related items above were
   completed and verified on staging; see the 2026-09-19 entry.)*

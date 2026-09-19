@@ -99,17 +99,18 @@ work. The current status snapshot is
 The approved Phase 10.2 design and execution plan
 (`docs/superpowers/specs/2026-09-16-strikenova-auth-account-security-design.md`,
 `docs/superpowers/plans/2026-09-16-strikenova-auth-account-security-execution-plan.md`)
-is **not uniformly complete**. Standing status:
+was **not uniformly complete**. Standing status (all workstreams complete as
+of 2026-09-19 — Issue #69/ADR-013):
 
 | Workstream | Status |
 |---|---|
 | Identity/session hardening | Completed |
 | Token/OAuth-state work | Completed |
-| Account-auth implementation | Substantially implemented |
+| Account-auth implementation | Completed (email-token landing routes added by PR #70, Issue #69) |
 | Secure browser session transport | Completed by PR #62 (Issue #61) |
 | Transactional email provider integration | **Implemented and live (Brevo adapter, Issue #65); real delivery verified (Issue #67) — see ADR-012** |
 | Real mailbox/email-delivery verification | **Verified 2026-09-19 (staging, Brevo delivery; Issue #67)** — see ADR-012 |
-| Final end-to-end Phase 10.2 release/security gate | Pending |
+| Final end-to-end Phase 10.2 release/security gate | **Complete (2026-09-19, Issue #69)** — see ADR-013 |
 
 Evidence: account-auth route surface (`/auth/account/*` in
 `backend/app/routers/auth.py`), security record models and services
@@ -120,14 +121,57 @@ Brevo adapter behind it (`backend/app/services/email.py` —
 remains the deterministic in-memory test sender), secure-transport regressions
 (`backend/tests/test_secure_session_cookies.py`,
 `frontend/lib/useAuth.behavior.test.js`). Real mailbox/email-delivery
-verification and the final Phase 10.2 release/security gate remain pending —
+verification and the final Phase 10.2 release/security gate remained pending —
 until both pass, no document may describe Phase 10.2 account security as
 fully complete. *(Update 2026-09-19, Issue #67: real mailbox/email-delivery
 verification is now COMPLETE on staging — registration verification,
 resend-verification, password reset (with full session revocation), and
 e-mail change all delivered by Brevo to real external mailboxes and consumed
 end-to-end with single-use replay rejection; see ADR-012. The final
-end-to-end Phase 10.2 release/security gate remains PENDING.)*
+end-to-end Phase 10.2 release/security gate remains PENDING.)* *(Update
+2026-09-19, Issue #69: the final end-to-end Phase 10.2 release/security gate
+is now COMPLETE on the merged feature tip `798c6c2` — see ADR-013.)*
+
+## ADR-013 · Phase 10.2 final release/security gate PASSED on the merged tip · Accepted
+
+Date: 2026-09-19 · Reference: Issue #69
+
+**Decision/record:** the final end-to-end Phase 10.2 release/security gate was
+executed fresh against the integrated feature tip
+`798c6c295a3fcdce58de5a78816ffa7c8049494c` (merge of PR #70, which added the
+missing email-token landing routes `/verify-email`, `/reset-password`,
+`/verify-email-change` — the last gate blocker). All criteria passed with
+fresh evidence:
+
+- Focused backend suites (account-security, account flows, secure session
+  cookies, security gaps, Brevo provider, rate limiter, session/token
+  separation, platform-session-no-broker): **228 passed**.
+- Full backend suite: **5895 passed / 5 failed / 102 skipped** — the 5 are the
+  documented TESTING.md baseline failures (market-data/timestamp/upstox
+  adapter), no auth/email signatures.
+- Frontend: **85 files / 1878 tests passed**; production build succeeds.
+- Alembic chain from a clean disposable PostgreSQL 17 database reaches single
+  head `c1d2e3f4a5b6`; identity/account-security tables coexist with all
+  broker/BYOB and GEX tables.
+- Security-material audit: tokens never rendered/stored/logged; URL tokens
+  stripped on open; HttpOnly `strikenova_session` remains the only browser
+  session transport; no retired transports or secrets in source.
+- Browser matrix on the integrated tip (11/11): unauth redirect, login,
+  refresh persistence, protected navigation, logout, Back-after-logout,
+  direct protected URL, revoked session, `/auth/me` 401 → `/`, network
+  failure → retryable without forced logout, broker-disconnected ≠ platform
+  logout.
+- Email flows user-facing through the integrated routes: registration →
+  clicked verification link → verified (replay 400); password reset → clicked
+  link → new password set on-page → prior sessions revoked, old password 401,
+  new password 200 (replay 400); email change → confirmation delivered to the
+  new address only → clicked → account email changed (replay 400). Link-free
+  password-changed and email-changed notifications delivered.
+- Broker OAuth/BYOB regression: **141 passed**.
+
+**Effect on ADR-011:** "Final end-to-end Phase 10.2 release/security gate"
+moves from Pending to **Complete (2026-09-19, Issue #69)**. Phase 10.2
+account security is complete on this branch.
 
 ## ADR-012 · Real transactional-email delivery verified on staging (Brevo) · Accepted
 
@@ -166,6 +210,6 @@ provider-side per-message ids could not be collected. Delivery evidence is the
 actual receipt in the controlled mailboxes, which is the stronger standard.
 
 **Effect on ADR-011:** "Real mailbox/email-delivery verification" moves from
-Pending to **Verified (2026-09-19, staging)**. The final end-to-end Phase 10.2
-release/security gate remains **PENDING**; Phase 10.2 is still not fully
-complete.
+Pending to **Verified (2026-09-19, staging)**. *(Update 2026-09-19, Issue #69:
+the final gate subsequently passed — ADR-013; Phase 10.2 is complete on this
+branch.)*
