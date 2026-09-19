@@ -107,8 +107,8 @@ is **not uniformly complete**. Standing status:
 | Token/OAuth-state work | Completed |
 | Account-auth implementation | Substantially implemented |
 | Secure browser session transport | Completed by PR #62 (Issue #61) |
-| Transactional email provider integration | **Implemented in code (Brevo adapter, Issue #65); real delivery not yet verified** |
-| Real mailbox/email-delivery verification | Pending |
+| Transactional email provider integration | **Implemented and live (Brevo adapter, Issue #65); real delivery verified (Issue #67) — see ADR-012** |
+| Real mailbox/email-delivery verification | **Verified 2026-09-19 (staging, Brevo delivery; Issue #67)** — see ADR-012 |
 | Final end-to-end Phase 10.2 release/security gate | Pending |
 
 Evidence: account-auth route surface (`/auth/account/*` in
@@ -122,4 +122,50 @@ remains the deterministic in-memory test sender), secure-transport regressions
 `frontend/lib/useAuth.behavior.test.js`). Real mailbox/email-delivery
 verification and the final Phase 10.2 release/security gate remain pending —
 until both pass, no document may describe Phase 10.2 account security as
-fully complete.
+fully complete. *(Update 2026-09-19, Issue #67: real mailbox/email-delivery
+verification is now COMPLETE on staging — registration verification,
+resend-verification, password reset (with full session revocation), and
+e-mail change all delivered by Brevo to real external mailboxes and consumed
+end-to-end with single-use replay rejection; see ADR-012. The final
+end-to-end Phase 10.2 release/security gate remains PENDING.)*
+
+## ADR-012 · Real transactional-email delivery verified on staging (Brevo) · Accepted
+
+Date: 2026-09-19 · References: Issue #65 (implementation), Issue #67 (verification)
+
+**Decision/record:** the Brevo transactional provider was configured on the Render
+staging service (`strikenova-api-staging`, `srv-daj4vetg1s2s739ecvfg`) and real
+mailbox delivery was verified end-to-end at deploy
+`dep-damommnf3r2c73ap40jg` (commit `546307d576b9775250be85c5561e3fdea29196ae`).
+
+Configuration (secrets never printed): `EMAIL_PROVIDER=brevo`,
+`BREVO_API_KEY` present (Render secret store only),
+`BREVO_API_URL=https://api.brevo.com/v3/smtp/email`,
+`EMAIL_FROM_ADDRESS=business.ikon@gmail.com` (delivered by Brevo via its
+authenticated relay `business.ikon@12187463.brevosend.com`),
+`EMAIL_BASE_URL=https://strikenova-frontend-staging.vercel.app`.
+
+Verified with real external mailboxes (GuerrillaMail-controlled):
+1. Registration verification email — DELIVERED; tracking-redirect target proven to
+   be `…/verify-email?token=…` on `EMAIL_BASE_URL`; token consumption 200; replay
+   rejected 400.
+2. Resend-verification — generic-success contract honored (no email after the
+   account was already verified; enumeration resistance intact).
+3. Password reset — DELIVERED; link `…/reset-password?token=…`; reset 200; replay
+   400; ALL existing sessions revoked (old session 401); old password rejected;
+   "Your StrikeNova password was changed" notification DELIVERED (link-free).
+4. Email change — confirmation DELIVERED to the NEW address only
+   (`…/verify-email-change?token=…`); consumption 200 changed the account email;
+   replay 400; "Your StrikeNova email address was changed" notification DELIVERED
+   (link-free).
+
+Evidence limitation (recorded, not blocking): the Brevo credential is
+send-scoped — `/senders`, statistics and account read endpoints are not
+accessible (HTTP 403/404) and the events feed returned no rows for this key, so
+provider-side per-message ids could not be collected. Delivery evidence is the
+actual receipt in the controlled mailboxes, which is the stronger standard.
+
+**Effect on ADR-011:** "Real mailbox/email-delivery verification" moves from
+Pending to **Verified (2026-09-19, staging)**. The final end-to-end Phase 10.2
+release/security gate remains **PENDING**; Phase 10.2 is still not fully
+complete.

@@ -8,6 +8,24 @@ Format: date — change — reference.
 
 ---
 
+## 2026-09-19 — Real Brevo delivery verified on staging (Issue #67)
+
+- Configured the staging Render service (`strikenova-api-staging`) with
+  `EMAIL_PROVIDER=brevo` and the Brevo transactional configuration (API key in
+  the Render secret store only; never printed, committed, or logged) and
+  deployed commit `546307d` (deploy `dep-damommnf3r2c73ap40jg`).
+- Verified real mailbox delivery end-to-end on staging: registration
+  verification, password reset (with full session revocation and a link-free
+  security notification), and email-change confirmation to the NEW address
+  (with link-free notification); all links resolved to
+  `EMAIL_BASE_URL` verification pages and all single-use tokens rejected
+  replay (400). Evidence: ADR-012.
+- Status effect: real mailbox/email-delivery verification moves from Pending
+  to **Verified (2026-09-19, staging)**. The final Phase 10.2
+  release/security gate remains **pending** (ADR-011/ADR-012).
+
+---
+
 ## 2026-09-18 — Brevo transactional-email adapter (Issue #65)
 
 - Added `BrevoEmailSender` behind the provider-neutral `EmailSender`
@@ -57,10 +75,14 @@ landed under `options-dashboard-project/docs/superpowers/` (spec + plan dated
 - account-auth implementation — substantially implemented;
 - secure browser session transport — completed by PR #62 (Issue #61),
   merged 2026-09-18 at `aa70629`;
-- transactional email provider integration — implemented in code
-  (**Brevo** adapter, Issue #65); real delivery not yet verified;
-- real mailbox/email-delivery verification — pending;
+- transactional email provider integration — implemented and live
+  (**Brevo** adapter, Issue #65);
+- real mailbox/email-delivery verification — **verified 2026-09-19 on
+  staging (Issue #67, ADR-012)**;
 - final end-to-end Phase 10.2 release/security gate — pending.
+
+  *(2026-09-19 update, Issue #67: the two delivery-related items above were
+  completed and verified on staging; see the 2026-09-19 entry.)*
 
 PR #62 completed only the secure browser-session transport/reconciliation
 work associated with Issue #61 — not the entire Phase 10.2 execution plan.
